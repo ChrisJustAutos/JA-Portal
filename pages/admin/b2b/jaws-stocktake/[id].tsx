@@ -9,6 +9,9 @@
 //     MYOB items not counted) + CSV export
 //
 // Report-only: nothing is ever written to MYOB.
+//
+// Alloy restyle 2026-08-12: kit pills/cards/buttons; variance over/short/exact
+// colouring is data semantics and maps onto A.warn/A.bad/neutral unchanged.
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import Head from 'next/head'
@@ -21,6 +24,7 @@ import { UserRole, roleHasPermission } from '../../../../lib/permissions'
 import { T, alpha } from '../../../../lib/ui/theme'
 import { money } from '../../../../lib/ui/format'
 import { useConfirm } from '../../../../components/ui/Feedback'
+import { A, RADIUS, SHADOW, Btn, btnStyle, cardStyle, Banner, PageTitle, StatusPill } from '../../../../components/b2b/ui'
 
 const STUCK_THRESHOLD_MIN = 5
 
@@ -93,6 +97,13 @@ function rowVariance(r: MatchEntry): number | null {
   if (typeof r.myob_current_qty !== 'number') return null
   return r.qty - r.myob_current_qty
 }
+
+// Dense filter/search controls — Alloy filled look at staff density.
+const denseInp: React.CSSProperties = { padding: '6px 24px 6px 10px', borderRadius: RADIUS.sm, fontSize: 12.5, width: 190, background: T.bg3, color: T.text, border: '1px solid transparent', fontFamily: 'inherit', outline: 'none' }
+const pillToggle = (on: boolean, color: string = A.accent): React.CSSProperties => ({
+  padding: '5px 12px', borderRadius: RADIUS.pill, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+  border: '1px solid transparent', background: on ? alpha(color, '1a') : 'transparent', color: on ? color : T.text2, whiteSpace: 'nowrap',
+})
 
 export default function JawsStocktakeDetailPage({ user }: { user: SessionUser }) {
   const router = useRouter()
@@ -255,48 +266,40 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
           <B2BAdminTabs active="stocktake" />
 
           <div style={{marginBottom:16}}>
-            <Link href="/admin/b2b/jaws-stocktake" style={{fontSize:11, color:T.blue, textDecoration:'none'}}>← Back to all uploads</Link>
+            <Link href="/admin/b2b/jaws-stocktake" style={{fontSize:12.5, color:A.accent, textDecoration:'none'}}>← Back to all uploads</Link>
           </div>
 
           {!upload ? (
             <div style={{padding:40, textAlign:'center', color:T.text3}}>{error || 'Loading…'}</div>
           ) : (
             <>
-              <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:16, flexWrap:'wrap'}}>
-                <h1 style={{margin:0, fontSize:20, fontWeight:600, fontFamily:'monospace', color:T.text}}>{upload.filename}</h1>
-                <StatusBadge status={upload.status}/>
-                {isStuck && (
-                  <span style={{padding:'3px 8px', borderRadius:3, background:`${T.amber}22`, color:T.amber, fontSize:11, fontWeight:600, letterSpacing:'0.05em'}}>
-                    ⚠ STUCK {Math.round(activeMin!)}m
+              <PageTitle
+                sub={
+                  <span style={{display:'inline-flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
+                    <UploadStatusPill status={upload.status}/>
+                    {isStuck && <StatusPill color={A.warn}>Stuck {Math.round(activeMin!)}m</StatusPill>}
+                    {hasSheetNames && sheetNames.length > 1 && <StatusPill color={A.accent}>{sheetNames.length} tabs</StatusPill>}
                   </span>
-                )}
-                {hasSheetNames && sheetNames.length > 1 && (
-                  <span style={{padding:'3px 8px', borderRadius:3, background:`${T.purple}22`, color:T.purple, fontSize:11, fontWeight:600, letterSpacing:'0.05em'}}>
-                    {sheetNames.length} tabs
-                  </span>
-                )}
-                {showDelete && (
+                }
+                action={showDelete ? (
                   <button onClick={runDelete} disabled={deleting}
                     title={isStuck ? `Stuck in matching for ${Math.round(activeMin!)} min — likely crashed. Click to delete.` : 'Delete this upload (nothing in MYOB is affected)'}
-                    style={{
-                      marginLeft:'auto', padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', background:'transparent',
-                      color: deleting ? T.text3 : (isStuck ? T.amber : T.red),
-                      border:`1px solid ${deleting ? T.border2 : (isStuck ? T.amber : T.red)}40`,
-                      cursor: deleting ? 'default' : 'pointer',
-                    }}>
+                    className="al-press al-focus al-ghost"
+                    style={{ ...btnStyle('ghost', 'sm', deleting), color: deleting ? T.text3 : (isStuck ? A.warn : A.bad) }}>
                     {deleting ? 'Deleting…' : (isStuck ? 'Delete (stuck)' : 'Delete')}
                   </button>
-                )}
-              </div>
+                ) : undefined}>
+                <span style={{fontFamily:'ui-monospace, monospace'}}>{upload.filename}</span>
+              </PageTitle>
 
-              {error && <div style={{background:'rgba(240,78,78,0.1)', border:`1px solid ${T.red}40`, borderRadius:8, padding:'10px 14px', color:T.red, fontSize:13, marginBottom:12}}>{error}</div>}
+              {error && <div style={{marginBottom:12}}><Banner tone="error" onDismiss={() => setError('')}>{error}</Banner></div>}
 
               {/* ── Top tile row ─────────────────────────────────── */}
               <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:12, marginBottom:20}}>
                 <Tile label="Total rows" value={String(upload.total_rows ?? '—')}/>
-                <Tile label="Matched"  value={String(upload.matched_count ?? '—')} highlight={(upload.matched_count || 0) > 0 ? T.green : undefined}/>
-                <Tile label="Unmatched" value={String(upload.unmatched_count ?? '—')} highlight={(upload.unmatched_count || 0) > 0 ? T.amber : undefined}/>
-                <Tile label="Uncounted in-stock" value={String(upload.in_stock_uncounted ?? '—')} highlight={(upload.in_stock_uncounted || 0) > 0 ? T.amber : undefined}/>
+                <Tile label="Matched"  value={String(upload.matched_count ?? '—')} highlight={(upload.matched_count || 0) > 0 ? A.good : undefined}/>
+                <Tile label="Unmatched" value={String(upload.unmatched_count ?? '—')} highlight={(upload.unmatched_count || 0) > 0 ? A.warn : undefined}/>
+                <Tile label="Uncounted in-stock" value={String(upload.in_stock_uncounted ?? '—')} highlight={(upload.in_stock_uncounted || 0) > 0 ? A.warn : undefined}/>
               </div>
 
               {/* ── Action panel ─────────────────────────────────── */}
@@ -305,15 +308,15 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
 
               {/* ── Per-sheet breakdown ──────────────────────────── */}
               {hasSheetNames && sheetSummary.length > 1 && (
-                <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, padding:'12px 14px', marginBottom:14}}>
-                  <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:8}}>Per-sheet breakdown</div>
+                <div style={{...cardStyle(true), padding: '12px 14px', marginBottom:14}}>
+                  <div style={{fontSize:12, color:T.text2, fontWeight:650, marginBottom:8}}>Per-sheet breakdown</div>
                   <div style={{display:'flex', flexWrap:'wrap', gap:'4px 14px'}}>
                     {sheetSummary.map(s => (
                       <div key={s.sheet} style={{fontSize:12, color:T.text2, fontFamily:'monospace'}}>
                         <span style={{color:T.text}}>{s.sheet}</span>
                         <span style={{color:T.text3}}> · </span>
-                        <span style={{color:T.green}}>{s.matched} matched</span>
-                        {s.unmatched > 0 && (<><span style={{color:T.text3}}> · </span><span style={{color:T.amber}}>{s.unmatched} unmatched</span></>)}
+                        <span style={{color:A.good}}>{s.matched} matched</span>
+                        {s.unmatched > 0 && (<><span style={{color:T.text3}}> · </span><span style={{color:A.warn}}>{s.unmatched} unmatched</span></>)}
                       </div>
                     ))}
                   </div>
@@ -322,34 +325,36 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
 
               {/* ── Parse warnings ───────────────────────────────── */}
               {upload.parse_warnings && upload.parse_warnings.length > 0 && (
-                <div style={{background:T.bg2, border:`1px solid ${T.amber}40`, borderRadius:8, padding:'10px 14px', marginBottom:14}}>
-                  <div style={{fontSize:11, color:T.amber, fontWeight:600, marginBottom:4}}>Parse warnings</div>
-                  {upload.parse_warnings.slice(0, 5).map((w, i) => (<div key={i} style={{fontSize:11, color:T.text3, marginTop:2}}>· {w}</div>))}
-                  {upload.parse_warnings.length > 5 && (<div style={{fontSize:11, color:T.text3, marginTop:2}}>… and {upload.parse_warnings.length - 5} more</div>)}
+                <div style={{marginBottom:14}}>
+                  <Banner tone="warn">
+                    <div style={{fontSize:12.5, fontWeight:600, marginBottom:4}}>Parse warnings</div>
+                    {upload.parse_warnings.slice(0, 5).map((w, i) => (<div key={i} style={{fontSize:12, color:T.text2, marginTop:2}}>· {w}</div>))}
+                    {upload.parse_warnings.length > 5 && (<div style={{fontSize:12, color:T.text3, marginTop:2}}>… and {upload.parse_warnings.length - 5} more</div>)}
+                  </Banner>
                 </div>
               )}
 
               {/* ── Count vs system reconciliation ───────────────── */}
               {comparison && (
-                <div style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:10, marginBottom:14, padding:'12px 14px', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8}}>
-                  <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginRight:2}}>Count vs MYOB</div>
-                  <Pill color={T.green} label={`${comparison.exact} exact`}/>
-                  <Pill color={T.red}   label={`${comparison.short} short`}/>
-                  <Pill color={T.amber} label={`${comparison.over} over`}/>
-                  {comparison.unknown > 0 && <Pill color={T.text3} label={`${comparison.unknown} no system qty`}/>}
+                <div style={{...cardStyle(true), padding: '12px 14px', display:'flex', flexWrap:'wrap', alignItems:'center', gap:10, marginBottom:14}}>
+                  <div style={{fontSize:12, color:T.text2, fontWeight:650, marginRight:2}}>Count vs MYOB</div>
+                  <StatusPill color={A.good}>{comparison.exact} exact</StatusPill>
+                  <StatusPill color={A.bad}>{comparison.short} short</StatusPill>
+                  <StatusPill color={A.warn}>{comparison.over} over</StatusPill>
+                  {comparison.unknown > 0 && <StatusPill color={T.text3}>{comparison.unknown} no system qty</StatusPill>}
                   <div style={{marginLeft:'auto', display:'flex', alignItems:'center', gap:12}}>
-                    <div style={{fontSize:12, color:T.text2}}>
+                    <div style={{fontSize:12.5, color:T.text2}}>
                       Net variance:{' '}
-                      <strong style={{color: comparison.netUnits === 0 ? T.text2 : comparison.netUnits > 0 ? T.amber : T.red, fontVariantNumeric:'tabular-nums'}}>
+                      <strong style={{color: comparison.netUnits === 0 ? T.text2 : comparison.netUnits > 0 ? A.warn : A.bad, fontVariantNumeric:'tabular-nums'}}>
                         {comparison.netUnits > 0 ? `+${comparison.netUnits}` : comparison.netUnits}
                       </strong>{' '}units
                     </div>
                     {comparison.discrepancies > 0 && (
-                      <button onClick={() => setFilter('variance')}
-                        style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600,
-                          background: filter === 'variance' ? T.amber : 'transparent',
-                          color: filter === 'variance' ? 'var(--t-bg3)' : T.amber,
-                          border:`1px solid ${T.amber}`, cursor:'pointer'}}>
+                      <button onClick={() => setFilter('variance')} className="al-press al-focus"
+                        style={{padding:'6px 14px', borderRadius:RADIUS.pill, fontSize:12, fontFamily:'inherit', fontWeight:600,
+                          background: filter === 'variance' ? A.warn : alpha(A.warn, '1a'),
+                          color: filter === 'variance' ? '#fff' : A.warn,
+                          border:'1px solid transparent', cursor:'pointer'}}>
                         Review {comparison.discrepancies} discrepanc{comparison.discrepancies === 1 ? 'y' : 'ies'}
                       </button>
                     )}
@@ -366,43 +371,38 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
               {upload.match_results && upload.match_results.length > 0 && (
                 <div style={{marginTop:24}}>
                   <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:10, gap:12, flexWrap:'wrap'}}>
-                    <h2 style={{margin:0, fontSize:14, fontWeight:600, color:T.text2, textTransform:'uppercase', letterSpacing:'0.05em'}}>Match results</h2>
+                    <h2 style={{margin:0, fontSize:14, fontWeight:650, color:T.text2}}>Match results</h2>
                     <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
                       <div style={{ position:'relative' }}>
-                        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SKU / name / bin…"
-                          style={{ padding:'4px 22px 4px 9px', borderRadius:4, fontSize:11, width:180, background:T.bg3, color:T.text, border:`1px solid ${T.border2}`, fontFamily:'inherit', outline:'none' }} />
-                        {search && <button onClick={() => setSearch('')} title="Clear" style={{ position:'absolute', right:4, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:T.text3, cursor:'pointer', fontSize:13, lineHeight:1, padding:0 }}>×</button>}
+                        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SKU / name / bin…" style={denseInp} />
+                        {search && <button onClick={() => setSearch('')} title="Clear" style={{ position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:T.text3, cursor:'pointer', fontSize:13, lineHeight:1, padding:0, fontFamily:'inherit' }}>×</button>}
                       </div>
                       {hasSheetNames && sheetNames.length > 1 && (
                         <select value={sheetFilter} onChange={e => setSheetFilter(e.target.value)}
-                          style={{ padding:'4px 10px', borderRadius:4, fontSize:11, background:T.bg3, color:T.text, border:`1px solid ${T.border2}`, fontFamily:'inherit', cursor:'pointer' }}>
+                          style={{ padding:'6px 10px', borderRadius:RADIUS.sm, fontSize:12.5, background:T.bg3, color:T.text, border:'1px solid transparent', fontFamily:'inherit', cursor:'pointer', outline:'none' }}>
                           <option value="all">All sheets</option>
                           {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                       )}
                       {(['all', 'matched', 'unmatched', 'variance'] as const).map(f => (
-                        <button key={f} onClick={() => setFilter(f)}
-                          style={{ padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit',
-                            background: filter === f ? T.blue : 'transparent',
-                            color: filter === f ? '#fff' : T.text3,
-                            border: `1px solid ${filter === f ? T.blue : T.border2}`, cursor:'pointer' }}>
+                        <button key={f} onClick={() => setFilter(f)} className="al-press al-focus" style={pillToggle(filter === f)}>
                           {f}
                         </button>
                       ))}
                       <span style={{width:1, height:18, background:T.border2, margin:'0 2px'}}/>
                       <div style={{ position:'relative' }}>
                         <button onClick={() => setColsOpen(o => !o)} title="Choose which columns to export"
-                          style={{ padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', background:'transparent', color:T.text2, border:`1px solid ${T.border2}`, cursor:'pointer' }}>
+                          className="al-press al-focus al-ghost" style={{ ...btnStyle('ghost', 'sm'), fontSize: 12 }}>
                           Columns ({exportCols.length}) ▾
                         </button>
                         {colsOpen && (
-                          <div onMouseLeave={() => setColsOpen(false)} style={{ position:'absolute', top:'100%', right:0, zIndex:20, marginTop:4, background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:6, padding:'8px 10px', width:200, boxShadow:'0 10px 30px rgba(0,0,0,0.5)' }}>
+                          <div onMouseLeave={() => setColsOpen(false)} style={{ position:'absolute', top:'100%', right:0, zIndex:20, marginTop:4, background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:RADIUS.sm + 2, padding:'8px 10px', width:200, boxShadow:SHADOW.md }}>
                             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
-                              <button onClick={() => setExportCols(MATCH_COLS.map(c => c.key))} style={{ background:'none', border:'none', color:T.text3, fontSize:10, cursor:'pointer', fontFamily:'inherit', padding:0 }}>All</button>
-                              <button onClick={() => setExportCols([])} style={{ background:'none', border:'none', color:T.text3, fontSize:10, cursor:'pointer', fontFamily:'inherit', padding:0 }}>None</button>
+                              <button onClick={() => setExportCols(MATCH_COLS.map(c => c.key))} style={{ background:'none', border:'none', color:T.text3, fontSize:12, cursor:'pointer', fontFamily:'inherit', padding:0 }}>All</button>
+                              <button onClick={() => setExportCols([])} style={{ background:'none', border:'none', color:T.text3, fontSize:12, cursor:'pointer', fontFamily:'inherit', padding:0 }}>None</button>
                             </div>
                             {MATCH_COLS.map(c => (
-                              <label key={c.key} style={{ display:'flex', alignItems:'center', gap:7, padding:'3px 0', fontSize:12, cursor:'pointer', color:T.text2 }}>
+                              <label key={c.key} style={{ display:'flex', alignItems:'center', gap:7, padding:'3px 0', fontSize:12.5, cursor:'pointer', color:T.text2 }}>
                                 <input type="checkbox" checked={exportCols.includes(c.key)} onChange={() => setExportCols(prev => prev.includes(c.key) ? prev.filter(k => k !== c.key) : [...prev, c.key])} style={{ margin:0 }} />
                                 {c.label}
                               </label>
@@ -413,17 +413,16 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
                       <button onClick={() => downloadMatchCsv(filteredResults, filter, upload.filename, exportCols)}
                         disabled={filteredResults.length === 0 || exportCols.length === 0}
                         title={`Download the "${filter}" results (${filteredResults.length} rows) as CSV`}
-                        style={{ padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent',
-                          color: (filteredResults.length === 0 || exportCols.length === 0) ? T.text3 : T.blue,
-                          border:`1px solid ${(filteredResults.length === 0 || exportCols.length === 0) ? T.border2 : T.blue + '55'}`,
-                          cursor: (filteredResults.length === 0 || exportCols.length === 0) ? 'default' : 'pointer' }}>
-                        ↓ CSV ({filteredResults.length})
+                        className="al-press al-focus al-ghost"
+                        style={{ ...btnStyle('ghost', 'sm', filteredResults.length === 0 || exportCols.length === 0), fontSize: 12,
+                          color: (filteredResults.length === 0 || exportCols.length === 0) ? T.text3 : A.accent }}>
+                        Download CSV ({filteredResults.length})
                       </button>
                     </div>
                   </div>
 
-                  <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
-                    <div style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 90px 110px' : '60px 130px 1fr 80px 90px 90px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+                  <div style={cardStyle(false)}>
+                    <div style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 90px 110px' : '60px 130px 1fr 80px 90px 90px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:12, color:T.text2, fontWeight:650}}>
                       <div>Row</div>
                       {hasSheetNames && <div>Sheet</div>}
                       <div>SKU</div>
@@ -434,31 +433,31 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
                       <div>Status</div>
                     </div>
                     {filteredResults.length === 0 ? (
-                      <div style={{padding:20, textAlign:'center', fontSize:12, color:T.text3}}>No results in this filter.</div>
+                      <div style={{padding:20, textAlign:'center', fontSize:12.5, color:T.text3}}>No results in this filter.</div>
                     ) : filteredResults.map((r, i) => (
-                      <div key={i} style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 90px 110px' : '60px 130px 1fr 80px 90px 90px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
-                        <div style={{color:T.text3, fontFamily:'monospace'}}>{r.row_number}</div>
+                      <div key={i} style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 90px 110px' : '60px 130px 1fr 80px 90px 90px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12.5, alignItems:'center'}}>
+                        <div style={{color:T.text3, fontFamily:'monospace', fontVariantNumeric:'tabular-nums'}}>{r.row_number}</div>
                         {hasSheetNames && (
-                          <div style={{color:T.text2, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontSize:11}}>{r.sheet_name || '—'}</div>
+                          <div style={{color:T.text2, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontSize:12}}>{r.sheet_name || '—'}</div>
                         )}
-                        <div style={{color:T.text, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{r.sku}</div>
-                        <div style={{color:T.text2, fontSize:11, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                        <div style={{color:T.text, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontSize:12}}>{r.sku}</div>
+                        <div style={{color:T.text2, fontSize:12, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
                           {r.status === 'matched' ? (
                             <>
                               {r.myob_name || '—'}
                               {r.myob_number && r.myob_number !== r.sku && (<span style={{color:T.text3, marginLeft:6, fontFamily:'monospace'}}>· {r.myob_number}</span>)}
                             </>
-                          ) : (<span style={{color:T.amber}}>Not in MYOB</span>)}
+                          ) : (<span style={{color:A.warn}}>Not in MYOB</span>)}
                         </div>
                         <div style={{textAlign:'right', color:T.text, fontVariantNumeric:'tabular-nums', fontWeight:500}}>{r.qty}</div>
                         <div style={{textAlign:'right', color:T.text3, fontVariantNumeric:'tabular-nums'}}>{r.myob_current_qty ?? '—'}</div>
                         {(() => {
                           const v = rowVariance(r)
                           if (v === null) return <div style={{textAlign:'right', color:T.text3}}>—</div>
-                          const col = v === 0 ? T.text3 : v > 0 ? T.amber : T.red
+                          const col = v === 0 ? T.text3 : v > 0 ? A.warn : A.bad
                           return <div style={{textAlign:'right', color:col, fontVariantNumeric:'tabular-nums', fontWeight: v === 0 ? 400 : 600}}>{v > 0 ? `+${v}` : v}</div>
                         })()}
-                        <div><MatchStatusBadge status={r.status}/></div>
+                        <div><MatchStatusPill status={r.status}/></div>
                       </div>
                     ))}
                   </div>
@@ -477,51 +476,55 @@ function ActionPanel({ upload, canEdit, actionInFlight, onMatch, onComplete, onR
   onMatch: () => void; onComplete: () => void; onReopen: () => void
 }) {
   const status = upload.status
+  const panel = (border: string, bg?: string): React.CSSProperties => ({
+    background: bg || T.bg2, border: `1px solid ${border}`, borderRadius: RADIUS.sm + 2,
+    padding: '14px 16px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+  })
 
   if (status === 'completed') {
     return (
-      <div style={{background:`${T.green}10`, border:`1px solid ${T.green}40`, borderRadius:8, padding:'14px 16px', marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap'}}>
+      <div style={panel(alpha(A.good, '40'), alpha(A.good, '10'))}>
         <div>
-          <div style={{fontSize:13, color:T.green, fontWeight:600}}>✓ Stocktake complete</div>
-          <div style={{fontSize:11, color:T.text3, marginTop:4}}>
+          <div style={{fontSize:13, color:A.good, fontWeight:600}}>✓ Stocktake complete</div>
+          <div style={{fontSize:12, color:T.text3, marginTop:4}}>
             Closed out{upload.completed_at ? ` ${new Date(upload.completed_at).toLocaleString('en-AU')}` : ''}. The figures below are kept for reference.
           </div>
         </div>
-        {canEdit && (<button onClick={onReopen} disabled={actionInFlight} style={{...btnStyle(T.text3, actionInFlight), background:'transparent', border:`1px solid ${T.border2}`, color:T.text2}}>{actionInFlight ? 'Reopening…' : 'Reopen'}</button>)}
+        {canEdit && (<Btn variant="secondary" size="sm" onClick={onReopen} disabled={actionInFlight}>{actionInFlight ? 'Reopening…' : 'Reopen'}</Btn>)}
       </div>
     )
   }
 
   if (status === 'matching') {
     return (
-      <div style={{background:T.bg2, border:`1px solid ${T.blue}40`, borderRadius:8, padding:'12px 16px', marginBottom:14, display:'flex', alignItems:'center', gap:12}}>
+      <div style={{...panel(alpha(A.accent, '40')), justifyContent:'flex-start'}}>
         <Spinner/>
-        <div style={{fontSize:13, color:T.blue, fontWeight:600}}>Resolving SKUs against MYOB (JAWS)…</div>
-        <div style={{fontSize:11, color:T.text3}}>Reading the whole inventory — can take up to a couple of minutes for a big catalogue.</div>
+        <div style={{fontSize:13, color:A.accent, fontWeight:600}}>Resolving SKUs against MYOB (JAWS)…</div>
+        <div style={{fontSize:12, color:T.text3}}>Reading the whole inventory — can take up to a couple of minutes for a big catalogue.</div>
       </div>
     )
   }
 
   if (status === 'failed') {
     return (
-      <div style={{background:`${T.red}10`, border:`1px solid ${T.red}40`, borderRadius:8, padding:'12px 16px', marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap'}}>
+      <div style={panel(alpha(A.bad, '40'), alpha(A.bad, '10'))}>
         <div>
-          <div style={{fontSize:13, color:T.red, fontWeight:600}}>Match failed</div>
-          {upload.notes && <div style={{fontSize:11, color:T.text3, marginTop:4}}>{upload.notes}</div>}
+          <div style={{fontSize:13, color:A.bad, fontWeight:600}}>Match failed</div>
+          {upload.notes && <div style={{fontSize:12, color:T.text3, marginTop:4}}>{upload.notes}</div>}
         </div>
-        {canEdit && (<button onClick={onMatch} disabled={actionInFlight} style={btnStyle(T.blue, actionInFlight)}>{actionInFlight ? 'Restarting…' : 'Retry match'}</button>)}
+        {canEdit && (<Btn size="sm" onClick={onMatch} disabled={actionInFlight}>{actionInFlight ? 'Restarting…' : 'Retry match'}</Btn>)}
       </div>
     )
   }
 
   if (status === 'parsed') {
     return (
-      <div style={{background:T.bg2, border:`1px solid ${T.border2}`, borderRadius:8, padding:'14px 16px', marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap'}}>
+      <div style={panel(T.border2)}>
         <div>
           <div style={{fontSize:13, color:T.text, fontWeight:600}}>Run match against MYOB</div>
-          <div style={{fontSize:11, color:T.text3, marginTop:4}}>Resolves each SKU against the JAWS inventory and computes variance + coverage. Read-only — nothing is written to MYOB.</div>
+          <div style={{fontSize:12, color:T.text3, marginTop:4}}>Resolves each SKU against the JAWS inventory and computes variance + coverage. Read-only — nothing is written to MYOB.</div>
         </div>
-        {canEdit && (<button onClick={onMatch} disabled={actionInFlight} style={btnStyle(T.blue, actionInFlight)}>{actionInFlight ? 'Matching…' : 'Run match'}</button>)}
+        {canEdit && (<Btn size="sm" onClick={onMatch} disabled={actionInFlight}>{actionInFlight ? 'Matching…' : 'Run match'}</Btn>)}
       </div>
     )
   }
@@ -530,19 +533,19 @@ function ActionPanel({ upload, canEdit, actionInFlight, onMatch, onComplete, onR
     const matched = upload.matched_count || 0
     const unmatched = upload.unmatched_count || 0
     return (
-      <div style={{background:T.bg2, border:`1px solid ${matched > 0 ? `${T.green}40` : T.border2}`, borderRadius:8, padding:'14px 16px', marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap'}}>
+      <div style={panel(matched > 0 ? alpha(A.good, '40') : T.border2)}>
         <div>
           <div style={{fontSize:13, color:T.text, fontWeight:600}}>Review the variance</div>
-          <div style={{fontSize:11, color:T.text3, marginTop:4}}>
-            <strong style={{color:T.green}}>{matched} matched</strong>
-            {unmatched > 0 && <>, <strong style={{color:T.amber}}>{unmatched} not in MYOB</strong></>}
+          <div style={{fontSize:12, color:T.text3, marginTop:4}}>
+            <strong style={{color:A.good}}>{matched} matched</strong>
+            {unmatched > 0 && <>, <strong style={{color:A.warn}}>{unmatched} not in MYOB</strong></>}
             . Check the count-vs-MYOB strip and coverage below, export CSV, then make any adjustment by hand in MYOB.
           </div>
         </div>
         {canEdit && (
           <div style={{display:'flex', gap:8, flexShrink:0}}>
-            <button onClick={onMatch} disabled={actionInFlight} style={{...btnStyle(T.text3, actionInFlight), background:'transparent', border:`1px solid ${T.border2}`, color:T.text2}}>Re-match</button>
-            <button onClick={onComplete} disabled={actionInFlight} style={btnStyle(T.green, actionInFlight)}>{actionInFlight ? 'Saving…' : 'Mark complete'}</button>
+            <Btn variant="secondary" size="sm" onClick={onMatch} disabled={actionInFlight}>Re-match</Btn>
+            <Btn size="sm" onClick={onComplete} disabled={actionInFlight}>{actionInFlight ? 'Saving…' : 'Mark complete'}</Btn>
           </div>
         )}
       </div>
@@ -555,57 +558,37 @@ function ActionPanel({ upload, canEdit, actionInFlight, onMatch, onComplete, onR
 function Spinner() {
   return (
     <>
-      <span style={{ width:18, height:18, flex:'0 0 auto', borderRadius:'50%', border:`2px solid ${alpha(T.blue, '33')}`, borderTopColor:T.blue, display:'inline-block', animation:'ja-spin 0.8s linear infinite' }} />
+      <span style={{ width:18, height:18, flex:'0 0 auto', borderRadius:'50%', border:`2px solid ${alpha(A.accent, '33')}`, borderTopColor:A.accent, display:'inline-block', animation:'ja-spin 0.8s linear infinite' }} />
       <style>{`@keyframes ja-spin { to { transform: rotate(360deg) } }`}</style>
     </>
   )
 }
 
-function btnStyle(color: string, disabled: boolean): React.CSSProperties {
-  return {
-    padding: '8px 16px', borderRadius: 6, border: 'none',
-    background: disabled ? T.bg4 : color, color: '#fff',
-    fontSize: 12, fontWeight: 600, cursor: disabled ? 'default' : 'pointer',
-    fontFamily: 'inherit', opacity: disabled ? 0.5 : 1,
-  }
-}
-
-function StatusBadge({ status }: { status: string }) {
+function UploadStatusPill({ status }: { status: string }) {
   const map: Record<string, { label: string; color: string }> = {
     parsed:    { label: 'Parsed',    color: T.text3 },
-    matching:  { label: 'Matching…', color: T.blue },
-    matched:   { label: 'Matched',   color: T.amber },
-    completed: { label: 'Completed', color: T.green },
-    failed:    { label: 'Failed',    color: T.red },
+    matching:  { label: 'Matching…', color: A.accent },
+    matched:   { label: 'Matched',   color: A.warn },
+    completed: { label: 'Completed', color: A.good },
+    failed:    { label: 'Failed',    color: A.bad },
   }
   const e = map[status] || { label: status, color: T.text3 }
-  return (
-    <span style={{padding:'3px 10px', borderRadius:3, background:`${e.color}22`, color:e.color, fontSize:11, fontWeight:600, letterSpacing:'0.05em', textTransform:'uppercase'}}>{e.label}</span>
-  )
+  return <StatusPill color={e.color}>{e.label}</StatusPill>
 }
 
-function MatchStatusBadge({ status }: { status: string }) {
+function MatchStatusPill({ status }: { status: string }) {
   const map: Record<string, { label: string; color: string }> = {
-    matched:   { label: 'Matched',   color: T.green },
-    not_found: { label: 'Not found', color: T.amber },
+    matched:   { label: 'Matched',   color: A.good },
+    not_found: { label: 'Not found', color: A.warn },
   }
   const e = map[status] || { label: status, color: T.text3 }
-  return (<span style={{padding:'2px 6px', borderRadius:3, background:`${e.color}22`, color:e.color, fontSize:10, fontWeight:600}}>{e.label}</span>)
-}
-
-function Pill({ color, label }: { color: string; label: string }) {
-  return (
-    <span style={{display:'inline-flex', alignItems:'center', gap:6, padding:'3px 9px', borderRadius:20, background:alpha(color, '1a'), border:`1px solid ${alpha(color, '40')}`, fontSize:11, fontWeight:600, color}}>
-      <span style={{width:6, height:6, borderRadius:'50%', background:color}}/>
-      {label}
-    </span>
-  )
+  return <StatusPill color={e.color}>{e.label}</StatusPill>
 }
 
 function Tile({ label, value, highlight }: { label: string; value: string; highlight?: string }) {
   return (
-    <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderLeft: highlight ? `3px solid ${highlight}` : `1px solid ${T.border}`, borderRadius:10, padding:'12px 14px'}}>
-      <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>{label}</div>
+    <div style={{...cardStyle(true), padding: '12px 14px', borderLeft: highlight ? `3px solid ${highlight}` : `1px solid ${T.border}`}}>
+      <div style={{fontSize:12, color:T.text3, fontWeight:650}}>{label}</div>
       <div style={{fontSize:22, fontWeight:700, color:T.text, fontVariantNumeric:'tabular-nums', marginTop:4, lineHeight:1.1}}>{value}</div>
     </div>
   )
@@ -671,46 +654,46 @@ function CoverageSection({ coverage, coverageAt, filename }: {
   return (
     <div style={{marginTop:24}}>
       <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:10, gap:12, flexWrap:'wrap'}}>
-        <h2 style={{margin:0, fontSize:14, fontWeight:600, color:T.text2, textTransform:'uppercase', letterSpacing:'0.05em'}}>Coverage vs in-stock</h2>
+        <h2 style={{margin:0, fontSize:14, fontWeight:650, color:T.text2}}>Coverage vs in-stock</h2>
         <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
           {items.length > 0 && (
             <div style={{ position:'relative' }}>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item # / name…"
-                style={{ padding:'4px 22px 4px 9px', borderRadius:4, fontSize:11, width:180, background:T.bg3, color:T.text, border:`1px solid ${T.border2}`, fontFamily:'inherit', outline:'none' }} />
-              {search && <button onClick={() => setSearch('')} title="Clear" style={{ position:'absolute', right:4, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:T.text3, cursor:'pointer', fontSize:13, lineHeight:1, padding:0 }}>×</button>}
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item # / name…" style={denseInp} />
+              {search && <button onClick={() => setSearch('')} title="Clear" style={{ position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:T.text3, cursor:'pointer', fontSize:13, lineHeight:1, padding:0, fontFamily:'inherit' }}>×</button>}
             </div>
           )}
           {items.length > 0 && (
             <button onClick={() => downloadCoverageCsv(filtered, filename)}
-              style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color:T.blue, border:`1px solid ${T.blue}55`, cursor:'pointer'}}>
-              ↓ Download CSV ({q ? filtered.length : coverage.uncounted_count})
+              className="al-press al-focus al-ghost"
+              style={{ ...btnStyle('ghost', 'sm'), fontSize: 12, color: A.accent }}>
+              Download CSV ({q ? filtered.length : coverage.uncounted_count})
             </button>
           )}
         </div>
       </div>
 
-      <div style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:10, marginBottom:items.length ? 12 : 0, padding:'12px 14px', background:T.bg2, border:`1px solid ${allCounted ? T.green + '40' : T.amber + '40'}`, borderRadius:8}}>
-        <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginRight:2}}>MYOB (JAWS)</div>
-        <Pill color={T.text2} label={`${coverage.total} in stock`}/>
-        <Pill color={T.green} label={`${coverage.counted} counted`}/>
-        <Pill color={allCounted ? T.green : T.amber} label={`${coverage.uncounted_count} not counted`}/>
-        <div style={{marginLeft:'auto', fontSize:12, color:T.text2}}>
+      <div style={{...cardStyle(true), padding: '12px 14px', display:'flex', flexWrap:'wrap', alignItems:'center', gap:10, marginBottom:items.length ? 12 : 0, border:`1px solid ${allCounted ? alpha(A.good, '40') : alpha(A.warn, '40')}`}}>
+        <div style={{fontSize:12, color:T.text2, fontWeight:650, marginRight:2}}>MYOB (JAWS)</div>
+        <StatusPill color={T.text2}>{coverage.total} in stock</StatusPill>
+        <StatusPill color={A.good}>{coverage.counted} counted</StatusPill>
+        <StatusPill color={allCounted ? A.good : A.warn}>{coverage.uncounted_count} not counted</StatusPill>
+        <div style={{marginLeft:'auto', fontSize:12.5, color:T.text2}}>
           {allCounted
-            ? <span style={{color:T.green, fontWeight:600}}>✓ Every in-stock item was counted</span>
-            : <>Uncounted value: <strong style={{color:T.amber, fontVariantNumeric:'tabular-nums'}}>{money(coverage.uncounted_value)}</strong> <span style={{color:T.text3}}>at buy price</span></>}
+            ? <span style={{color:A.good, fontWeight:600}}>✓ Every in-stock item was counted</span>
+            : <>Uncounted value: <strong style={{color:A.warn, fontVariantNumeric:'tabular-nums'}}>{money(coverage.uncounted_value)}</strong> <span style={{color:T.text3}}>at buy price</span></>}
         </div>
       </div>
 
       {items.length > 0 && (
-        <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
-          <div style={{display:'grid', gridTemplateColumns:GRID, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+        <div style={cardStyle(false)}>
+          <div style={{display:'grid', gridTemplateColumns:GRID, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:12, color:T.text2, fontWeight:650}}>
             <div>Item #</div><div>Name</div><div style={{textAlign:'right'}}>On hand</div><div style={{textAlign:'right'}}>Buy</div><div style={{textAlign:'right'}}>Value</div>
           </div>
           {shown.length === 0 ? (
-            <div style={{padding:16, textAlign:'center', fontSize:12, color:T.text3}}>No items match “{search}”.</div>
+            <div style={{padding:16, textAlign:'center', fontSize:12.5, color:T.text3}}>No items match “{search}”.</div>
           ) : shown.map((it, i) => (
-            <div key={i} style={{display:'grid', gridTemplateColumns:GRID, gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
-              <div style={{color:T.text, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.number || '—'}</div>
+            <div key={i} style={{display:'grid', gridTemplateColumns:GRID, gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12.5, alignItems:'center'}}>
+              <div style={{color:T.text, fontFamily:'monospace', fontSize:12, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.number || '—'}</div>
               <div style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.name || '—'}</div>
               <div style={{textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums'}}>{it.available}</div>
               <div style={{textAlign:'right', color:T.text3, fontVariantNumeric:'tabular-nums'}}>{money(it.buy_price)}</div>
@@ -718,16 +701,16 @@ function CoverageSection({ coverage, coverageAt, filename }: {
             </div>
           ))}
           {filtered.length > DISPLAY && (
-            <div style={{padding:'10px 14px', textAlign:'center', fontSize:12}}>
-              <button onClick={() => setOpen(o => !o)} style={{background:'transparent', border:'none', color:T.blue, cursor:'pointer', fontSize:12, fontFamily:'inherit'}}>
+            <div style={{padding:'10px 14px', textAlign:'center', fontSize:12.5}}>
+              <button onClick={() => setOpen(o => !o)} className="al-press" style={{background:'transparent', border:'none', color:A.accent, cursor:'pointer', fontSize:12.5, fontWeight:600, fontFamily:'inherit'}}>
                 {open ? 'Show fewer' : `Show all ${filtered.length}${(!q && coverage.truncated) ? ' (stored)' : ''}`}
               </button>
-              {!q && coverage.truncated && <div style={{fontSize:10, color:T.text3, marginTop:4}}>List capped at {items.length}; download CSV for the stored set.</div>}
+              {!q && coverage.truncated && <div style={{fontSize:12, color:T.text3, marginTop:4}}>List capped at {items.length}; download CSV for the stored set.</div>}
             </div>
           )}
         </div>
       )}
-      {coverageAt && <div style={{fontSize:10, color:T.text3, marginTop:6}}>Checked {new Date(coverageAt).toLocaleString('en-AU')} · counted from the uploaded sheet · in stock = MYOB on-hand qty &gt; 0</div>}
+      {coverageAt && <div style={{fontSize:12, color:T.text3, marginTop:6}}>Checked {new Date(coverageAt).toLocaleString('en-AU')} · counted from the uploaded sheet · in stock = MYOB on-hand qty &gt; 0</div>}
     </div>
   )
 }

@@ -92,7 +92,7 @@ export function Btn({ variant = 'primary', size = 'md', full, disabled, onClick,
 }
 
 // ── Card ─────────────────────────────────────────────────────────────────
-export function cardStyle(pad: boolean | number = true): React.CSSProperties {
+export function cardStyle(pad: boolean | number | string = true): React.CSSProperties {
   return {
     background: T.bg2, border: `1px solid ${T.border}`, borderRadius: RADIUS.md,
     boxShadow: SHADOW.sm,
@@ -101,7 +101,7 @@ export function cardStyle(pad: boolean | number = true): React.CSSProperties {
   }
 }
 
-export function Card({ pad = true, style, children }: { pad?: boolean | number; style?: React.CSSProperties; children: React.ReactNode }) {
+export function Card({ pad = true, style, children }: { pad?: boolean | number | string; style?: React.CSSProperties; children: React.ReactNode }) {
   return <div style={{ ...cardStyle(pad), ...style }}>{children}</div>
 }
 

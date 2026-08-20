@@ -7,18 +7,13 @@
 //
 // Self-contained: fetches its own data from /api/b2b/admin/freight-zones
 // and /api/b2b/admin/freight-rates. Failures surface inline.
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useCallback, useEffect, useState } from 'react'
 import { useConfirm } from '../ui/Feedback'
 import { SkeletonRows } from '../ui'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
+import { A, Btn, Banner, inputStyle, RADIUS } from './ui'
 
 interface FreightRate {
   id: string
@@ -89,21 +84,23 @@ export default function FreightZonesManager() {
   }
 
   return (
-    <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:18}}>
+    <div>
       <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:6}}>
-        <div style={{fontSize:13, fontWeight:600, color:T.text, flex:1}}>Freight zones</div>
-        <button
-          onClick={() => setAddOpen(o => !o)}
-          style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.border2}`, background:'transparent', color: addOpen ? T.text3 : T.blue, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>
-          {addOpen ? 'Cancel' : '+ Add zone'}
-        </button>
+        <div style={{fontSize:14, fontWeight:650, color:T.text, flex:1}}>Freight zones</div>
+        <Btn variant={addOpen ? 'ghost' : 'secondary'} size="sm" onClick={() => setAddOpen(o => !o)}>
+          {addOpen ? 'Cancel' : 'Add zone'}
+        </Btn>
       </div>
-      <div style={{fontSize:12, color:T.text3, marginBottom:14, lineHeight:1.5}}>
+      <div style={{fontSize:12.5, color:T.text3, marginBottom:14, lineHeight:1.5}}>
         Distributors at checkout see the rates from the first matching zone (by sort order). Postcode ranges:
-        e.g. <code style={{color:T.text2}}>4000-4179, 4500-4999, 4600</code>.
+        e.g. <code style={{color:T.text2, fontSize:12}}>4000-4179, 4500-4999, 4600</code>.
       </div>
 
-      {error && <div style={{marginBottom:10, padding:10, fontSize:12, color:T.red, background:`${T.red}15`, border:`1px solid ${T.red}40`, borderRadius:6}}>{error}</div>}
+      {error && (
+        <div style={{marginBottom:10}}>
+          <Banner tone="error">{error}</Banner>
+        </div>
+      )}
 
       {addOpen && (
         <AddZoneForm onClose={() => setAddOpen(false)} onSaved={() => { setAddOpen(false); void load() }} />
@@ -112,7 +109,7 @@ export default function FreightZonesManager() {
       {loading && <SkeletonRows rows={8}/>}
 
       {!loading && zones.length === 0 && !addOpen && (
-        <div style={{fontSize:12, color:T.text3, padding:'10px 0'}}>
+        <div style={{fontSize:12.5, color:T.text3, padding:'10px 0'}}>
           No zones configured yet. Distributors will see "no freight available" at checkout until you add at least one.
         </div>
       )}
@@ -160,37 +157,36 @@ function ZoneRow({ zone, busy, onPatch, onDelete, onChange }: {
     <div style={{
       marginBottom:10, padding:'12px 14px',
       background: T.bg3,
-      border: `1px solid ${zone.is_active ? T.border : T.border2}`,
       opacity: zone.is_active ? 1 : 0.6,
-      borderRadius:8,
+      borderRadius:RADIUS.sm + 2,
     }}>
       <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
         {editing ? (
           <>
             <input value={name} onChange={e => setName(e.target.value)} style={inp(180)} placeholder="Zone name"/>
             <input value={rangesText} onChange={e => setRangesText(e.target.value)} style={inp(280)} placeholder="4000-4179, 4500-4999"/>
-            <input type="number" value={sortOrder} onChange={e => setSortOrder(Number(e.target.value))} style={inp(60)} title="Sort order"/>
-            <button onClick={save} disabled={saving} style={btn(T.green, true)}>{saving ? 'Saving…' : 'Save'}</button>
-            <button onClick={() => { setEditing(false); setName(zone.name); setRangesText(rangesToText(zone.postcode_ranges)); setSortOrder(zone.sort_order) }} disabled={saving} style={btn(T.text3, false)}>Cancel</button>
+            <input type="number" value={sortOrder} onChange={e => setSortOrder(Number(e.target.value))} style={inp(70)} title="Sort order"/>
+            <Btn size="sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Btn>
+            <Btn variant="ghost" size="sm" onClick={() => { setEditing(false); setName(zone.name); setRangesText(rangesToText(zone.postcode_ranges)); setSortOrder(zone.sort_order) }} disabled={saving}>Cancel</Btn>
           </>
         ) : (
           <>
             <strong style={{fontSize:13, color:T.text, minWidth:140}}>{zone.name}</strong>
-            <span style={{fontSize:11, fontFamily:'monospace', color:T.text3, flex:1}}>
+            <span style={{fontSize:12, fontFamily:'monospace', color:T.text3, flex:1}}>
               {rangesToText(zone.postcode_ranges) || '(no postcodes)'}
             </span>
-            <span style={{fontSize:10, color:T.text3}}>#{zone.sort_order}</span>
-            <label style={{fontSize:11, color:T.text2, display:'flex', alignItems:'center', gap:4, cursor:'pointer'}}>
+            <span style={{fontSize:12, color:T.text3}}>#{zone.sort_order}</span>
+            <label style={{fontSize:12, color:T.text2, display:'flex', alignItems:'center', gap:4, cursor:'pointer'}}>
               <input type="checkbox" checked={zone.is_active} disabled={busy}
                 onChange={e => onPatch({ is_active: e.target.checked })}/>
               Active
             </label>
-            <button onClick={() => setEditing(true)} disabled={busy} style={btn(T.text2, false)}>Edit</button>
-            <button onClick={onDelete} disabled={busy} style={btn(T.red, false)}>Delete</button>
+            <Btn variant="ghost" size="sm" onClick={() => setEditing(true)} disabled={busy}>Edit</Btn>
+            <button onClick={onDelete} disabled={busy} className="al-press al-focus al-ghost" style={dangerBtn}>Delete</button>
           </>
         )}
       </div>
-      {err && <div style={{marginTop:6, fontSize:11, color:T.red}}>{err}</div>}
+      {err && <div style={{marginTop:6, fontSize:12, color:A.bad}}>{err}</div>}
 
       <RatesEditor zoneId={zone.id} rates={zone.rates} onChange={onChange}/>
     </div>
@@ -255,42 +251,44 @@ function RatesEditor({ zoneId, rates, onChange }: { zoneId: string; rates: Freig
 
   return (
     <div style={{marginTop:10, paddingLeft:8, borderLeft:`2px solid ${T.border}`}}>
-      <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:6}}>Rates</div>
+      <div style={{fontSize:12, color:T.text2, fontWeight:650, marginBottom:6}}>Rates</div>
 
       {rates.length === 0 && (
-        <div style={{fontSize:11, color:T.text3, padding:'4px 0', fontStyle:'italic'}}>No rates yet — add at least one.</div>
+        <div style={{fontSize:12, color:T.text3, padding:'4px 0', fontStyle:'italic'}}>No rates yet — add at least one.</div>
       )}
 
       {rates.map(r => (
-        <div key={r.id} style={{display:'flex', alignItems:'center', gap:8, padding:'4px 0', fontSize:12}}>
+        <div key={r.id} style={{display:'flex', alignItems:'center', gap:8, padding:'4px 0', fontSize:12.5}}>
           <span style={{color:T.text, minWidth:120}}>{r.label}</span>
-          <span style={{fontFamily:'monospace', color:T.text2, minWidth:80}}>${r.price_ex_gst.toFixed(2)} ex</span>
+          <span style={{fontFamily:'monospace', fontSize:12, color:T.text2, minWidth:80}}>${r.price_ex_gst.toFixed(2)} ex</span>
           <span style={{color:T.text3, minWidth:90}}>
             {r.transit_days != null ? `${r.transit_days}d transit` : '—'}
           </span>
-          <label style={{fontSize:10, color:T.text2, display:'flex', alignItems:'center', gap:4, cursor:'pointer'}}>
+          <label style={{fontSize:12, color:T.text2, display:'flex', alignItems:'center', gap:4, cursor:'pointer'}}>
             <input type="checkbox" checked={r.is_active} disabled={busy}
               onChange={e => patchRate(r.id, { is_active: e.target.checked })}/>
             Active
           </label>
           <span style={{flex:1}}/>
-          <button onClick={() => deleteRate(r)} disabled={busy} style={btn(T.red, false)}>×</button>
+          <button onClick={() => deleteRate(r)} disabled={busy} className="al-press al-focus al-ghost" style={dangerBtn}>Delete</button>
         </div>
       ))}
 
       {adding ? (
-        <div style={{display:'flex', alignItems:'center', gap:8, padding:'6px 0', fontSize:12, flexWrap:'wrap'}}>
+        <div style={{display:'flex', alignItems:'center', gap:8, padding:'6px 0', flexWrap:'wrap'}}>
           <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="e.g. Standard" style={inp(140)} autoFocus/>
           <input value={newPrice} onChange={e => setNewPrice(e.target.value)} placeholder="Price ex GST" type="number" step="0.01" style={inp(110)}/>
           <input value={newDays} onChange={e => setNewDays(e.target.value)} placeholder="Days" type="number" style={inp(70)}/>
-          <button onClick={addRate} disabled={busy} style={btn(T.green, true)}>{busy ? 'Adding…' : 'Add'}</button>
-          <button onClick={() => { setAdding(false); setNewLabel(''); setNewPrice(''); setNewDays('') }} disabled={busy} style={btn(T.text3, false)}>Cancel</button>
+          <Btn size="sm" onClick={addRate} disabled={busy}>{busy ? 'Adding…' : 'Add'}</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => { setAdding(false); setNewLabel(''); setNewPrice(''); setNewDays('') }} disabled={busy}>Cancel</Btn>
         </div>
       ) : (
-        <button onClick={() => setAdding(true)} style={{...btn(T.blue, false), marginTop:4}}>+ Add rate</button>
+        <div style={{marginTop:4}}>
+          <Btn variant="ghost" size="sm" onClick={() => setAdding(true)}>+ Add rate</Btn>
+        </div>
       )}
 
-      {err && <div style={{fontSize:11, color:T.red, marginTop:4}}>{err}</div>}
+      {err && <div style={{fontSize:12, color:A.bad, marginTop:4}}>{err}</div>}
     </div>
   )
 }
@@ -318,15 +316,15 @@ function AddZoneForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
   }
 
   return (
-    <div style={{marginBottom:10, padding:12, background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:6}}>
+    <div style={{marginBottom:10, padding:12, background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:RADIUS.sm}}>
       <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
         <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Zone name (e.g. QLD Metro)" style={inp(200)}/>
         <input value={rangesText} onChange={e => setRangesText(e.target.value)} placeholder="4000-4179, 4500-4999" style={inp(300)}/>
-        <button onClick={save} disabled={saving} style={btn(T.green, true)}>{saving ? 'Saving…' : 'Add zone'}</button>
-        <button onClick={onClose} disabled={saving} style={btn(T.text3, false)}>Cancel</button>
+        <Btn size="sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Add zone'}</Btn>
+        <Btn variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancel</Btn>
       </div>
-      {err && <div style={{marginTop:6, fontSize:11, color:T.red}}>{err}</div>}
-      <div style={{marginTop:6, fontSize:10, color:T.text3}}>
+      {err && <div style={{marginTop:6, fontSize:12, color:A.bad}}>{err}</div>}
+      <div style={{marginTop:6, fontSize:12, color:T.text3}}>
         After saving, click into the zone to add rates (Standard, Express, etc.).
       </div>
     </div>
@@ -334,20 +332,18 @@ function AddZoneForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
 }
 
 // ── Style helpers ──────────────────────────────────────────────────────
+// Dense row inputs — kit look scaled for inline editing (floor is 12px type).
 
 function inp(width: number): React.CSSProperties {
   return {
-    width, boxSizing: 'border-box',
-    padding:'5px 8px', background:T.bg4,
-    border:`1px solid ${T.border2}`, color:T.text,
-    borderRadius:4, fontSize:12, fontFamily:'inherit', outline:'none',
+    ...inputStyle(),
+    width, background:T.bg4,
+    padding:'7px 10px', fontSize:13, minHeight:34,
   }
 }
-function btn(color: string, filled: boolean): React.CSSProperties {
-  return {
-    padding:'4px 10px', borderRadius:4,
-    border: filled ? `1px solid ${color}` : `1px solid ${T.border2}`,
-    background: filled ? `${color}20` : 'transparent',
-    color, fontSize:11, fontFamily:'inherit', cursor:'pointer',
-  }
+
+const dangerBtn: React.CSSProperties = {
+  padding:'4px 12px', borderRadius:RADIUS.pill, minHeight:28,
+  border:'1px solid transparent', background:'transparent',
+  color:A.bad, fontSize:12, fontWeight:600, fontFamily:'inherit', cursor:'pointer', whiteSpace:'nowrap',
 }

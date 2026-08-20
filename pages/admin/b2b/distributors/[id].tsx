@@ -6,6 +6,7 @@
 //   - Invite new users via Supabase magic link
 //   - Update user role / deactivate / remove
 //   - Toggle active status on the distributor itself
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
@@ -15,14 +16,8 @@ import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../../lib/authServer'
 import type { UserRole } from '../../../../lib/permissions'
 import { useConfirm, useToast } from '../../../../components/ui/Feedback'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-}
+import { T, alpha } from '../../../../lib/ui/theme'
+import { A, Btn, btnStyle, cardStyle, StatusPill, Banner, PageTitle, inputStyle, RADIUS } from '../../../../components/b2b/ui'
 
 interface Props {
   user: {
@@ -160,47 +155,43 @@ export default function DistributorDetailPage({ user }: Props) {
         <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="distributors"/>
 
-          {/* Header */}
-          <header style={{marginBottom:18}}>
-            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
-              <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
-              {' / '}
-              <a href="/admin/b2b/distributors" style={{color:T.text3,textDecoration:'none'}}>Distributors</a>
-              {' / '}
-              <span style={{color:T.text2}}>{dist?.display_name || '...'}</span>
+          {/* Breadcrumb + page header */}
+          <div style={{fontSize:12.5,color:T.text3,marginBottom:6}}>
+            <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
+            {' / '}
+            <a href="/admin/b2b/distributors" style={{color:T.text3,textDecoration:'none'}}>Distributors</a>
+            {' / '}
+            <span style={{color:T.text2}}>{dist?.display_name || '...'}</span>
+          </div>
+          <PageTitle action={dist ? (
+            <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10}}>
+                <span style={{fontSize:12.5,color:T.text3}}>Active</span>
+                <ToggleSwitch
+                  on={dist.is_active}
+                  onChange={v => patchDist({ is_active: v }).catch(e => toast(e?.message || String(e), 'error'))}
+                />
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:10}} title="Off = browse-only: they can view the catalogue and fill a cart, but can't place orders">
+                <span style={{fontSize:12.5,color:T.text3}}>Checkout</span>
+                <ToggleSwitch
+                  on={dist.checkout_enabled !== false}
+                  onChange={v => patchDist({ checkout_enabled: v }).catch(e => toast(e?.message || String(e), 'error'))}
+                />
+              </div>
+              <button onClick={deleteDist} disabled={deleting} title="Delete distributor (blocked if it has orders)"
+                className="al-press al-focus"
+                style={{...btnStyle('ghost','sm'), color:A.bad, border:`1px solid ${alpha(A.bad,'55')}`, cursor:deleting?'wait':'pointer'}}>
+                {deleting ? 'Deleting…' : 'Delete'}
+              </button>
             </div>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
-              <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>
-                {dist?.display_name || 'Loading…'}
-              </h1>
-              {dist && (
-                <div style={{display:'flex',alignItems:'center',gap:14}}>
-                  <div style={{display:'flex',alignItems:'center',gap:10}}>
-                    <span style={{fontSize:12,color:T.text3}}>Active</span>
-                    <ToggleSwitch
-                      on={dist.is_active}
-                      onChange={v => patchDist({ is_active: v }).catch(e => toast(e?.message || String(e), 'error'))}
-                    />
-                  </div>
-                  <div style={{display:'flex',alignItems:'center',gap:10}} title="Off = browse-only: they can view the catalogue and fill a cart, but can't place orders">
-                    <span style={{fontSize:12,color:T.text3}}>Checkout</span>
-                    <ToggleSwitch
-                      on={dist.checkout_enabled !== false}
-                      onChange={v => patchDist({ checkout_enabled: v }).catch(e => toast(e?.message || String(e), 'error'))}
-                    />
-                  </div>
-                  <button onClick={deleteDist} disabled={deleting} title="Delete distributor (blocked if it has orders)"
-                    style={{background:'transparent',border:`1px solid ${T.red}55`,color:T.red,borderRadius:7,padding:'6px 12px',fontSize:12,fontWeight:600,cursor:deleting?'wait':'pointer',fontFamily:'inherit'}}>
-                    {deleting ? 'Deleting…' : '🗑 Delete'}
-                  </button>
-                </div>
-              )}
-            </div>
-          </header>
+          ) : undefined}>
+            {dist?.display_name || 'Loading…'}
+          </PageTitle>
 
           {error && (
-            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
-              {error}
+            <div style={{marginBottom:14}}>
+              <Banner tone="error">{error}</Banner>
             </div>
           )}
 
@@ -284,37 +275,37 @@ function DetailsSection({
   return (
     <Section title="Details" flash={savingFlash}>
       {error && (
-        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginBottom:10}}>
-          {error}
+        <div style={{marginBottom:10}}>
+          <Banner tone="error">{error}</Banner>
         </div>
       )}
       <FormGrid>
         <FormRow label="Display name">
           <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)}
             onBlur={() => commit('display_name', displayName.trim(), 'Display name')}
-            style={input}/>
+            style={inputStyle()}/>
         </FormRow>
         <FormRow label="ABN">
           <input type="text" value={abn} onChange={e => setAbn(e.target.value)}
             onBlur={() => commit('abn', abn.trim() || null, 'ABN')}
-            placeholder="e.g. 12 345 678 901" style={input}/>
+            placeholder="e.g. 12 345 678 901" style={inputStyle()}/>
         </FormRow>
         <FormRow label="Primary contact email">
           <input type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)}
             onBlur={() => commit('primary_contact_email', contactEmail.trim().toLowerCase() || null, 'Email')}
-            style={input}/>
+            style={inputStyle()}/>
         </FormRow>
         <FormRow label="Primary contact phone">
           <input type="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)}
             onBlur={() => commit('primary_contact_phone', contactPhone.trim() || null, 'Phone')}
-            style={input}/>
+            style={inputStyle()}/>
         </FormRow>
       </FormGrid>
       <FormRow label="Tier" hint="Pricing / access tier — manage tier list under B2B Settings">
         <select
           value={dist.tier_id || ''}
           onChange={e => commit('tier_id', e.target.value || null, 'Tier')}
-          style={{...input, cursor:'pointer'}}>
+          style={{...inputStyle(), cursor:'pointer'}}>
           <option value="">— No tier —</option>
           {tiers
             .filter(t => t.is_active || t.id === dist.tier_id)
@@ -328,9 +319,9 @@ function DetailsSection({
       <FormRow label="Internal notes" hint="Only visible to staff">
         <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)}
           onBlur={() => commit('notes', notes.trim() || null, 'Notes')}
-          style={{...input,resize:'vertical'}}/>
+          style={{...inputStyle(),resize:'vertical',minHeight:0}}/>
       </FormRow>
-      <div style={{fontSize:10,color:T.text3,marginTop:6}}>Saves automatically when you click outside a field.</div>
+      <div style={{fontSize:12,color:T.text3,marginTop:6}}>Saves automatically when you click outside a field.</div>
     </Section>
   )
 }
@@ -372,8 +363,8 @@ function NotificationEmailsSection({
   return (
     <Section title="Notification emails" subtitle="Where outbound emails go (separate from the login contact)" flash={savingFlash}>
       {error && (
-        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginBottom:10}}>
-          {error}
+        <div style={{marginBottom:10}}>
+          <Banner tone="error">{error}</Banner>
         </div>
       )}
       <FormGrid>
@@ -381,22 +372,22 @@ function NotificationEmailsSection({
           <input type="email" value={freight} onChange={e => setFreight(e.target.value)}
             onBlur={() => commit('freight_email', freight, 'Freight email')}
             placeholder="freight@example.com"
-            style={input}/>
+            style={inputStyle()}/>
         </FormRow>
         <FormRow label="Invoices" hint="Invoices + credit notes">
           <input type="email" value={invoice} onChange={e => setInvoice(e.target.value)}
             onBlur={() => commit('invoice_email', invoice, 'Invoice email')}
             placeholder="accounts@example.com"
-            style={input}/>
+            style={inputStyle()}/>
         </FormRow>
         <FormRow label="Instructions / docs" hint="Product install + use instructions">
           <input type="email" value={instructions} onChange={e => setInstructions(e.target.value)}
             onBlur={() => commit('instructions_email', instructions, 'Instructions email')}
             placeholder="warehouse@example.com"
-            style={input}/>
+            style={inputStyle()}/>
         </FormRow>
       </FormGrid>
-      <div style={{fontSize:10,color:T.text3,marginTop:6}}>Leave blank to fall back to the primary contact email.</div>
+      <div style={{fontSize:12,color:T.text3,marginTop:6}}>Leave blank to fall back to the primary contact email.</div>
     </Section>
   )
 }
@@ -475,29 +466,22 @@ function AddressSection({
   return (
     <Section title={title} flash={savingFlash}>
       {error && (
-        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginBottom:10}}>
-          {error}
+        <div style={{marginBottom:10}}>
+          <Banner tone="error">{error}</Banner>
         </div>
       )}
       {kind === 'bill' && !empty && (
-        <button
-          onClick={copyFromShipping}
-          style={{
-            padding:'5px 10px',borderRadius:5,
-            border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,
-            fontSize:11,cursor:'pointer',fontFamily:'inherit',marginBottom:12,
-          }}>
-          Copy from shipping
-        </button>
+        <div style={{marginBottom:12}}>
+          <Btn variant="ghost" size="sm" onClick={copyFromShipping}>
+            Copy from shipping
+          </Btn>
+        </div>
       )}
       {kind === 'bill' && empty && (
         <button
           onClick={copyFromShipping}
-          style={{
-            padding:'5px 10px',borderRadius:5,
-            border:`1px solid ${T.blue}`,background:`${T.blue}20`,color:T.blue,
-            fontSize:11,cursor:'pointer',fontFamily:'inherit',marginBottom:12,
-          }}>
+          className="al-press al-focus"
+          style={{...btnStyle('ghost','sm'), color:A.accent, border:`1px solid ${alpha(A.accent,'55')}`, background:alpha(A.accent,'14'), marginBottom:12}}>
           Same as shipping → copy
         </button>
       )}
@@ -505,36 +489,36 @@ function AddressSection({
       <FormRow label="Address line 1" hint="Street number + name">
         <input type="text" value={line1} onChange={e => setLine1(e.target.value)}
           onBlur={() => commit(k('line1'), line1.trim() || null, 'Line 1')}
-          placeholder="e.g. 12 Industrial Ave" style={input}/>
+          placeholder="e.g. 12 Industrial Ave" style={inputStyle()}/>
       </FormRow>
       <FormRow label="Address line 2" hint="Unit, floor, building (optional)">
         <input type="text" value={line2} onChange={e => setLine2(e.target.value)}
           onBlur={() => commit(k('line2'), line2.trim() || null, 'Line 2')}
-          style={input}/>
+          style={inputStyle()}/>
       </FormRow>
       <FormGrid>
         <FormRow label="Suburb / city">
           <input type="text" value={suburb} onChange={e => setSuburb(e.target.value)}
             onBlur={() => commit(k('suburb'), suburb.trim() || null, 'Suburb')}
-            style={input}/>
+            style={inputStyle()}/>
         </FormRow>
         <FormRow label="State">
           <input type="text" value={state} onChange={e => setState(e.target.value)}
             onBlur={() => commit(k('state'), state.trim() || null, 'State')}
-            placeholder="e.g. QLD" style={input}/>
+            placeholder="e.g. QLD" style={inputStyle()}/>
         </FormRow>
         <FormRow label="Postcode">
           <input type="text" inputMode="numeric" value={postcode} onChange={e => setPostcode(e.target.value)}
             onBlur={() => commit(k('postcode'), postcode.trim() || null, 'Postcode')}
-            style={input}/>
+            style={inputStyle()}/>
         </FormRow>
         <FormRow label="Country" hint="2-letter code, e.g. AU">
           <input type="text" value={country} onChange={e => setCountry(e.target.value.toUpperCase())}
             onBlur={() => commit(k('country'), country.trim().toUpperCase() || null, 'Country')}
-            placeholder="AU" style={input}/>
+            placeholder="AU" style={inputStyle()}/>
         </FormRow>
       </FormGrid>
-      <div style={{fontSize:10,color:T.text3,marginTop:6}}>Saves automatically when you click outside a field.</div>
+      <div style={{fontSize:12,color:T.text3,marginTop:6}}>Saves automatically when you click outside a field.</div>
     </Section>
   )
 }
@@ -597,15 +581,15 @@ function MyobLinksSection({
     <Section title="MYOB customers" subtitle="Primary card and any linked sister cards (e.g. Tuning)">
       {/* Primary */}
       <div style={{
-        padding:'10px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,
+        padding:'10px 12px',background:T.bg3,borderRadius:RADIUS.sm,
         display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:8,
       }}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
-            <span style={{fontSize:9,color:T.blue,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>Primary</span>
+            <StatusPill color={A.accent}>Primary</StatusPill>
             <span style={{fontSize:13,color:T.text}}>{primaryDetail?.name || '—'}</span>
           </div>
-          <div style={{fontFamily:'monospace',fontSize:10,color:T.text3,marginTop:2}}>
+          <div style={{fontFamily:'monospace',fontSize:12,color:T.text3,marginTop:3}}>
             {primaryDetail?.display_id} · {primaryDetail?.uid}
           </div>
         </div>
@@ -614,20 +598,21 @@ function MyobLinksSection({
       {/* Linked */}
       {linkedDetails.length > 0 && linkedDetails.map(c => (
         <div key={c.uid} style={{
-          padding:'10px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,
+          padding:'10px 12px',background:T.bg3,borderRadius:RADIUS.sm,
           display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:8,
         }}>
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:'flex',alignItems:'center',gap:8}}>
-              <span style={{fontSize:9,color:T.purple,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>Linked</span>
+              <StatusPill color={T.text2}>Linked</StatusPill>
               <span style={{fontSize:13,color:T.text}}>{c.name || '(unnamed MYOB card)'}</span>
             </div>
-            <div style={{fontFamily:'monospace',fontSize:10,color:T.text3,marginTop:2}}>
+            <div style={{fontFamily:'monospace',fontSize:12,color:T.text3,marginTop:3}}>
               {(c.display_id && c.display_id !== '—') ? `${c.display_id} · ` : ''}{c.uid}
             </div>
           </div>
           <button onClick={() => removeLinked(c.uid)}
-            style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.red,fontSize:10,cursor:'pointer',fontFamily:'inherit'}}>
+            className="al-press al-focus al-ghost"
+            style={{...btnStyle('ghost','sm'), color:A.bad}}>
             Remove
           </button>
         </div>
@@ -635,27 +620,28 @@ function MyobLinksSection({
 
       {!showAdd && (
         <button onClick={() => setShowAdd(true)}
+          className="al-press al-focus"
           style={{
-            marginTop:6,padding:'8px 14px',borderRadius:5,
+            marginTop:6,padding:'8px 16px',borderRadius:RADIUS.pill,minHeight:36,
             border:`1px dashed ${T.border2}`,background:'transparent',color:T.text2,
-            fontSize:12,cursor:'pointer',fontFamily:'inherit',
+            fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit',
           }}>
           + Link another MYOB customer
         </button>
       )}
 
       {showAdd && (
-        <div style={{marginTop:10,padding:14,background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:7}}>
+        <div style={{marginTop:10,padding:14,background:T.bg3,borderRadius:RADIUS.sm}}>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-            <div style={{fontSize:12,color:T.text2,fontWeight:500}}>Search for a MYOB customer to link</div>
-            <button onClick={() => setShowAdd(false)}
-              style={{background:'transparent',border:'none',color:T.text2,fontSize:18,cursor:'pointer'}}>×</button>
+            <div style={{fontSize:12.5,color:T.text2,fontWeight:650}}>Search for a MYOB customer to link</div>
+            <button onClick={() => setShowAdd(false)} aria-label="Close" className="al-press"
+              style={{background:'transparent',border:'none',color:T.text2,fontSize:18,cursor:'pointer',fontFamily:'inherit'}}>×</button>
           </div>
           <CustomerSearch onPick={addLinked}/>
         </div>
       )}
 
-      <div style={{fontSize:10,color:T.text3,marginTop:10,lineHeight:1.5}}>
+      <div style={{fontSize:12,color:T.text3,marginTop:10,lineHeight:1.5}}>
         Order history and reporting combine all linked customers automatically.
       </div>
     </Section>
@@ -675,7 +661,7 @@ function UsersSection({
   return (
     <Section title="Users" subtitle="People who can sign in to the distributor portal for this account">
       {users.length === 0 && !showInvite && (
-        <div style={{padding:'14px 12px',color:T.text3,fontSize:13,textAlign:'center',background:T.bg3,border:`1px dashed ${T.border}`,borderRadius:7,marginBottom:10}}>
+        <div style={{padding:'14px 12px',color:T.text3,fontSize:13,textAlign:'center',background:T.bg3,border:`1px dashed ${T.border}`,borderRadius:RADIUS.sm,marginBottom:10}}>
           No users yet. Invite the first one below.
         </div>
       )}
@@ -687,14 +673,9 @@ function UsersSection({
       {showInvite ? (
         <InviteForm distId={distId} onDone={() => { setShowInvite(false); onChange() }} onCancel={() => setShowInvite(false)}/>
       ) : (
-        <button onClick={() => setShowInvite(true)}
-          style={{
-            marginTop:10,padding:'9px 16px',borderRadius:6,
-            border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
-            fontSize:13,fontWeight:500,cursor:'pointer',fontFamily:'inherit',
-          }}>
-          + Invite user
-        </button>
+        <div style={{marginTop:10}}>
+          <Btn onClick={() => setShowInvite(true)}>Invite user</Btn>
+        </div>
       )}
     </Section>
   )
@@ -772,10 +753,10 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
 
   return (
     <div style={{
-      padding:'10px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,
+      padding:'10px 12px',background:T.bg3,borderRadius:RADIUS.sm,
       marginBottom:6,opacity: user.is_active ? 1 : 0.55,
     }}>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:13,color:T.text,fontWeight:500}}>
             {user.full_name || user.email}
@@ -793,14 +774,15 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
             autoFocus
             style={{
               background:T.bg4,border:`1px solid ${T.border2}`,color:T.text,
-              borderRadius:4,padding:'4px 6px',fontSize:12,fontFamily:'inherit',cursor:'pointer',
+              borderRadius:RADIUS.sm,padding:'5px 8px',fontSize:12.5,fontFamily:'inherit',cursor:'pointer',
             }}>
             <option value="owner">Owner</option>
             <option value="member">Member</option>
           </select>
         ) : (
           <button onClick={() => setEditingRole(true)}
-            style={{padding:'2px 8px',borderRadius:8,fontSize:10,
+            className="al-press al-focus"
+            style={{padding:'3px 11px',borderRadius:RADIUS.pill,fontSize:12,fontWeight:600,
               border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,
               cursor:'pointer',fontFamily:'inherit',textTransform:'capitalize',
             }}>
@@ -809,42 +791,41 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
         )}
 
         {/* Status pill */}
-        <span style={{
-          display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,
-          background: status === 'logged_in' ? `${T.green}20` : `${T.amber}20`,
-          color:      status === 'logged_in' ?  T.green       :  T.amber,
-        }}>
+        <StatusPill color={status === 'logged_in' ? A.good : A.warn}>
           {status === 'logged_in' ? 'Active' : 'Invited'}
-        </span>
+        </StatusPill>
 
         {/* Actions menu */}
         {status === 'invited' && (
           <button onClick={resendInvite} disabled={busy}
             title="Email a fresh single-use sign-up link (the original gets consumed by mail scanners sometimes)"
-            style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${resent ? T.green : T.border2}`,background:'transparent',color:resent ? T.green : T.blue,fontSize:10,cursor:'pointer',fontFamily:'inherit'}}>
+            className="al-press al-focus"
+            style={{padding:'3px 11px',borderRadius:RADIUS.pill,border:`1px solid ${resent ? alpha(A.good,'55') : T.border2}`,background:'transparent',color:resent ? A.good : A.accent,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>
             {resent ? '✓ Sent' : busy ? 'Sending…' : 'Resend invite'}
           </button>
         )}
         <button onClick={() => patch({ is_active: !user.is_active })} disabled={busy}
           title={user.is_active ? 'Deactivate' : 'Reactivate'}
-          style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:10,cursor:'pointer',fontFamily:'inherit'}}>
+          className="al-press al-focus"
+          style={{padding:'3px 11px',borderRadius:RADIUS.pill,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>
           {user.is_active ? 'Deactivate' : 'Reactivate'}
         </button>
         <button onClick={remove} disabled={busy}
-          style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.red,fontSize:10,cursor:'pointer',fontFamily:'inherit'}}>
+          className="al-press al-focus"
+          style={{padding:'3px 11px',borderRadius:RADIUS.pill,border:`1px solid ${T.border2}`,background:'transparent',color:A.bad,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>
           Remove
         </button>
       </div>
       {(user.invited_at || user.last_login_at) && (
-        <div style={{fontSize:10,color:T.text3,marginTop:6,fontFamily:'monospace'}}>
+        <div style={{fontSize:12,color:T.text3,marginTop:6}}>
           {user.last_login_at
             ? `Last login: ${new Date(user.last_login_at).toLocaleString('en-AU')}`
             : `Invited: ${user.invited_at ? new Date(user.invited_at).toLocaleString('en-AU') : '—'}`}
         </div>
       )}
       {error && (
-        <div style={{padding:6,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:10,marginTop:6}}>
-          {error}
+        <div style={{marginTop:6}}>
+          <Banner tone="error">{error}</Banner>
         </div>
       )}
     </div>
@@ -878,47 +859,42 @@ function InviteForm({ distId, onDone, onCancel }: { distId: string; onDone: () =
   }
 
   return (
-    <div style={{marginTop:10,padding:14,background:T.bg3,border:`1px solid ${T.blue}40`,borderRadius:7}}>
+    <div style={{marginTop:10,padding:14,background:T.bg3,border:`1px solid ${alpha(A.accent,'40')}`,borderRadius:RADIUS.sm}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
-        <div style={{fontSize:12,color:T.text2,fontWeight:500}}>Invite a new user</div>
-        <button onClick={onCancel} style={{background:'transparent',border:'none',color:T.text2,fontSize:18,cursor:'pointer'}}>×</button>
+        <div style={{fontSize:12.5,color:T.text2,fontWeight:650}}>Invite a new user</div>
+        <button onClick={onCancel} aria-label="Close" className="al-press" style={{background:'transparent',border:'none',color:T.text2,fontSize:18,cursor:'pointer',fontFamily:'inherit'}}>×</button>
       </div>
       <FormGrid>
         <FormRow label="Email">
-          <input type="email" value={email} onChange={e => setEmail(e.target.value)} autoFocus style={input}/>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} autoFocus style={inputStyle()}/>
         </FormRow>
         <FormRow label="Full name (optional)">
-          <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} style={input}/>
+          <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} style={inputStyle()}/>
         </FormRow>
       </FormGrid>
       <FormRow label="Role">
         <select value={role} onChange={e => setRole(e.target.value as any)}
-          style={{...input,cursor:'pointer'}}>
+          style={{...inputStyle(),cursor:'pointer'}}>
           <option value="member">Member — can browse the catalogue and place orders</option>
           <option value="owner">Owner — same as Member, plus can manage their distributor's users</option>
         </select>
       </FormRow>
       {error && (
-        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginBottom:10}}>
-          {error}
+        <div style={{marginBottom:10}}>
+          <Banner tone="error">{error}</Banner>
         </div>
       )}
       <div style={{display:'flex',gap:8}}>
-        <button onClick={send} disabled={busy || !email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())}
-          style={{
-            flex:1,padding:'8px 14px',borderRadius:6,
-            border:`1px solid ${busy ? T.border2 : T.blue}`,
-            background: busy ? T.bg4 : T.blue, color: busy ? T.text3 : '#fff',
-            fontSize:13,fontWeight:500,cursor:busy?'wait':'pointer',fontFamily:'inherit',
-          }}>
-          {busy ? 'Sending invite…' : 'Send magic-link invite'}
-        </button>
-        <button onClick={onCancel} disabled={busy}
-          style={{padding:'8px 12px',borderRadius:6,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+        <div style={{flex:1}}>
+          <Btn full onClick={send} disabled={busy || !email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())}>
+            {busy ? 'Sending invite…' : 'Send magic-link invite'}
+          </Btn>
+        </div>
+        <Btn variant="ghost" onClick={onCancel} disabled={busy}>
           Cancel
-        </button>
+        </Btn>
       </div>
-      <div style={{fontSize:10,color:T.text3,marginTop:8,lineHeight:1.5}}>
+      <div style={{fontSize:12,color:T.text3,marginTop:8,lineHeight:1.5}}>
         Sends a magic link via Supabase. They click the link → land on /b2b · no password needed.
       </div>
     </div>
@@ -930,11 +906,11 @@ function DistGroupSection({ distGroupName, distGroupId }: { distGroupName: strin
   return (
     <Section title="Distributor group" subtitle="Used by distributor reporting and invoice rollups">
       {distGroupId ? (
-        <div style={{padding:'10px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,fontSize:13,color:T.text2}}>
+        <div style={{padding:'10px 12px',background:T.bg3,borderRadius:RADIUS.sm,fontSize:13,color:T.text2}}>
           Linked to: <strong style={{color:T.text}}>{distGroupName || distGroupId}</strong>
         </div>
       ) : (
-        <div style={{padding:'10px 12px',background:T.bg3,border:`1px dashed ${T.border}`,borderRadius:7,fontSize:12,color:T.text3}}>
+        <div style={{padding:'10px 12px',background:T.bg3,border:`1px dashed ${T.border}`,borderRadius:RADIUS.sm,fontSize:12.5,color:T.text3}}>
           Not linked. To link, edit the distributor group's members on the Groups admin page.
         </div>
       )}
@@ -973,24 +949,24 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
     <div>
       <input type="text" placeholder="Search MYOB JAWS customers…"
         value={q} onChange={e => setQ(e.target.value)} autoFocus
-        style={{...input, marginBottom:8}}/>
-      {loading && <div style={{fontSize:12,color:T.text3,padding:'6px 4px'}}>Searching…</div>}
+        className="al-focus"
+        style={{...inputStyle(), background:T.bg4, marginBottom:8}}/>
+      {loading && <div style={{fontSize:12.5,color:T.text3,padding:'6px 4px'}}>Searching…</div>}
       {error && (
-        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
-          {error}
-        </div>
+        <Banner tone="error">{error}</Banner>
       )}
       {results.length > 0 && (
         <div style={{maxHeight:240,overflowY:'auto',display:'flex',flexDirection:'column',gap:3}}>
           {results.map(c => (
             <button key={c.uid} onClick={() => onPick(c)}
+              className="al-press al-focus"
               style={{
                 textAlign:'left',padding:'8px 10px',
-                background:T.bg4,border:`1px solid ${T.border}`,borderRadius:5,
+                background:T.bg4,border:'1px solid transparent',borderRadius:RADIUS.sm,
                 color:T.text,cursor:'pointer',fontFamily:'inherit',
               }}>
               <div style={{fontSize:13,fontWeight:500}}>{c.name}</div>
-              <div style={{fontFamily:'monospace',fontSize:10,color:T.text3,marginTop:2}}>{c.display_id}</div>
+              <div style={{fontFamily:'monospace',fontSize:12,color:T.text3,marginTop:2}}>{c.display_id}</div>
             </button>
           ))}
         </div>
@@ -1035,35 +1011,35 @@ function TrainingSection({ distId }: { distId: string }) {
   return (
     <Section title="Training" subtitle="Per-user results for courses assigned to this distributor (manage assignments under B2B → Training)">
       {error && (
-        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>{error}</div>
+        <Banner tone="error">{error}</Banner>
       )}
-      {rows === null && !error && <div style={{fontSize:12,color:T.text3,padding:'6px 0'}}>Loading…</div>}
+      {rows === null && !error && <div style={{fontSize:12.5,color:T.text3,padding:'6px 0'}}>Loading…</div>}
       {rows !== null && rows.length === 0 && (
-        <div style={{fontSize:12,color:T.text3,padding:'6px 0'}}>No training assigned to this distributor (or no portal users). Assign courses under <a href="/admin/b2b/training" style={{color:T.blue}}>B2B → Training</a>.</div>
+        <div style={{fontSize:12.5,color:T.text3,padding:'6px 0'}}>No training assigned to this distributor (or no portal users). Assign courses under <a href="/admin/b2b/training" style={{color:A.accent}}>B2B → Training</a>.</div>
       )}
       {(rows || []).map(r => (
         <div key={`${r.user_id}:${r.module_slug}`} style={{
-          padding:'9px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,
+          padding:'9px 12px',background:T.bg3,borderRadius:RADIUS.sm,
           display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',marginBottom:8,
           opacity: r.user_active ? 1 : 0.55,
         }}>
           <div style={{flex:1,minWidth:170}}>
-            <div style={{fontSize:13,color:T.text}}>{r.user_name || r.user_email}{!r.user_active && <span style={{fontSize:10,color:T.text3}}> · inactive</span>}</div>
-            <div style={{fontSize:10,color:T.text3,marginTop:1}}>{r.module_title}</div>
+            <div style={{fontSize:13,color:T.text}}>{r.user_name || r.user_email}{!r.user_active && <span style={{fontSize:12,color:T.text3}}> · inactive</span>}</div>
+            <div style={{fontSize:12,color:T.text3,marginTop:1}}>{r.module_title}</div>
           </div>
           {r.passed ? (
-            <span style={{fontSize:11,fontWeight:700,color:T.green,whiteSpace:'nowrap'}}>
+            <span style={{fontSize:12,fontWeight:700,color:A.good,whiteSpace:'nowrap'}}>
               ✓ Passed {r.best_score_pct != null ? `${Math.round(r.best_score_pct)}%` : ''}{r.passed_at ? ` on ${fmt(r.passed_at)}` : ''}
             </span>
           ) : r.attempts > 0 ? (
-            <span style={{fontSize:11,fontWeight:600,color:T.amber,whiteSpace:'nowrap'}}>
+            <span style={{fontSize:12,fontWeight:600,color:A.warn,whiteSpace:'nowrap'}}>
               {r.attempts} attempt{r.attempts === 1 ? '' : 's'} · best {r.best_score_pct != null ? `${Math.round(r.best_score_pct)}%` : '—'} (needs {r.pass_pct}%)
             </span>
           ) : (
-            <span style={{fontSize:11,color:T.text3,whiteSpace:'nowrap'}}>never attempted</span>
+            <span style={{fontSize:12,color:T.text3,whiteSpace:'nowrap'}}>never attempted</span>
           )}
           {r.attempts > 0 && r.last_attempt_at && (
-            <span style={{fontSize:10,color:T.text3,whiteSpace:'nowrap'}}>last {fmt(r.last_attempt_at)}</span>
+            <span style={{fontSize:12,color:T.text3,whiteSpace:'nowrap'}}>last {fmt(r.last_attempt_at)}</span>
           )}
         </div>
       ))}
@@ -1073,16 +1049,13 @@ function TrainingSection({ distId }: { distId: string }) {
 
 function Section({ title, subtitle, flash, children }: { title: string; subtitle?: string; flash?: string | null; children: React.ReactNode }) {
   return (
-    <section style={{
-      background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
-      padding:'18px 20px',marginBottom:14,
-    }}>
+    <section style={{...cardStyle(false),padding:'18px 20px',marginBottom:14}}>
       <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:14,gap:10}}>
         <div>
-          <div style={{fontSize:13,fontWeight:600,color:T.text}}>{title}</div>
-          {subtitle && <div style={{fontSize:12,color:T.text3,marginTop:2}}>{subtitle}</div>}
+          <div style={{fontSize:14,fontWeight:650,color:T.text}}>{title}</div>
+          {subtitle && <div style={{fontSize:12.5,color:T.text3,marginTop:2}}>{subtitle}</div>}
         </div>
-        {flash && <span style={{fontSize:10,color:T.green,fontWeight:500}}>✓ {flash} saved</span>}
+        {flash && <span style={{fontSize:12,color:A.good,fontWeight:600,whiteSpace:'nowrap'}}>✓ {flash} saved</span>}
       </div>
       {children}
     </section>
@@ -1096,9 +1069,9 @@ function FormGrid({ children }: { children: React.ReactNode }) {
 function FormRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div style={{marginBottom:14}}>
-      <div style={{fontSize:12,color:T.text2,marginBottom:4,fontWeight:500}}>{label}</div>
+      <div style={{fontSize:12,color:T.text2,marginBottom:5,fontWeight:650}}>{label}</div>
       {children}
-      {hint && <div style={{fontSize:10,color:T.text3,marginTop:3}}>{hint}</div>}
+      {hint && <div style={{fontSize:12,color:T.text3,marginTop:4}}>{hint}</div>}
     </div>
   )
 }
@@ -1108,26 +1081,21 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
     <button
       onClick={() => !disabled && onChange(!on)}
       disabled={disabled}
+      className="al-focus"
       style={{
-        width:36,height:20,borderRadius:10,border:'none',padding:2,
-        background: on ? T.green : T.bg4,
+        width:40,height:22,borderRadius:RADIUS.pill,border:'none',padding:2,
+        background: on ? A.good : T.bg4,
         cursor: disabled ? 'wait' : 'pointer',
         position:'relative',transition:'background 0.15s',
         opacity: disabled ? 0.5 : 1,
       }}>
       <div style={{
-        position:'absolute',top:2,left: on ? 18 : 2,
-        width:16,height:16,borderRadius:'50%',
+        position:'absolute',top:2,left: on ? 20 : 2,
+        width:18,height:18,borderRadius:'50%',
         background:'#fff',transition:'left 0.15s ease',
       }}/>
     </button>
   )
-}
-
-const input: React.CSSProperties = {
-  width:'100%',boxSizing:'border-box',
-  background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-  borderRadius:5,padding:'8px 11px',fontSize:13,outline:'none',fontFamily:'inherit',
 }
 
 export async function getServerSideProps(context: any) {

@@ -19,14 +19,13 @@ import { getSupabase } from '../../../lib/supabaseClient'
 import { compressImage, compressPdf } from '../../../lib/upload-compress'
 import type { UserRole } from '../../../lib/permissions'
 import { useConfirm, usePrompt, useToast } from '../../../components/ui/Feedback'
-import { alpha } from '../../../lib/ui/theme'
+import { T, alpha } from '../../../lib/ui/theme'
+import { A, RADIUS, SHADOW, Btn, btnStyle, cardStyle, inputStyle, Banner, PageTitle } from '../../../components/b2b/ui'
 
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
+// Kit input look at staff-tool density — same surfaces/radius as the Alloy
+// inputStyle(), but 13px type and 36px height so the editor stays compact.
+function inp(extra?: React.CSSProperties): React.CSSProperties {
+  return { ...inputStyle(), width: undefined, fontSize: 13, padding: '8px 11px', minHeight: 36, ...extra }
 }
 
 interface Props {
@@ -470,57 +469,50 @@ export default function CatalogueAdminPage({ user }: Props) {
           <B2BAdminTabs active="catalogue"/>
 
           {/* Header */}
-          <header style={{marginBottom:18,display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
-            <div>
-              <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
-                <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
-                {' / '}
-                <span style={{color:T.text2}}>Catalogue</span>
+          <PageTitle
+            sub={<>
+              <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
+              {' / '}
+              <span style={{color:T.text2}}>Catalogue</span>
+            </>}
+            action={
+              <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:10}}>
+                <div style={{display:'flex',gap:18,alignItems:'baseline'}}>
+                  <Stat n={stats.total}      label="items"/>
+                  <Stat n={stats.visible}    label="visible"  color={A.good}/>
+                  <Stat n={stats.withImage}  label="w/ image"/>
+                  <Stat n={stats.liveReady}  label="ready"    color={A.accent}/>
+                  {stats.visibleNoP > 0 && <Stat n={stats.visibleNoP} label="visible · $0" color={A.warn}/>}
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  {syncMsg && <span style={{fontSize:12,color:syncMsg.startsWith('Sync failed')?A.bad:A.good}}>{syncMsg}</span>}
+                  <span style={{fontSize:12,color:T.text3,textAlign:'right',maxWidth:280}}>Pulls products, prices, reorder supplier &amp; freight dims from MYOB</span>
+                  <Btn size="sm" disabled={syncing} onClick={runSync}
+                    title="Refresh the B2B catalogue from MYOB items (adds new products; updates name, price, reorder supplier and freight dimensions)">
+                    {syncing ? 'Syncing…' : 'Sync from MYOB'}
+                  </Btn>
+                </div>
               </div>
-              <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>
-                Catalogue management
-              </h1>
-            </div>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:10}}>
-              <div style={{display:'flex',gap:18,alignItems:'baseline'}}>
-                <Stat n={stats.total}      label="items"/>
-                <Stat n={stats.visible}    label="visible"  color={T.green}/>
-                <Stat n={stats.withImage}  label="w/ image" color={T.teal}/>
-                <Stat n={stats.liveReady}  label="ready"    color={T.blue}/>
-                {stats.visibleNoP > 0 && <Stat n={stats.visibleNoP} label="visible · $0" color={T.amber}/>}
-              </div>
-              <div style={{display:'flex',alignItems:'center',gap:10}}>
-                {syncMsg && <span style={{fontSize:11,color:syncMsg.startsWith('Sync failed')?T.red:T.green}}>{syncMsg}</span>}
-                <span style={{fontSize:11,color:T.text3,textAlign:'right',maxWidth:280}}>Pulls products, prices, reorder supplier &amp; freight dims from MYOB</span>
-                <button onClick={runSync} disabled={syncing}
-                  title="Refresh the B2B catalogue from MYOB items (adds new products; updates name, price, reorder supplier and freight dimensions)"
-                  style={{padding:'8px 14px',borderRadius:6,background:syncing?T.bg3:T.blue,border:`1px solid ${syncing?T.border2:T.blue}`,color:syncing?T.text3:'#fff',fontSize:13,fontWeight:500,fontFamily:'inherit',cursor:syncing?'wait':'pointer',whiteSpace:'nowrap'}}>
-                  {syncing ? 'Syncing…' : '↻ Sync from MYOB'}
-                </button>
-              </div>
-            </div>
-          </header>
+            }>
+            Catalogue management
+          </PageTitle>
 
           {/* Toolbar */}
           <div style={{
+            ...cardStyle(12), padding:'10px 12px',
             display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',
-            padding:'10px 12px',background:T.bg2,border:`1px solid ${T.border}`,
-            borderRadius:8,marginBottom:14,
+            marginBottom:14,
           }}>
             <input
               type="text"
               placeholder="Search SKU or name…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              style={{
-                flex:1,minWidth:200,
-                background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-                borderRadius:5,padding:'7px 11px',fontSize:13,outline:'none',
-                fontFamily:'inherit',
-              }}
+              className="al-focus"
+              style={inp({flex:1,minWidth:200})}
             />
             <FilterPill active={visibilityFilter==='all'}     onClick={()=>setVisibilityFilter('all')}>All ({items.length})</FilterPill>
-            <FilterPill active={visibilityFilter==='visible'} onClick={()=>setVisibilityFilter('visible')} color={T.green}>Visible ({stats.visible})</FilterPill>
+            <FilterPill active={visibilityFilter==='visible'} onClick={()=>setVisibilityFilter('visible')} color={A.good}>Visible ({stats.visible})</FilterPill>
             <FilterPill active={visibilityFilter==='hidden'}  onClick={()=>setVisibilityFilter('hidden')}  color={T.text3}>Hidden ({items.length - stats.visible})</FilterPill>
             <TaxonomyFilterDropdown
               label="Model"
@@ -534,35 +526,30 @@ export default function CatalogueAdminPage({ user }: Props) {
               options={productTypes}
               onChange={setProductTypeFilter}
             />
-            <button onClick={load} disabled={loading}
-              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
-              {loading ? 'Loading…' : '↻ Refresh'}
-            </button>
-            <button onClick={refreshStock} disabled={refreshingStock}
-              title="Pull current stock levels from MYOB (JAWS) and update the Stock column"
-              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:refreshingStock?'wait':'pointer',fontFamily:'inherit'}}>
-              {refreshingStock ? 'Updating stock…' : '⟳ Refresh stock'}
-            </button>
-            {stockMsg && <span style={{fontSize:11,color:stockMsg.includes('fail')?T.amber:T.green}}>{stockMsg}</span>}
-            <button onClick={() => setBulkOpen(true)} disabled={filtered.length === 0}
-              title="Apply price / visibility / freight surcharge changes to every item matching the current filters"
-              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.purple}60`,background:`${T.purple}15`,color:T.purple,fontSize:12,fontWeight:600,cursor:filtered.length===0?'default':'pointer',fontFamily:'inherit',opacity:filtered.length===0?0.5:1}}>
-              ✎ Bulk edit ({filtered.length})
-            </button>
-            <button onClick={exportXlsx}
-              title="Download the whole catalogue as an Excel file to bulk-edit dimensions, weights, prices, visibility, etc."
-              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
-              ⬇ Export Excel
-            </button>
-            <button onClick={() => importInputRef.current?.click()} disabled={importing}
-              title="Re-import an edited catalogue Excel to bulk-update items. Rows match on the ID column; blank cells are left unchanged."
-              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.green}60`,background:`${T.green}15`,color:T.green,fontSize:12,fontWeight:600,cursor:importing?'wait':'pointer',fontFamily:'inherit'}}>
-              {importing ? 'Importing…' : '⬆ Import Excel'}
-            </button>
+            <Btn variant="ghost" size="sm" disabled={loading} onClick={load}>
+              {loading ? 'Loading…' : 'Refresh'}
+            </Btn>
+            <Btn variant="ghost" size="sm" disabled={refreshingStock} onClick={refreshStock}
+              title="Pull current stock levels from MYOB (JAWS) and update the Stock column">
+              {refreshingStock ? 'Updating stock…' : 'Refresh stock'}
+            </Btn>
+            {stockMsg && <span style={{fontSize:12,color:stockMsg.includes('fail')?A.warn:A.good}}>{stockMsg}</span>}
+            <Btn variant="secondary" size="sm" disabled={filtered.length === 0} onClick={() => setBulkOpen(true)}
+              title="Apply price / visibility / freight surcharge changes to every item matching the current filters">
+              Bulk edit ({filtered.length})
+            </Btn>
+            <Btn variant="ghost" size="sm" onClick={exportXlsx}
+              title="Download the whole catalogue as an Excel file to bulk-edit dimensions, weights, prices, visibility, etc.">
+              Export Excel
+            </Btn>
+            <Btn variant="ghost" size="sm" disabled={importing} onClick={() => importInputRef.current?.click()}
+              title="Re-import an edited catalogue Excel to bulk-update items. Rows match on the ID column; blank cells are left unchanged.">
+              {importing ? 'Importing…' : 'Import Excel'}
+            </Btn>
             <input ref={importInputRef} type="file" style={{display:'none'}}
               accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={e => { const f = e.target.files?.[0]; if (f) onImportFile(f) }} />
-            {ioMsg && <span style={{fontSize:11,color:/fail|error|skipped/i.test(ioMsg)?T.amber:T.green}}>{ioMsg}</span>}
+            {ioMsg && <span style={{fontSize:12,color:/fail|error|skipped/i.test(ioMsg)?A.warn:A.good}}>{ioMsg}</span>}
             <PreviewMenu
               distributors={distributors}
               tiers={tiers}
@@ -575,23 +562,20 @@ export default function CatalogueAdminPage({ user }: Props) {
             />
           </div>
           {previewError && (
-            <div style={{padding:8,marginTop:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:6,color:T.red,fontSize:12}}>
-              Preview failed: {previewError}
+            <div style={{marginTop:8}}>
+              <Banner tone="error">Preview failed: {previewError}</Banner>
             </div>
           )}
 
           {/* Errors */}
           {loadError && (
-            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:10}}>
-              Couldn't load catalogue: {loadError}
+            <div style={{marginBottom:10}}>
+              <Banner tone="error">Couldn't load catalogue: {loadError}</Banner>
             </div>
           )}
 
           {/* Table */}
-          <div style={{
-            background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
-            overflow:'hidden',
-          }}>
+          <div style={cardStyle(false)}>
             <div style={{overflowX:'auto'}}>
               <table className="b2b-cards" style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
@@ -782,7 +766,7 @@ function CatalogueRow({
   return (
     <tr style={{
       borderTop: index > 0 ? `1px solid ${T.border}` : 'none',
-      background: error ? `${T.red}08` : 'transparent',
+      background: error ? alpha(A.bad, '08') : 'transparent',
     }}>
       {/* Image thumb — click to upload/replace; drawer reachable via SKU/Name/chevron.
           Hidden in the mobile card view (upload via the product drawer there). */}
@@ -791,7 +775,7 @@ function CatalogueRow({
           onClick={() => !uploading && fileInputRef.current?.click()}
           title={item.primary_image_url ? 'Click to replace image' : 'Click to upload image'}
           style={{
-            width:50,height:50,borderRadius:5,overflow:'hidden',
+            width:50,height:50,borderRadius:RADIUS.sm,overflow:'hidden',
             background:T.bg3,border:`1px solid ${T.border}`,
             display:'flex',alignItems:'center',justifyContent:'center',
             cursor: uploading ? 'wait' : 'pointer',
@@ -801,14 +785,14 @@ function CatalogueRow({
             <img src={item.primary_image_url} alt="" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain'}}
               onError={e => { (e.target as HTMLImageElement).style.display='none' }}/>
           ) : (
-            <span style={{fontSize:9,color:T.text3,fontFamily:'monospace'}}>+ img</span>
+            <span style={{fontSize:12,color:T.text3}}>+</span>
           )}
           {uploading && (
             <div style={{
               position:'absolute',inset:0,
               background:'rgba(0,0,0,0.6)',
               display:'flex',alignItems:'center',justifyContent:'center',
-              fontSize:9,color:'#fff',fontFamily:'monospace',
+              fontSize:12,color:'#fff',
             }}>
               …
             </div>
@@ -836,8 +820,8 @@ function CatalogueRow({
       <td className="b2b-card-title" style={{...td(),cursor:'pointer'}} onClick={onOpenDrawer}>
         <div style={{color:T.text}}>{item.name}</div>
         {(showWarning || showImageWarning) && (
-          <div style={{fontSize:10,color:T.amber,marginTop:2,fontFamily:'monospace'}}>
-            ⚠ {[
+          <div style={{fontSize:12,color:A.warn,marginTop:2}}>
+            {[
               showWarning && 'visible without trade price',
               showImageWarning && 'visible without image',
             ].filter(Boolean).join(' · ')}
@@ -851,10 +835,10 @@ function CatalogueRow({
           const ms = item.models && item.models.length
             ? item.models
             : (item.model_id ? [{ id: item.model_id, name: models.find(m => m.id === item.model_id)?.name || '—' }] : [])
-          if (ms.length === 0) return <span style={{color:T.text3,fontSize:11}}>—</span>
+          if (ms.length === 0) return <span style={{color:T.text3,fontSize:12}}>—</span>
           return (
             <button onClick={onOpenDrawer} title="Edit models in the product editor"
-              style={{background:'none',border:'none',padding:0,textAlign:'left',cursor:'pointer',fontFamily:'inherit',color:T.text2,fontSize:11.5,lineHeight:1.35}}>
+              style={{background:'none',border:'none',padding:0,textAlign:'left',cursor:'pointer',fontFamily:'inherit',color:T.text2,fontSize:12.5,lineHeight:1.35}}>
               {ms.map(m => m.name).join(', ')}
               {ms.length > 1 && <span style={{color:T.text3}}> ({ms.length})</span>}
             </button>
@@ -873,12 +857,12 @@ function CatalogueRow({
             onChange={handleTypeChange}
           />
         ) : (
-          <span style={{color:T.text3,fontSize:11}}>—</span>
+          <span style={{color:T.text3,fontSize:12}}>—</span>
         )}
       </td>
 
       {/* RRP */}
-      <td data-label="RRP" style={{...td(),textAlign:'right',color:T.text3,fontFamily:'monospace'}}>
+      <td data-label="RRP" style={{...td(),textAlign:'right',color:T.text3,fontVariantNumeric:'tabular-nums'}}>
         {fmtMoney(item.rrp_ex_gst)}
       </td>
 
@@ -900,13 +884,12 @@ function CatalogueRow({
                 ;(e.target as HTMLInputElement).blur()
               }
             }}
-            style={{
-              width:80,textAlign:'right',
-              background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-              borderRadius:4,padding:'5px 8px',fontSize:13,outline:'none',
-              fontFamily:'monospace',
+            className="al-focus"
+            style={inp({
+              width:80,textAlign:'right',padding:'6px 9px',minHeight:32,
+              fontVariantNumeric:'tabular-nums',
               opacity: savingField === 'price' ? 0.5 : 1,
-            }}
+            })}
           />
         </div>
       </td>
@@ -914,13 +897,13 @@ function CatalogueRow({
       {/* Stock (cached from MYOB) */}
       <td data-label="Stock" style={{...td(),textAlign:'center'}}>
         {(() => {
-          if (item.is_drop_ship) return <span style={{fontSize:10.5,color:T.text3}} title="Ships direct from supplier — no warehouse stock">drop-ship</span>
+          if (item.is_drop_ship) return <span style={{fontSize:12,color:T.text3}} title="Ships direct from supplier — no warehouse stock">drop-ship</span>
           if (item.is_inventoried === false) return <span style={{color:T.text3,fontSize:14}} title="Not inventoried (unlimited)">∞</span>
           const q = item.qty_on_hand   // physical quantity on hand (not netted by committed)
-          if (q == null) return <span style={{color:T.text3,fontSize:11}} title="No stock cached yet — hit Refresh stock">—</span>
-          const col = q >= 5 ? T.green : q >= 1 ? T.amber : T.red
+          if (q == null) return <span style={{color:T.text3,fontSize:12}} title="No stock cached yet — hit Refresh stock">—</span>
+          const col = q >= 5 ? A.good : q >= 1 ? A.warn : A.bad
           return (
-            <span style={{fontFamily:'monospace',fontWeight:600,color:col}}
+            <span style={{fontVariantNumeric:'tabular-nums',fontWeight:600,color:col}}
               title={`Quantity on hand${item.stock_cached_at ? ` · as at ${new Date(item.stock_cached_at).toLocaleString('en-AU')}` : ''}`}>
               {q}
             </span>
@@ -1056,8 +1039,9 @@ function EditDrawer({
       <div style={{
         position:'fixed',top:0,right:0,bottom:0,width:520,maxWidth:'92vw',
         background:T.bg2,borderLeft:`1px solid ${T.border2}`,
+        borderRadius:`${RADIUS.md}px 0 0 ${RADIUS.md}px`,
         display:'flex',flexDirection:'column',zIndex:1001,
-        boxShadow:'-12px 0 32px rgba(0,0,0,0.3)',
+        boxShadow:SHADOW.md,
       }}>
 
         {/* Header */}
@@ -1066,12 +1050,12 @@ function EditDrawer({
             <div style={{fontFamily:'monospace',fontSize:12,color:T.text3,marginBottom:2}}>{item.sku}</div>
             <div style={{fontSize:14,fontWeight:600,color:T.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.name}</div>
           </div>
-          <button onClick={deleteSelf} disabled={deleting} title="Delete from catalogue"
-            style={{background:'transparent',border:`1px solid ${T.red}55`,color:T.red,borderRadius:6,padding:'5px 9px',fontSize:12,cursor:deleting?'wait':'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>
-            {deleting ? '…' : '🗑 Delete'}
+          <button className="al-press al-focus al-ghost" onClick={deleteSelf} disabled={deleting} title="Delete from catalogue"
+            style={{...btnStyle('ghost','sm',deleting),color:A.bad}}>
+            {deleting ? '…' : 'Delete'}
           </button>
-          <button onClick={onClose}
-            style={{background:'transparent',border:'none',color:T.text2,fontSize:20,cursor:'pointer',padding:'0 4px'}}>×</button>
+          <button className="al-press al-focus" onClick={onClose} aria-label="Close"
+            style={{background:'transparent',border:'none',color:T.text2,fontSize:20,cursor:'pointer',padding:'0 4px',fontFamily:'inherit'}}>×</button>
         </div>
 
         {/* Body */}
@@ -1092,26 +1076,14 @@ function EditDrawer({
               </div>
             )}
             <div style={{display:'flex',gap:8}}>
-              <button
-                onClick={() => !uploading && fileInputRef.current?.click()}
-                disabled={uploading}
-                style={{
-                  flex:1,padding:'9px 14px',borderRadius:6,
-                  border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
-                  fontSize:13,fontWeight:500,fontFamily:'inherit',
-                  cursor: uploading ? 'wait' : 'pointer',
-                }}>
+              <Btn size="sm" full disabled={uploading} onClick={() => !uploading && fileInputRef.current?.click()}>
                 {uploading ? 'Uploading…' : (item.primary_image_url ? 'Replace image' : 'Upload image')}
-              </button>
+              </Btn>
               {item.primary_image_url && (
-                <button
+                <button className="al-press al-focus al-ghost"
                   onClick={removeImage}
                   disabled={uploading}
-                  style={{
-                    padding:'9px 14px',borderRadius:6,
-                    border:`1px solid ${T.border2}`,background:'transparent',color:T.red,
-                    fontSize:13,fontFamily:'inherit',cursor:'pointer',
-                  }}>
+                  style={{...btnStyle('ghost','sm',uploading),color:A.bad}}>
                   Remove
                 </button>
               )}
@@ -1127,12 +1099,12 @@ function EditDrawer({
               }}
               style={{display:'none'}}
             />
-            <div style={{fontSize:10,color:T.text3,marginTop:6}}>
-              PNG, JPG or WEBP · Max 10 MB · Stored at <code style={{fontFamily:'monospace'}}>b2b-catalogue/{item.id}/...</code>
+            <div style={{fontSize:12,color:T.text3,marginTop:6}}>
+              PNG, JPG or WEBP · Max 10 MB · Stored at <code style={{fontFamily:'monospace',fontSize:12}}>b2b-catalogue/{item.id}/...</code>
             </div>
             {imageError && (
-              <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
-                {imageError}
+              <div style={{marginTop:8}}>
+                <Banner tone="error">{imageError}</Banner>
               </div>
             )}
           </Section>
@@ -1145,18 +1117,15 @@ function EditDrawer({
               onBlur={saveDescription}
               placeholder="Marketing copy shown on the distributor catalogue page."
               rows={6}
-              style={{
-                width:'100%',background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-                borderRadius:6,padding:'10px 12px',fontSize:13,fontFamily:'inherit',outline:'none',
-                resize:'vertical',
-              }}
+              className="al-focus"
+              style={inp({width:'100%',boxSizing:'border-box',resize:'vertical'})}
             />
-            <div style={{fontSize:10,color:T.text3,marginTop:4}}>
+            <div style={{fontSize:12,color:T.text3,marginTop:4}}>
               {savingDesc ? 'Saving…' : 'Saves automatically when you click outside'}
             </div>
             {descError && (
-              <div style={{marginTop:6,padding:6,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
-                {descError}
+              <div style={{marginTop:6}}>
+                <Banner tone="error">{descError}</Banner>
               </div>
             )}
           </Section>
@@ -1184,7 +1153,7 @@ function EditDrawer({
               options={productTypes}
               onChange={async (v) => { try { await patch({ product_type_id: v }) } catch {} }}
             />
-            <div style={{fontSize:10,color:T.text3,marginTop:6}}>
+            <div style={{fontSize:12,color:T.text3,marginTop:6}}>
               Manage the available options under <a href="/admin/b2b/settings" style={{color:T.text2}}>B2B Settings</a>.
             </div>
           </Section>
@@ -1221,7 +1190,7 @@ function EditDrawer({
                     {item.supplier_item_number ? <span style={{color:T.text3}}> · their #{item.supplier_item_number}</span> : null}
                   </span>
                 ) : (
-                  <span style={{color:T.amber}}>⚠ No reorder supplier on this MYOB item — set one in MYOB (Buying Details) so a drop-ship PO can be raised.</span>
+                  <span style={{color:A.warn}}>No reorder supplier on this MYOB item — set one in MYOB (Buying Details) so a drop-ship PO can be raised.</span>
                 )}
                 <DropshipFreightEditor catalogueId={item.id} />
               </div>
@@ -1270,23 +1239,24 @@ function EditDrawer({
             />
             <div style={{height:10}}/>
             <label style={{display:'flex',flexDirection:'column',gap:4}}>
-              <span style={{fontSize:11,color:T.text2,fontWeight:500}}>…do this</span>
+              <span style={{fontSize:12,color:T.text2,fontWeight:650}}>…do this</span>
               <select
                 value={item.over_limit_action || ''}
                 onChange={async e => { const v = e.target.value || null; try { await patch({ over_limit_action: v as any }) } catch {} }}
-                style={{background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit'}}>
+                className="al-focus"
+                style={inp()}>
                 <option value="">No special handling</option>
                 <option value="quote">Require a manual quote (blocks checkout — distributor requests a quote)</option>
                 <option value="dropship">Drop-ship from supplier (whole line ships direct)</option>
               </select>
             </label>
             {item.over_limit_action === 'dropship' && !item.is_drop_ship && (
-              <div style={{marginTop:8,fontSize:11,lineHeight:1.5,color:T.amber}}>
-                ⚠ For above-limit drop-ship to work this item needs a <strong>reorder supplier on its MYOB item</strong> and <strong>drop-ship freight set per zone</strong> (Drop ship section). Without them, those orders can’t check out.
+              <div style={{marginTop:8,fontSize:12,lineHeight:1.5,color:A.warn}}>
+                For above-limit drop-ship to work this item needs a <strong>reorder supplier on its MYOB item</strong> and <strong>drop-ship freight set per zone</strong> (Drop ship section). Without them, those orders can’t check out.
               </div>
             )}
             {item.over_limit_qty != null && !item.over_limit_action && (
-              <div style={{marginTop:8,fontSize:11,color:T.text3}}>
+              <div style={{marginTop:8,fontSize:12,color:T.text3}}>
                 Set an action above, or the threshold has no effect.
               </div>
             )}
@@ -1300,7 +1270,7 @@ function EditDrawer({
             const blocksLiveQuote = missingDims && item.b2b_visible
             return (
               <Section
-                title={blocksLiveQuote ? 'Freight & packaging ⚠️' : 'Freight & packaging'}
+                title={blocksLiveQuote ? 'Freight & packaging — required' : 'Freight & packaging'}
                 subtitle={
                   blocksLiveQuote
                     ? 'Required for live freight quoting. Enter the ITEM’s own size + weight — carts containing this product can’t check out until all four are filled in.'
@@ -1344,7 +1314,7 @@ function EditDrawer({
                   onChange={v => { patch({ manual_handling: v }).catch(() => {}) }}
                 />
                 <div style={{height:10}}/>
-                <div style={{fontSize:11,color:'var(--t-text3)',marginBottom:6}}>Inbound freight (ex GST) — added to the distributor's freight, per unit × qty:</div>
+                <div style={{fontSize:12,color:T.text3,marginBottom:6}}>Inbound freight (ex GST) — added to the distributor's freight, per unit × qty:</div>
                 <FieldNumber
                   label="Inbound freight $/unit"
                   value={item.inbound_freight_cost_ex_gst}
@@ -1390,9 +1360,9 @@ function EditDrawer({
 
           {/* Live status */}
           <Section title="Live status">
-            <KV label="Visible to distributors" value={item.b2b_visible ? 'Yes' : 'No'} valueColor={item.b2b_visible ? T.green : T.text3}/>
-            <KV label="Trade price (ex GST)"    value={fmtMoney(item.trade_price_ex_gst)} mono valueColor={item.trade_price_ex_gst > 0 ? T.text : T.amber}/>
-            <KV label="Has image"               value={item.primary_image_url ? 'Yes' : 'No'} valueColor={item.primary_image_url ? T.green : T.amber}/>
+            <KV label="Visible to distributors" value={item.b2b_visible ? 'Yes' : 'No'} valueColor={item.b2b_visible ? A.good : T.text3}/>
+            <KV label="Trade price (ex GST)"    value={fmtMoney(item.trade_price_ex_gst)} mono valueColor={item.trade_price_ex_gst > 0 ? T.text : A.warn}/>
+            <KV label="Has image"               value={item.primary_image_url ? 'Yes' : 'No'} valueColor={item.primary_image_url ? A.good : A.warn}/>
           </Section>
 
         </div>
@@ -1404,17 +1374,11 @@ function EditDrawer({
           display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,
           background:T.bg2,
         }}>
-          <span style={{fontSize:11,color:T.text3}}>Changes save automatically as you edit.</span>
-          <button
-            onClick={async () => { try { await saveDescription() } catch {}; toast('All changes saved', 'success'); onClose() }}
-            disabled={savingDesc}
-            style={{
-              padding:'9px 20px',borderRadius:6,border:`1px solid ${T.green}`,
-              background:T.green,color:'#08130b',fontSize:13,fontWeight:600,
-              cursor: savingDesc ? 'wait' : 'pointer',fontFamily:'inherit',
-            }}>
-            {savingDesc ? 'Saving…' : '✓ Save & close'}
-          </button>
+          <span style={{fontSize:12,color:T.text3}}>Changes save automatically as you edit.</span>
+          <Btn size="sm" disabled={savingDesc}
+            onClick={async () => { try { await saveDescription() } catch {}; toast('All changes saved', 'success'); onClose() }}>
+            {savingDesc ? 'Saving…' : 'Save & close'}
+          </Btn>
         </div>
       </div>
     </>
@@ -1426,8 +1390,8 @@ function EditDrawer({
 function Stat({ n, label, color }: { n: number; label: string; color?: string }) {
   return (
     <div style={{display:'flex',alignItems:'baseline',gap:5}}>
-      <span style={{fontSize:18,fontWeight:600,color: color || T.text,fontVariantNumeric:'tabular-nums'}}>{n}</span>
-      <span style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>{label}</span>
+      <span style={{fontSize:18,fontWeight:650,color: color || T.text,fontVariantNumeric:'tabular-nums'}}>{n}</span>
+      <span style={{fontSize:12,color:T.text3}}>{label}</span>
     </div>
   )
 }
@@ -1455,16 +1419,12 @@ function PreviewMenu({
   return (
     <div style={{position:'relative'}}>
       <button
+        className="al-press al-focus al-ghost"
         onClick={onToggle}
         disabled={disabled}
         title="Open the distributor catalogue in a new tab as a chosen tier or distributor — no email magic-link round-trip."
-        style={{
-          padding:'6px 12px',borderRadius:5,
-          border:`1px solid ${T.blue}`,background:`${T.blue}20`,color:T.blue,
-          fontSize:12,fontWeight:500,cursor: disabled ? 'wait' : 'pointer',
-          fontFamily:'inherit',whiteSpace:'nowrap',
-        }}>
-        {loading ? 'Opening…' : '👁 Preview as ▾'}
+        style={{...btnStyle('ghost','sm',disabled),color:A.accent}}>
+        {loading ? 'Opening…' : 'Preview as ▾'}
       </button>
       {open && (
         <>
@@ -1472,14 +1432,14 @@ function PreviewMenu({
           <div style={{
             position:'absolute',top:'calc(100% + 4px)',right:0,
             minWidth:240,maxWidth:340,maxHeight:420,overflowY:'auto',
-            background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:6,
-            boxShadow:'0 12px 28px rgba(0,0,0,0.4)',
+            background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:RADIUS.sm,
+            boxShadow:SHADOW.md,
             padding:6,zIndex:51,
           }}>
             {/* Tiers section */}
             {eligibleTiers.length > 0 && (
               <>
-                <div style={{fontSize:10,color:T.text3,padding:'6px 10px',textTransform:'uppercase',letterSpacing:'0.06em'}}>
+                <div style={{fontSize:12,fontWeight:650,color:T.text3,padding:'6px 10px'}}>
                   Open as tier
                 </div>
                 {eligibleTiers.map(t => (
@@ -1494,12 +1454,9 @@ function PreviewMenu({
                     }}
                     onMouseEnter={e => { e.currentTarget.style.background = T.bg3 }}
                     onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
-                    <span style={{
-                      display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:9,fontWeight:600,
-                      background:`${T.purple}18`,color:T.purple,letterSpacing:'0.04em',
-                    }}>TIER</span>
+                    <span style={{fontSize:12,fontWeight:600,color:T.text3}}>Tier</span>
                     <span style={{flex:1,fontWeight:500}}>{t.name}</span>
-                    <span style={{fontSize:10,color:T.text3}}>
+                    <span style={{fontSize:12,color:T.text3}}>
                       {t.usage_count} dist{t.usage_count===1?'':'s'}
                     </span>
                   </button>
@@ -1509,7 +1466,7 @@ function PreviewMenu({
             )}
 
             {/* Distributors section */}
-            <div style={{fontSize:10,color:T.text3,padding:'6px 10px',textTransform:'uppercase',letterSpacing:'0.06em'}}>
+            <div style={{fontSize:12,fontWeight:650,color:T.text3,padding:'6px 10px'}}>
               Open as distributor
             </div>
             {eligibleDistributors.length === 0 && eligibleTiers.length === 0 && (
@@ -1532,15 +1489,10 @@ function PreviewMenu({
                 <div style={{fontWeight:500,display:'flex',alignItems:'center',gap:6}}>
                   <span>{d.display_name}</span>
                   {d.tier_name && (
-                    <span style={{
-                      fontSize:9,padding:'1px 5px',borderRadius:6,
-                      background:`${T.purple}18`,color:T.purple,
-                    }}>
-                      {d.tier_name}
-                    </span>
+                    <span style={{fontSize:12,color:T.text3}}>· {d.tier_name}</span>
                   )}
                 </div>
-                <div style={{fontSize:10,color:T.text3,marginTop:2}}>
+                <div style={{fontSize:12,color:T.text3,marginTop:2}}>
                   {d.active_user_count} user{d.active_user_count===1?'':'s'}
                 </div>
               </button>
@@ -1573,13 +1525,13 @@ function InlineTaxonomySelect({
         if (v === '__add__') onChange('__add__')
         else onChange(v || null)
       }}
-      style={{
-        width:'100%',
-        background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-        borderRadius:5,padding:'6px 8px',fontSize:12,outline:'none',
-        fontFamily:'inherit',cursor: saving ? 'wait' : 'pointer',
+      className="al-focus"
+      style={inp({
+        width:'100%',boxSizing:'border-box',
+        fontSize:12.5,padding:'6px 9px',minHeight:32,
+        cursor: saving ? 'wait' : 'pointer',
         opacity: saving ? 0.5 : 1,
-      }}>
+      })}>
       <option value="">— None —</option>
       {visible.map(o => (
         <option key={o.id} value={o.id}>{o.name}{!o.is_active ? ' (inactive)' : ''}</option>
@@ -1605,12 +1557,13 @@ function TaxonomyFilterDropdown({
       value={value}
       onChange={e => onChange(e.target.value)}
       title={`Filter by ${label.toLowerCase()}`}
+      className="al-press al-focus"
       style={{
-        padding:'6px 10px',borderRadius:5,
-        border:`1px solid ${active ? T.blue : T.border2}`,
-        background: active ? `${T.blue}20` : 'transparent',
-        color: active ? T.blue : T.text2,
-        fontSize:12,fontWeight: active ? 600 : 400,
+        padding:'7px 12px',borderRadius:RADIUS.pill,minHeight:32,
+        border:`1px solid ${active ? A.accent : T.border2}`,
+        background: active ? alpha(A.accent,'20') : 'transparent',
+        color: active ? A.accent : T.text2,
+        fontSize:12.5,fontWeight: active ? 600 : 400,
         cursor:'pointer',fontFamily:'inherit',outline:'none',
       }}>
       <option value="all">{label}: All</option>
@@ -1625,12 +1578,13 @@ function TaxonomyFilterDropdown({
 function FilterPill({ active, onClick, color, children }: { active: boolean; onClick: () => void; color?: string; children: React.ReactNode }) {
   return (
     <button onClick={onClick}
+      className="al-press al-focus"
       style={{
-        padding:'6px 12px',borderRadius:5,
-        border:`1px solid ${active ? (color || T.blue) : T.border2}`,
-        background: active ? alpha(color || T.blue, '20') : 'transparent',
-        color: active ? (color || T.blue) : T.text2,
-        fontSize:12,fontWeight: active ? 600 : 400,
+        padding:'7px 14px',borderRadius:RADIUS.pill,minHeight:32,
+        border:`1px solid ${active ? (color || A.accent) : T.border2}`,
+        background: active ? alpha(color || A.accent, '20') : 'transparent',
+        color: active ? (color || A.accent) : T.text2,
+        fontSize:12.5,fontWeight: active ? 600 : 400,
         cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
       }}>
       {children}
@@ -1643,10 +1597,11 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
     <button
       onClick={() => !disabled && onChange(!on)}
       disabled={disabled}
+      className="al-press al-focus"
       style={{
-        width:36,height:20,borderRadius:10,
+        width:36,height:20,borderRadius:RADIUS.pill,
         border:'none',padding:2,
-        background: on ? T.green : T.bg4,
+        background: on ? A.good : T.bg4,
         cursor: disabled ? 'wait' : 'pointer',
         position:'relative',transition:'background 0.15s',
         opacity: disabled ? 0.5 : 1,
@@ -1699,44 +1654,30 @@ function InstructionsPdfField({
   }
   return (
     <div>
-      {label && <div style={{fontSize:12,color:T.text2,fontWeight:500,marginBottom:6}}>{label}</div>}
+      {label && <div style={{fontSize:12,color:T.text2,fontWeight:650,marginBottom:6}}>{label}</div>}
       {value && (
         <div style={{
-          background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:6,
+          background:T.bg3,borderRadius:RADIUS.sm,
           padding:'10px 12px',marginBottom:10,
           display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,
         }}>
-          <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>
-            <span style={{fontSize:18}}>📄</span>
-            <a href={value} target="_blank" rel="noopener noreferrer"
-              style={{fontSize:12,color:T.blue,textDecoration:'underline',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-              View current PDF
-            </a>
-          </div>
-          <span style={{fontSize:9,color:T.text3,fontFamily:'monospace'}}>uploaded</span>
+          <a href={value} target="_blank" rel="noopener noreferrer"
+            style={{fontSize:12.5,color:A.accent,textDecoration:'underline',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',minWidth:0}}>
+            View current PDF
+          </a>
+          <span style={{fontSize:12,color:T.text3}}>uploaded</span>
         </div>
       )}
       <div style={{display:'flex',gap:8}}>
-        <button
-          onClick={() => !busy && fileRef.current?.click()}
-          disabled={!!busy}
-          style={{
-            flex:1,padding:'9px 14px',borderRadius:6,
-            border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
-            fontSize:13,fontWeight:500,fontFamily:'inherit',
-            cursor: busy ? 'wait' : 'pointer',
-          }}>
+        <Btn size="sm" full disabled={!!busy} onClick={() => !busy && fileRef.current?.click()}>
           {busy === 'upload' ? 'Processing…' : (value ? 'Replace PDF' : 'Upload PDF')}
-        </button>
+        </Btn>
         {value && (
           <button
+            className="al-press al-focus al-ghost"
             onClick={handleRemove}
             disabled={!!busy}
-            style={{
-              padding:'9px 14px',borderRadius:6,
-              border:`1px solid ${T.border2}`,background:'transparent',color:T.red,
-              fontSize:13,fontFamily:'inherit',cursor: busy ? 'wait' : 'pointer',
-            }}>
+            style={{...btnStyle('ghost','sm',!!busy),color:A.bad}}>
             {busy === 'remove' ? 'Removing…' : 'Remove'}
           </button>
         )}
@@ -1752,12 +1693,12 @@ function InstructionsPdfField({
         }}
         style={{display:'none'}}
       />
-      <div style={{fontSize:10,color:T.text3,marginTop:6}}>
-        PDF only · stored at 25 MB max · large scanned PDFs are auto-compressed before upload · <code style={{fontFamily:'monospace'}}>b2b-catalogue-pdfs/{itemId}/...</code>
+      <div style={{fontSize:12,color:T.text3,marginTop:6}}>
+        PDF only · stored at 25 MB max · large scanned PDFs are auto-compressed before upload · <code style={{fontFamily:'monospace',fontSize:12}}>b2b-catalogue-pdfs/{itemId}/...</code>
       </div>
       {error && (
-        <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
-          {error}
+        <div style={{marginTop:8}}>
+          <Banner tone="error">{error}</Banner>
         </div>
       )}
     </div>
@@ -1779,9 +1720,9 @@ function PricingSection({
   const taxable = item.is_taxable !== false
   const inc = (ex: number | null): number | null => ex == null ? null : Math.round((taxable ? ex * 1.1 : ex) * 100) / 100
 
-  const colHead: React.CSSProperties = { fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.06em', textAlign:'right' }
+  const colHead: React.CSSProperties = { fontSize:12, fontWeight:650, color:T.text3, textAlign:'right' }
   const rowLabel: React.CSSProperties = { fontSize:13, color:T.text2 }
-  const incCell: React.CSSProperties = { fontFamily:'monospace', fontSize:13, color:T.text, textAlign:'right', padding:'7px 2px' }
+  const incCell: React.CSSProperties = { fontVariantNumeric:'tabular-nums', fontSize:13, color:T.text, textAlign:'right', padding:'7px 2px' }
 
   const rows: { label: string; ex: number | null; required?: boolean; save: (v: number | null) => void | Promise<void> }[] = [
     { label: 'Cost',  ex: item.cost_price_ex_gst,  save: v => onPatch({ cost_price_ex_gst: v }) },
@@ -1815,11 +1756,11 @@ function PricingSection({
 
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0 2px',marginTop:8,borderTop:`1px solid ${T.border}`,fontSize:12.5}}>
         <span style={{color:T.text3}}>Margin (on cost)</span>
-        <span style={{color: margin == null ? T.text3 : (margin > 30 ? T.green : margin > 10 ? T.amber : T.red),fontFamily:'monospace',fontSize:12}}>
+        <span style={{color: margin == null ? T.text3 : (margin > 30 ? A.good : margin > 10 ? A.warn : A.bad),fontVariantNumeric:'tabular-nums',fontSize:12.5}}>
           {margin == null ? '—' : `${margin.toFixed(1)}%`}
         </span>
       </div>
-      {!taxable && <div style={{fontSize:10,color:T.text3,marginTop:4}}>Item is GST-free — inc = ex.</div>}
+      {!taxable && <div style={{fontSize:12,color:T.text3,marginTop:4}}>Item is GST-free — inc = ex.</div>}
 
     </Section>
   )
@@ -1854,7 +1795,8 @@ function PriceCell({ value, required, onSave }: {
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-        style={{width:'100%',background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'7px 8px',fontSize:13,outline:'none',fontFamily:'monospace',textAlign:'right',opacity:saving?0.5:1,boxSizing:'border-box'}}
+        className="al-focus"
+        style={inp({width:'100%',boxSizing:'border-box',padding:'7px 9px',minHeight:34,fontVariantNumeric:'tabular-nums',textAlign:'right',opacity:saving?0.5:1})}
       />
     </div>
   )
@@ -1888,7 +1830,7 @@ function RetailDiscountField({ rrp, trade, onApply }: {
   const disabled = rrp == null || rrp <= 0
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Distributor discount % (off RRP → sets Trade)</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:650}}>Distributor discount % (off RRP → sets Trade)</span>
       <div style={{display:'flex',alignItems:'center',gap:6}}>
         <input
           inputMode="decimal"
@@ -1898,11 +1840,12 @@ function RetailDiscountField({ rrp, trade, onApply }: {
           onChange={e => setDraft(e.target.value)}
           onBlur={commit}
           onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-          style={{flex:1,background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'monospace',opacity:disabled?0.5:1}}
+          className="al-focus"
+          style={inp({flex:1,fontVariantNumeric:'tabular-nums',opacity:disabled?0.5:1})}
         />
         <span style={{fontSize:12,color:T.text3}}>%</span>
       </div>
-      <span style={{fontSize:10,color:T.text3}}>
+      <span style={{fontSize:12,color:T.text3}}>
         {disabled ? 'Enter RRP to derive trade price' : preview != null ? `→ trade $${preview.toFixed(2)} ex GST` : 'sets trade = RRP − %'}
       </span>
     </label>
@@ -1951,12 +1894,12 @@ function FieldNumber({
   }
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:650}}>{label}</span>
       <div style={{display:'flex',alignItems:'center',gap:4,
-        background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:5,
-        padding:'2px 6px 2px 8px',
+        background:T.bg3,border:'1px solid transparent',borderRadius:RADIUS.sm,
+        padding:'2px 8px 2px 10px',minHeight:36,boxSizing:'border-box',
       }}>
-        {prefix && <span style={{fontSize:11,color:T.text3}}>{prefix}</span>}
+        {prefix && <span style={{fontSize:12,color:T.text3}}>{prefix}</span>}
         <input
           type="text"
           inputMode="decimal"
@@ -1965,15 +1908,17 @@ function FieldNumber({
           onChange={e => setDraft(e.target.value.replace(/[^\d.]/g, ''))}
           onBlur={commit}
           onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          className="al-focus"
           style={{
             flex:1,minWidth:0,
             background:'transparent',border:'none',color:T.text,
-            padding:'6px 0',fontSize:13,outline:'none',fontFamily:'monospace',
+            padding:'6px 0',fontSize:13,outline:'none',fontFamily:'inherit',
+            fontVariantNumeric:'tabular-nums',
             opacity: saving ? 0.5 : 1,
           }}
         />
       </div>
-      {error && <span style={{fontSize:10,color:T.red}}>{error}</span>}
+      {error && <span style={{fontSize:12,color:A.bad}}>{error}</span>}
     </label>
   )
 }
@@ -2008,19 +1953,16 @@ function FieldDateTime({
   }
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:650}}>{label}</span>
       <input
         type="datetime-local"
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
-        style={{
-          background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-          borderRadius:5,padding:'7px 8px',fontSize:12,outline:'none',fontFamily:'inherit',
-          opacity: saving ? 0.5 : 1,
-        }}
+        className="al-focus"
+        style={inp({fontSize:12.5,opacity: saving ? 0.5 : 1})}
       />
-      {error && <span style={{fontSize:10,color:T.red}}>{error}</span>}
+      {error && <span style={{fontSize:12,color:A.bad}}>{error}</span>}
     </label>
   )
 }
@@ -2075,42 +2017,44 @@ function VolumeBreaksEditor({
   return (
     <div>
       {rows.length === 0 && (
-        <div style={{fontSize:11,color:T.text3,padding:'6px 0'}}>None — distributor pays trade price at every qty.</div>
+        <div style={{fontSize:12,color:T.text3,padding:'6px 0'}}>None — distributor pays trade price at every qty.</div>
       )}
       {rows.map((r, i) => (
         <div key={i} style={{display:'grid',gridTemplateColumns:'auto 1fr 1fr auto',gap:8,alignItems:'end',marginBottom:6}}>
-          <span style={{fontSize:11,color:T.text3,paddingBottom:8}}>Qty ≥</span>
+          <span style={{fontSize:12,color:T.text3,paddingBottom:8}}>Qty ≥</span>
           <input
             type="text"
             inputMode="numeric"
             value={String(r.min_qty)}
             onChange={e => patchRow(i, { min_qty: parseInt(e.target.value.replace(/[^\d]/g, '') || '0', 10) })}
             onBlur={() => commit()}
-            style={{
-              background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-              borderRadius:5,padding:'7px 8px',fontSize:13,outline:'none',fontFamily:'monospace',
-            }}
+            className="al-focus"
+            style={inp({fontVariantNumeric:'tabular-nums'})}
           />
           <div style={{display:'flex',alignItems:'center',gap:4,
-            background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:5,padding:'2px 6px 2px 8px',
+            background:T.bg3,border:'1px solid transparent',borderRadius:RADIUS.sm,padding:'2px 8px 2px 10px',minHeight:36,boxSizing:'border-box',
           }}>
-            <span style={{fontSize:11,color:T.text3}}>$</span>
+            <span style={{fontSize:12,color:T.text3}}>$</span>
             <input
               type="text"
               inputMode="decimal"
               value={r.unit_price_ex_gst.toFixed(2)}
               onChange={e => patchRow(i, { unit_price_ex_gst: Number(e.target.value.replace(/[^\d.]/g, '')) || 0 })}
               onBlur={() => commit()}
+              className="al-focus"
               style={{
                 flex:1,minWidth:0,
                 background:'transparent',border:'none',color:T.text,
-                padding:'6px 0',fontSize:13,outline:'none',fontFamily:'monospace',
+                padding:'6px 0',fontSize:13,outline:'none',fontFamily:'inherit',
+                fontVariantNumeric:'tabular-nums',
               }}
             />
           </div>
           <button
+            className="al-press al-focus"
             onClick={() => removeRow(i)}
             disabled={saving}
+            title="Remove break"
             style={{
               background:'transparent',border:'none',color:T.text3,
               padding:'6px 8px',fontSize:14,cursor:'pointer',fontFamily:'inherit',
@@ -2120,16 +2064,13 @@ function VolumeBreaksEditor({
         </div>
       ))}
       <button
+        className="al-press al-focus al-ghost"
         onClick={addRow}
         disabled={saving}
-        style={{
-          padding:'6px 12px',borderRadius:5,marginTop:4,
-          border:`1px dashed ${T.border2}`,background:'transparent',color:T.text2,
-          fontSize:11,cursor:'pointer',fontFamily:'inherit',
-        }}>
-        + Add break
+        style={{...btnStyle('ghost','sm',saving),marginTop:4,border:`1px dashed ${T.border2}`,fontSize:12.5}}>
+        Add break
       </button>
-      {error && <div style={{fontSize:10,color:T.red,marginTop:6}}>{error}</div>}
+      {error && <div style={{fontSize:12,color:A.bad,marginTop:6}}>{error}</div>}
     </div>
   )
 }
@@ -2165,7 +2106,7 @@ function FieldText({
   }
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:650}}>{label}</span>
       <input
         type="text"
         value={draft}
@@ -2173,13 +2114,10 @@ function FieldText({
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-        style={{
-          background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-          borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',
-          opacity: saving ? 0.5 : 1,
-        }}
+        className="al-focus"
+        style={inp({opacity: saving ? 0.5 : 1})}
       />
-      {error && <span style={{fontSize:10,color:T.red}}>{error}</span>}
+      {error && <span style={{fontSize:12,color:A.bad}}>{error}</span>}
     </label>
   )
 }
@@ -2227,7 +2165,7 @@ function FieldInt({
   }
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:650}}>{label}</span>
       <div style={{display:'flex',alignItems:'center',gap:6}}>
         <input
           type="text"
@@ -2237,18 +2175,13 @@ function FieldInt({
           onBlur={commit}
           onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
           placeholder="—"
-          style={{
-            flex:1,
-            background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-            borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
-            fontFamily:'monospace',
-            opacity: saving ? 0.5 : 1,
-          }}
+          className="al-focus"
+          style={inp({flex:1,fontVariantNumeric:'tabular-nums',opacity: saving ? 0.5 : 1})}
         />
-        {suffix && <span style={{fontSize:11,color:T.text3}}>{suffix}</span>}
+        {suffix && <span style={{fontSize:12,color:T.text3}}>{suffix}</span>}
       </div>
-      {hint && <span style={{fontSize:10,color:T.text3}}>{hint}</span>}
-      {error && <span style={{fontSize:10,color:T.red}}>{error}</span>}
+      {hint && <span style={{fontSize:12,color:T.text3,lineHeight:1.45}}>{hint}</span>}
+      {error && <span style={{fontSize:12,color:A.bad}}>{error}</span>}
     </label>
   )
 }
@@ -2268,7 +2201,7 @@ function BoolRow({
     }}>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:13,color:T.text}}>{label}</div>
-        {hint && <div style={{fontSize:10,color:T.text3,marginTop:2}}>{hint}</div>}
+        {hint && <div style={{fontSize:12,color:T.text3,marginTop:2}}>{hint}</div>}
       </div>
       <ToggleSwitch on={value} onChange={onChange}/>
     </div>
@@ -2310,15 +2243,15 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
     setTimeout(() => setFlash(''), 2000)
   }
 
-  if (loading) return <div style={{ fontSize: 11, color: T.text3, marginTop: 8 }}>Loading drop-ship freight…</div>
+  if (loading) return <div style={{ fontSize: 12, color: T.text3, marginTop: 8 }}>Loading drop-ship freight…</div>
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: T.text2, marginBottom: 2, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-        <span>Drop-ship freight by zone <span style={{ color: flash ? T.green : T.text3, fontWeight: 400 }}>{flash || '· $ inc GST (what the customer pays)'}</span></span>
-        <button onClick={() => setCalOpen(true)} style={{ background: 'none', border: 'none', padding: 0, color: T.blue, fontWeight: 400, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>Calibrate from supplier history →</button>
+      <div style={{ fontSize: 12, fontWeight: 650, color: T.text2, marginBottom: 2, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <span>Drop-ship freight by zone <span style={{ color: flash ? A.good : T.text3, fontWeight: 400 }}>{flash || '· $ inc GST (what the customer pays)'}</span></span>
+        <button className="al-press al-focus" onClick={() => setCalOpen(true)} style={{ background: 'none', border: 'none', padding: 0, color: A.accent, fontWeight: 550, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Calibrate from supplier history →</button>
       </div>
       {zones.length === 0 ? (
-        <div style={{ fontSize: 11, color: T.amber, marginTop: 4 }}>No freight zones yet — add zones in Settings → Freight Zones, then set a price here per zone. Without a price for the customer's zone, this item can't be checked out.</div>
+        <div style={{ fontSize: 12, color: A.warn, marginTop: 4 }}>No freight zones yet — add zones in Settings → Freight Zones, then set a price here per zone. Without a price for the customer's zone, this item can't be checked out.</div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px', gap: '4px 10px', alignItems: 'center', marginTop: 6 }}>
           {zones.map(z => (
@@ -2329,7 +2262,8 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
                 value={rates[z.id] ?? ''}
                 onChange={e => setRates(s => ({ ...s, [z.id]: e.target.value }))}
                 onBlur={e => save(z.id, e.target.value)}
-                style={{ padding: '5px 8px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', width: '100%', boxSizing: 'border-box' }}
+                className="al-focus"
+                style={inp({ padding: '6px 9px', minHeight: 32, fontSize: 12.5, fontVariantNumeric: 'tabular-nums', width: '100%', boxSizing: 'border-box' })}
               />
             </Fragment>
           ))}
@@ -2339,10 +2273,10 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
       {calOpen && (
         <>
           <div onClick={() => { setCalOpen(false); loadRates() }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1200 }} />
-          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: '96vw', maxWidth: 1200, maxHeight: '92vh', overflowY: 'auto', background: 'var(--t-bg2)', border: `1px solid ${T.border2}`, borderRadius: 12, padding: 20, zIndex: 1201, boxShadow: '0 20px 60px rgba(0,0,0,0.55)' }}>
+          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: '96vw', maxWidth: 1200, maxHeight: '92vh', overflowY: 'auto', background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: RADIUS.md, padding: 20, zIndex: 1201, boxShadow: SHADOW.md }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <h2 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>Drop-ship freight calibration</h2>
-              <button onClick={() => { setCalOpen(false); loadRates() }} style={{ background: 'none', border: 'none', color: T.text3, fontSize: 22, cursor: 'pointer', lineHeight: 1 }}>×</button>
+              <h2 style={{ fontSize: 17, fontWeight: 650, margin: 0 }}>Drop-ship freight calibration</h2>
+              <button className="al-press al-focus" onClick={() => { setCalOpen(false); loadRates() }} aria-label="Close" style={{ background: 'none', border: 'none', color: T.text3, fontSize: 22, cursor: 'pointer', lineHeight: 1, fontFamily: 'inherit' }}>×</button>
             </div>
             <DropshipCalibrationPanel />
           </div>
@@ -2414,7 +2348,7 @@ function BundleEditor({ parent, allItems }: { parent: CatalogueItem; allItems: C
         .slice(0, 12)
     : []
 
-  if (loading) return <div style={{ fontSize: 11, color: T.text3 }}>Loading bundle…</div>
+  if (loading) return <div style={{ fontSize: 12, color: T.text3 }}>Loading bundle…</div>
 
   return (
     <div>
@@ -2432,26 +2366,28 @@ function BundleEditor({ parent, allItems }: { parent: CatalogueItem; allItems: C
               <div style={{ fontSize: 12.5, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {ch?.name || '(unknown item)'}
               </div>
-              <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{ch?.sku || r.child_catalogue_id.slice(0, 8)}</div>
+              <div style={{ fontSize: 12, color: T.text3, fontFamily: 'monospace' }}>{ch?.sku || r.child_catalogue_id.slice(0, 8)}</div>
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: T.text3 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 12, color: T.text3 }}>
               ×
               <input
                 type="text" inputMode="numeric" value={String(r.qty)}
                 onChange={e => { const v = Math.max(1, Math.floor(Number(e.target.value) || 1)); updateRow(r.child_catalogue_id, { qty: v }) }}
-                style={{ width: 38, textAlign: 'center', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 4, color: T.text, fontSize: 12, padding: '4px 4px', fontFamily: 'monospace', outline: 'none' }}
+                className="al-focus"
+                style={inp({ width: 42, textAlign: 'center', fontSize: 12.5, padding: '4px 4px', minHeight: 30, fontVariantNumeric: 'tabular-nums' })}
               />
             </label>
             <select
               value={r.price_mode}
               onChange={e => updateRow(r.child_catalogue_id, { price_mode: e.target.value as 'included' | 'added' })}
               title={r.price_mode === 'included' ? 'Value baked into this product — child posts at $0' : `Charged on top at the child’s trade price (${fmtMoney(ch?.trade_price_ex_gst ?? 0)} ex GST)`}
-              style={{ background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 4, color: T.text, fontSize: 11.5, padding: '4px 6px', fontFamily: 'inherit', outline: 'none' }}>
+              className="al-focus"
+              style={inp({ fontSize: 12.5, padding: '4px 8px', minHeight: 30 })}>
               <option value="included">Included (free)</option>
               <option value="added">Charged extra</option>
             </select>
-            <button onClick={() => removeChild(r.child_catalogue_id)} title="Remove from bundle"
-              style={{ background: 'transparent', border: 'none', color: T.red, fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: '0 2px' }}>×</button>
+            <button className="al-press al-focus" onClick={() => removeChild(r.child_catalogue_id)} title="Remove from bundle"
+              style={{ background: 'transparent', border: 'none', color: A.bad, fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: '0 2px', fontFamily: 'inherit' }}>×</button>
           </div>
         )
       })}
@@ -2463,23 +2399,24 @@ function BundleEditor({ parent, allItems }: { parent: CatalogueItem; allItems: C
           onChange={e => { setQuery(e.target.value); setPickOpen(true) }}
           onFocus={() => setPickOpen(true)}
           placeholder="Search a product to include (SKU or name)…"
-          style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12.5, padding: '8px 10px', fontFamily: 'inherit', outline: 'none' }}
+          className="al-focus"
+          style={inp({ width: '100%', boxSizing: 'border-box', fontSize: 12.5 })}
         />
         {pickOpen && matches.length > 0 && (
-          <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, maxHeight: 240, overflowY: 'auto', background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, boxShadow: '0 10px 28px rgba(0,0,0,0.4)', zIndex: 5 }}>
+          <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, maxHeight: 240, overflowY: 'auto', background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: RADIUS.sm, boxShadow: SHADOW.md, zIndex: 5 }}>
             {matches.map(m => (
               <button key={m.id} onClick={() => addChild(m.id)}
                 style={{ display: 'flex', width: '100%', textAlign: 'left', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'transparent', border: 'none', color: T.text, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }}
                 onMouseEnter={e => { e.currentTarget.style.background = T.bg3 }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
-                <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{m.sku}</span>
+                <span style={{ fontSize: 12, color: T.text3, fontFamily: 'monospace' }}>{m.sku}</span>
               </button>
             ))}
           </div>
         )}
       </div>
-      <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>
+      <div style={{ fontSize: 12, color: T.text3, marginTop: 6 }}>
         {saving ? 'Saving…' : 'Set this product’s freight to “Already boxed” at the combined carton size so the bundle ships as one parcel.'}
       </div>
     </div>
@@ -2499,20 +2436,18 @@ function PackagingSelect({
   const display: FreightPackaging = value === 'pallet' ? 'pallet' : value === 'other' ? 'other' : value === 'unboxed' ? 'unboxed' : 'box'
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Freight handling</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:650}}>Freight handling</span>
       <select
         value={display}
         onChange={e => onChange(e.target.value as FreightPackaging)}
-        style={{
-          background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-          borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',
-        }}>
+        className="al-focus"
+        style={inp()}>
         <option value="box">Standard — packs into a carton</option>
         <option value="other">Already boxed — ships at its own dimensions</option>
         <option value="unboxed">Unboxed / wrapped — ships at its own dimensions (e.g. a wrapped exhaust)</option>
         <option value="pallet">Pallet — ships on its own pallet</option>
       </select>
-      <span style={{fontSize:10,color:T.text3}}>Standard items are auto-packed into your cartons by weight + size. “Already boxed” and “Unboxed / wrapped” both ship at the dimensions above (its own size, not a carton); “Pallet” ships on its own pallet.</span>
+      <span style={{fontSize:12,color:T.text3,lineHeight:1.45}}>Standard items are auto-packed into your cartons by weight + size. “Already boxed” and “Unboxed / wrapped” both ship at the dimensions above (its own size, not a carton); “Pallet” ships on its own pallet.</span>
     </label>
   )
 }
@@ -2520,9 +2455,9 @@ function PackagingSelect({
 function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
     <div style={{marginBottom:24}}>
-      <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>
+      <div style={{fontSize:13,fontWeight:650,color:T.text2,marginBottom:8}}>
         {title}
-        {subtitle && <span style={{textTransform:'none',letterSpacing:0,marginLeft:8,color:T.text3}}>· {subtitle}</span>}
+        {subtitle && <span style={{marginLeft:8,color:T.text3,fontSize:12,fontWeight:400}}>· {subtitle}</span>}
       </div>
       {children}
     </div>
@@ -2546,21 +2481,22 @@ function Collapsible({
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
+        className="al-press al-focus"
         style={{
           width:'100%',display:'flex',alignItems:'center',gap:8,
-          background:'transparent',border:'none',color:T.text2,fontWeight:500,
-          fontSize:11,padding:'4px 0',cursor:'pointer',fontFamily:'inherit',
+          background:'transparent',border:'none',color:T.text2,fontWeight:550,
+          fontSize:12.5,padding:'4px 0',cursor:'pointer',fontFamily:'inherit',
           textAlign:'left',
         }}
       >
-        <span style={{
-          color:T.text3,fontSize:9,width:9,display:'inline-block',
+        <span aria-hidden style={{
+          color:T.text3,fontSize:10,width:10,display:'inline-block',
           transition:'transform 0.15s',transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
         }}>▶</span>
         <span>{title}</span>
         {badge}
         {!open && summary && (
-          <span style={{marginLeft:'auto',color:T.text3,fontSize:11,fontFamily:'monospace'}}>{summary}</span>
+          <span style={{marginLeft:'auto',color:T.text3,fontSize:12}}>{summary}</span>
         )}
       </button>
       {open && <div style={{paddingTop:8}}>{children}</div>}
@@ -2581,15 +2517,12 @@ function TaxonomySelect({
   const visible = options.filter(o => o.is_active || o.id === value)
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:650}}>{label}</span>
       <select
         value={value || ''}
         onChange={e => onChange(e.target.value || null)}
-        style={{
-          background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-          borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
-          fontFamily:'inherit',width:'100%',
-        }}>
+        className="al-focus"
+        style={inp({width:'100%',boxSizing:'border-box'})}>
         <option value="">— None —</option>
         {visible.map(o => (
           <option key={o.id} value={o.id}>{o.name}{!o.is_active ? ' (inactive)' : ''}</option>
@@ -2615,24 +2548,25 @@ function MultiModelSelect({
     .sort((a, b) => a.name.localeCompare(b.name))
   return (
     <div style={{display:'flex',flexDirection:'column',gap:6}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Models (fitment)</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:650}}>Models (fitment)</span>
       <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-        {selected.length === 0 && <span style={{fontSize:12,color:T.text3}}>No models set — this product won’t appear under any model tile.</span>}
+        {selected.length === 0 && <span style={{fontSize:12.5,color:T.text3}}>No models set — this product won’t appear under any model tile.</span>}
         {selected.map(m => (
-          <span key={m.id} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'4px 9px',borderRadius:14,background:T.bg3,border:`1px solid ${T.border2}`,fontSize:12,color:T.text}}>
+          <span key={m.id} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'4px 11px',borderRadius:RADIUS.pill,background:T.bg3,fontSize:12,fontWeight:600,color:T.text}}>
             {m.name}{!m.is_active ? ' (inactive)' : ''}
-            <button onClick={() => onChange(selectedIds.filter(id => id !== m.id))} title="Remove" style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontSize:14,lineHeight:1,padding:0}}>×</button>
+            <button className="al-press" onClick={() => onChange(selectedIds.filter(id => id !== m.id))} title="Remove" style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontSize:14,lineHeight:1,padding:0,fontFamily:'inherit'}}>×</button>
           </span>
         ))}
       </div>
       <select
         value=""
         onChange={e => { const v = e.target.value; if (v) onChange([...selectedIds, v]) }}
-        style={{background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',width:'100%'}}>
+        className="al-focus"
+        style={inp({width:'100%',boxSizing:'border-box'})}>
         <option value="">+ Add a model…</option>
         {unselected.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
       </select>
-      <div style={{fontSize:10,color:T.text3}}>Manage the list of models under <a href="/admin/b2b/settings" style={{color:T.text2}}>B2B Settings</a>.</div>
+      <div style={{fontSize:12,color:T.text3}}>Manage the list of models under <a href="/admin/b2b/settings" style={{color:T.text2}}>B2B Settings</a>.</div>
     </div>
   )
 }
@@ -2641,16 +2575,15 @@ function KV({ label, value, mono, valueColor }: { label: string; value: string; 
   return (
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:`1px solid ${T.border}`,fontSize:13}}>
       <span style={{color:T.text3}}>{label}</span>
-      <span style={{color: valueColor || T.text2, fontFamily: mono ? 'monospace' : 'inherit', fontSize: mono ? 11 : 12}}>{value}</span>
+      <span style={{color: valueColor || T.text2, fontFamily: mono ? 'monospace' : 'inherit', fontSize: 12}}>{value}</span>
     </div>
   )
 }
 
 function th(width?: number): React.CSSProperties {
   return {
-    fontSize:10,color:T.text3,padding:'10px 12px',
-    textAlign:'left',fontWeight:500,
-    textTransform:'uppercase',letterSpacing:'0.05em',
+    fontSize:12,color:T.text3,padding:'10px 12px',
+    textAlign:'left',fontWeight:650,
     width,whiteSpace:'nowrap',
     background:T.bg2,
   }
@@ -2716,15 +2649,15 @@ function BulkEditModal({ items, onClose, onApplied }: {
     } catch (e: any) { setErr(e?.message || String(e)); setBusy(false) }
   }
 
-  const lbl: React.CSSProperties = { fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:6 }
-  const sel: React.CSSProperties = { background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding:'7px 9px', fontSize:13, fontFamily:'inherit', outline:'none' }
-  const inp: React.CSSProperties = { ...sel, width:110 }
+  const lbl: React.CSSProperties = { fontSize:12, color:T.text2, fontWeight:650, marginBottom:6 }
+  const sel: React.CSSProperties = inp({fontSize:13})
+  const num: React.CSSProperties = inp({width:110,fontVariantNumeric:'tabular-nums'})
 
   return (
     <>
       <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:1000}}/>
-      <div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:10,padding:24,width:560,maxWidth:'92vw',maxHeight:'88vh',overflowY:'auto',zIndex:1001,boxShadow:'0 20px 50px rgba(0,0,0,0.5)'}}>
-        <h2 style={{fontSize:16,fontWeight:600,margin:'0 0 4px'}}>Bulk edit</h2>
+      <div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:RADIUS.md,padding:24,width:560,maxWidth:'92vw',maxHeight:'88vh',overflowY:'auto',zIndex:1001,boxShadow:SHADOW.md}}>
+        <h2 style={{fontSize:16,fontWeight:650,margin:'0 0 4px'}}>Bulk edit</h2>
         <p style={{fontSize:12.5,color:T.text3,margin:'0 0 18px',lineHeight:1.5}}>
           Changes apply to all <strong style={{color:T.text2}}>{items.length}</strong> item{items.length===1?'':'s'} matching the current filters. Fields left on “No change” are untouched.
         </p>
@@ -2747,9 +2680,9 @@ function BulkEditModal({ items, onClose, onApplied }: {
                 <option value="set">Set to $</option>
                 <option value="rrp">Distributor discount % off RRP</option>
               </select>
-              {priceMode !== 'none' && <input type="number" min="0" step="0.01" value={priceVal} onChange={e => setPriceVal(e.target.value)} placeholder={priceMode==='set'?'$':'%'} style={inp}/>}
+              {priceMode !== 'none' && <input type="number" min="0" step="0.01" className="al-focus al-nospin" value={priceVal} onChange={e => setPriceVal(e.target.value)} placeholder={priceMode==='set'?'$':'%'} style={num}/>}
             </div>
-            {priceMode === 'rrp' && <div style={{fontSize:11,color:T.text3,marginTop:5}}>Trade = RRP − this %. E.g. 20% off a $100 RRP → $80 trade. Items without an RRP are skipped.</div>}
+            {priceMode === 'rrp' && <div style={{fontSize:12,color:T.text3,marginTop:5}}>Trade = RRP − this %. E.g. 20% off a $100 RRP → $80 trade. Items without an RRP are skipped.</div>}
           </div>
 
           <div>
@@ -2768,7 +2701,7 @@ function BulkEditModal({ items, onClose, onApplied }: {
               <option value="on">Turn on (ships direct from supplier)</option>
               <option value="off">Turn off</option>
             </select>
-            {dropMode === 'on' && <div style={{fontSize:11,color:T.text3,marginTop:5,lineHeight:1.4}}>Drop-ship items are excluded from your warehouse freight quote and need a per-zone freight set — use “Calibrate from supplier history”.</div>}
+            {dropMode === 'on' && <div style={{fontSize:12,color:T.text3,marginTop:5,lineHeight:1.4}}>Drop-ship items are excluded from your warehouse freight quote and need a per-zone freight set — use “Calibrate from supplier history”.</div>}
           </div>
 
           <div>
@@ -2779,7 +2712,7 @@ function BulkEditModal({ items, onClose, onApplied }: {
                 <option value="set">Set to $</option>
                 <option value="clear">Clear</option>
               </select>
-              {inbMode === 'set' && <input type="number" min="0" step="0.01" value={inbVal} onChange={e => setInbVal(e.target.value)} placeholder="$" style={inp}/>}
+              {inbMode === 'set' && <input type="number" min="0" step="0.01" className="al-focus al-nospin" value={inbVal} onChange={e => setInbVal(e.target.value)} placeholder="$" style={num}/>}
             </div>
           </div>
 
@@ -2795,13 +2728,13 @@ function BulkEditModal({ items, onClose, onApplied }: {
           </div>
         </div>
 
-        {err && <div style={{fontSize:12,color:T.red,marginTop:14}}>{err}</div>}
+        {err && <div style={{fontSize:12.5,color:A.bad,marginTop:14}}>{err}</div>}
 
         <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:20}}>
-          <button onClick={onClose} disabled={busy} style={{padding:'9px 16px',borderRadius:6,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:13,fontFamily:'inherit',cursor:'pointer'}}>Cancel</button>
-          <button onClick={apply} disabled={!anyOp || busy} style={{padding:'9px 16px',borderRadius:6,border:`1px solid ${anyOp?T.purple:T.border2}`,background:anyOp&&!busy?T.purple:T.bg3,color:anyOp&&!busy?'#fff':T.text3,fontSize:13,fontWeight:600,fontFamily:'inherit',cursor:anyOp&&!busy?'pointer':'not-allowed'}}>
+          <Btn variant="ghost" size="sm" disabled={busy} onClick={onClose}>Cancel</Btn>
+          <Btn size="sm" disabled={!anyOp || busy} onClick={apply}>
             {busy ? 'Applying…' : `Apply to ${items.length} item${items.length===1?'':'s'}`}
-          </button>
+          </Btn>
         </div>
       </div>
     </>

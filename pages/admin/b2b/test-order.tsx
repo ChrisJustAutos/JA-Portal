@@ -11,13 +11,8 @@ import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
-
-const T = {
-  bg: 'var(--t-bg)', bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)', bg4: 'var(--t-bg4)',
-  border: 'var(--t-border)', border2: 'var(--t-border2)',
-  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa',
-}
+import { T, alpha } from '../../../lib/ui/theme'
+import { A, RADIUS, cardStyle, PageTitle, StatusPill } from '../../../components/b2b/ui'
 
 interface Props { user: { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs: string[] | null } }
 interface Dist { id: string; display_name: string; primary_contact_email: string | null; is_active: boolean }
@@ -33,8 +28,10 @@ interface FreightResult {
   unavailable_reason?: string
 }
 
-const inp: React.CSSProperties = { padding: '8px 11px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 7, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
-const btn = (bg: string, on = true): React.CSSProperties => ({ padding: '9px 16px', borderRadius: 7, border: 'none', background: on ? bg : T.bg4, color: on ? '#fff' : T.text3, fontSize: 13, fontWeight: 600, cursor: on ? 'pointer' : 'default', fontFamily: 'inherit' })
+const inp: React.CSSProperties = { padding: '9px 12px', background: T.bg3, border: '1px solid transparent', borderRadius: RADIUS.sm, color: T.text, fontSize: 13.5, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', minHeight: 38 }
+const btn = (bg: string, on = true): React.CSSProperties => ({ padding: '10px 18px', borderRadius: RADIUS.pill, border: '1px solid transparent', background: on ? bg : T.bg3, color: on ? '#fff' : T.text3, fontSize: 13.5, fontWeight: 600, cursor: on ? 'pointer' : 'default', fontFamily: 'inherit', minHeight: 40, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap' })
+// Small 12.5px form label — replaces the old uppercase micro-labels.
+const lbl: React.CSSProperties = { fontSize: 12.5, fontWeight: 650, color: T.text2 }
 
 export default function TestOrderPage({ user }: Props) {
   const router = useRouter()
@@ -132,41 +129,37 @@ export default function TestOrderPage({ user }: Props) {
   return (
     <>
       <Head><title>Test Order — B2B Admin</title><meta name="robots" content="noindex,nofollow"/></Head>
-      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: T.bg, color: T.text, fontFamily: "'DM Sans',system-ui,sans-serif" }}>
-        <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: T.bg, color: T.text, fontFamily: 'system-ui,-apple-system,sans-serif' }}>
         <PortalTopBar activeId="b2b" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <div style={{ flex: 1, padding: 20 }}>
           <div style={{ margin: '0 auto' }}>
             <B2BAdminTabs active="orders" />
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '18px 0' }}>
-              <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Place test order</h1>
-              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: `${T.amber}22`, color: T.amber, border: `1px solid ${T.amber}55` }}>TEST</span>
-            </div>
-            <p style={{ fontSize: 12.5, color: T.text2, marginTop: 0, lineHeight: 1.6 }}>
-              Creates a real order flagged <strong>[TEST]</strong> for the chosen distributor and fires the full pipeline on payment
-              (real MYOB invoice, real supplier PO email, real freight). Use a test distributor + cheap items, and void the MYOB docs afterwards.
-            </p>
+            <PageTitle
+              action={<StatusPill color={A.warn}>Test</StatusPill>}
+              sub="Creates a real order flagged [TEST] for the chosen distributor and fires the full pipeline on payment (real MYOB invoice, real supplier PO email, real freight). Use a test distributor + cheap items, and void the MYOB docs afterwards.">
+              Place test order
+            </PageTitle>
 
             {!result ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
+              <div style={{ ...cardStyle(18), display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Distributor</span>
+                  <span style={lbl}>Distributor</span>
                   <select style={inp} value={distId} onChange={e => setDistId(e.target.value)}>
                     <option value="">— select distributor —</option>
                     {dists.map(d => <option key={d.id} value={d.id}>{d.display_name}{d.primary_contact_email ? '' : ' (no email)'}</option>)}
                   </select>
-                  {distId && !distEmail && <span style={{ fontSize: 11, color: T.amber }}>This distributor has no primary contact email — confirmation/invoice emails will be skipped.</span>}
+                  {distId && !distEmail && <span style={{ fontSize: 12, color: A.warn }}>This distributor has no primary contact email — confirmation/invoice emails will be skipped.</span>}
                 </label>
 
                 <div style={{ position: 'relative' }}>
-                  <span style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Add items</span>
+                  <span style={lbl}>Add items</span>
                   <input style={{ ...inp, width: '100%', marginTop: 6 }} value={q} onChange={e => setQ(e.target.value)} placeholder="Search SKU or name…" />
                   {matches.length > 0 && (
-                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 5, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 8, marginTop: 2, maxHeight: 240, overflowY: 'auto' }}>
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 5, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: RADIUS.sm, marginTop: 2, maxHeight: 240, overflowY: 'auto' }}>
                       {matches.map(c => (
                         <div key={c.id} onMouseDown={() => addLine(c)} style={{ padding: '8px 11px', cursor: 'pointer', fontSize: 13, borderBottom: `1px solid ${T.border}` }}>
                           <div>{c.name}</div>
-                          <div style={{ fontSize: 11, color: T.text3, fontFamily: 'monospace' }}>{c.sku} · ${Number(c.trade_price_ex_gst || 0).toFixed(2)} ex</div>
+                          <div style={{ fontSize: 12, color: T.text3, fontFamily: 'monospace' }}>{c.sku} · ${Number(c.trade_price_ex_gst || 0).toFixed(2)} ex</div>
                         </div>
                       ))}
                     </div>
@@ -174,13 +167,13 @@ export default function TestOrderPage({ user }: Props) {
                 </div>
 
                 {lines.length > 0 && (
-                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden' }}>
+                  <div style={{ border: `1px solid ${T.border}`, borderRadius: RADIUS.sm, overflow: 'hidden' }}>
                     {lines.map(l => (
                       <div key={l.cat.id} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 90px 30px', gap: 8, alignItems: 'center', padding: '8px 10px', borderBottom: `1px solid ${T.border}` }}>
-                        <div><div style={{ fontSize: 13 }}>{l.cat.name}</div><div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{l.cat.sku}</div></div>
-                        <input type="number" min={1} value={l.qty} onChange={e => setQty(l.cat.id, parseInt(e.target.value, 10) || 1)} style={{ ...inp, padding: '5px 7px' }} />
-                        <div style={{ fontSize: 12, fontFamily: 'monospace', color: T.text2, textAlign: 'right' }}>${((Number(l.cat.trade_price_ex_gst) || 0) * l.qty).toFixed(2)}</div>
-                        <button onClick={() => remove(l.cat.id)} style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16 }}>×</button>
+                        <div><div style={{ fontSize: 13 }}>{l.cat.name}</div><div style={{ fontSize: 12, color: T.text3, fontFamily: 'monospace' }}>{l.cat.sku}</div></div>
+                        <input type="number" min={1} value={l.qty} onChange={e => setQty(l.cat.id, parseInt(e.target.value, 10) || 1)} style={{ ...inp, padding: '5px 7px', minHeight: 32 }} />
+                        <div style={{ fontSize: 12.5, fontFamily: 'monospace', color: T.text2, textAlign: 'right' }}>${((Number(l.cat.trade_price_ex_gst) || 0) * l.qty).toFixed(2)}</div>
+                        <button onClick={() => remove(l.cat.id)} className="al-press" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16, fontFamily: 'inherit' }}>×</button>
                       </div>
                     ))}
                     <div style={{ padding: '8px 10px', textAlign: 'right', fontSize: 13, color: T.text2 }}>Subtotal ex GST: <strong style={{ color: T.text }}>${total.toFixed(2)}</strong></div>
@@ -188,35 +181,35 @@ export default function TestOrderPage({ user }: Props) {
                 )}
 
                 {lines.length > 0 && (
-                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ border: `1px solid ${T.border}`, borderRadius: RADIUS.sm, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Test freight cost</span>
-                      <span style={{ fontSize: 11, color: T.text3 }}>Live MachShip rates (markup applied), same as the distributor sees</span>
+                      <span style={lbl}>Test freight cost</span>
+                      <span style={{ fontSize: 12, color: T.text3 }}>Live MachShip rates (markup applied), same as the distributor sees</span>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, alignItems: 'end' }}>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <span style={{ fontSize: 10, color: T.text3 }}>Suburb</span>
+                        <span style={{ fontSize: 12, color: T.text3 }}>Suburb</span>
                         <input style={inp} value={shipSuburb} onChange={e => { setShipSuburb(e.target.value); setFreight(null) }} placeholder={distId ? 'distributor address' : 'e.g. Brisbane'} />
                       </label>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <span style={{ fontSize: 10, color: T.text3 }}>Postcode</span>
+                        <span style={{ fontSize: 12, color: T.text3 }}>Postcode</span>
                         <input style={inp} value={shipPostcode} onChange={e => { setShipPostcode(e.target.value); setFreight(null) }} placeholder={distId ? 'distributor address' : 'e.g. 4000'} maxLength={4} />
                       </label>
-                      <button onClick={quoteFreight} disabled={freightBusy} style={btn(T.purple, !freightBusy)}>{freightBusy ? 'Quoting…' : 'Quote freight'}</button>
+                      <button onClick={quoteFreight} disabled={freightBusy} className="al-press al-focus al-primary" style={btn(A.accent, !freightBusy)}>{freightBusy ? 'Quoting…' : 'Quote freight'}</button>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 10, color: T.text3 }}>Pack as</span>
-                      <select value={packMode} onChange={e => { setPackMode(e.target.value as any); setFreight(null); setSelFreightId(null) }} style={{ ...inp, width: 'auto', padding: '6px 8px' }}>
+                      <span style={{ fontSize: 12, color: T.text3 }}>Pack as</span>
+                      <select value={packMode} onChange={e => { setPackMode(e.target.value as any); setFreight(null); setSelFreightId(null) }} style={{ ...inp, width: 'auto', padding: '6px 8px', minHeight: 32 }}>
                         <option value="auto">Auto (weight/volume)</option>
                         <option value="cartons">Cartons</option>
                         <option value="pallet">Pallet</option>
                       </select>
                     </div>
-                    {freightMsg && <div style={{ fontSize: 12, color: T.red }}>{freightMsg}</div>}
+                    {freightMsg && <div style={{ fontSize: 12.5, color: A.bad }}>{freightMsg}</div>}
                     {freight && (
                       <div>
                         {freight.mode === 'blocked' ? (
-                          <div style={{ fontSize: 12, color: T.amber }}>
+                          <div style={{ fontSize: 12.5, color: A.warn }}>
                             {freight.blocked?.reason}
                             <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
                               {(freight.blocked?.missing || []).map(m => <li key={m.sku} style={{ color: T.text2 }}>{m.name} <span style={{ fontFamily: 'monospace', color: T.text3 }}>({m.sku})</span> — missing {m.missing_fields.join(', ')}</li>)}
@@ -224,31 +217,31 @@ export default function TestOrderPage({ user }: Props) {
                             <div style={{ marginTop: 6, color: T.text3 }}>Fix dimensions on the catalogue page, then re-quote.</div>
                           </div>
                         ) : freight.rates.length === 0 ? (
-                          <div style={{ fontSize: 12, color: T.amber }}>No freight rates for {freight.postcode}{freight.unavailable_reason ? ` — ${freight.unavailable_reason}` : ''}.</div>
+                          <div style={{ fontSize: 12.5, color: A.warn }}>No freight rates for {freight.postcode}{freight.unavailable_reason ? ` — ${freight.unavailable_reason}` : ''}.</div>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <div style={{ fontSize: 11, color: T.text3 }}>
+                            <div style={{ fontSize: 12, color: T.text3 }}>
                               To {freight.suburb ? `${freight.suburb} ` : ''}{freight.postcode} · {freight.mode === 'live' ? 'live MachShip' : freight.mode === 'static' ? `static zone${freight.zone ? ` (${freight.zone.name})` : ''}` : freight.mode} · click to attach to the order
                               {freight.mode === 'static' && freight.unavailable_reason ? ` — live unavailable: ${freight.unavailable_reason}` : ''}
                             </div>
                             {freight.rates.map((r, i) => {
                               const sel = selFreightId === r.id
                               return (
-                              <div key={r.id} onClick={() => setSelFreightId(sel ? null : r.id)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, padding: '6px 8px', cursor: 'pointer', background: sel ? `${T.blue}22` : T.bg3, border: `1px solid ${sel ? T.blue : T.border}`, borderRadius: 6 }}>
+                              <div key={r.id} onClick={() => setSelFreightId(sel ? null : r.id)} className="al-press" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, padding: '7px 10px', cursor: 'pointer', background: sel ? alpha(A.accent, '22') : T.bg3, border: `1px solid ${sel ? A.accent : 'transparent'}`, borderRadius: RADIUS.sm }}>
                                 <div>
                                   <span style={{ fontSize: 12.5 }}>{sel ? '● ' : '○ '}{r.label}</span>
-                                  {i === 0 && <span style={{ fontSize: 10, color: T.green, marginLeft: 6 }}>cheapest</span>}
-                                  {r.transit_days != null && <span style={{ fontSize: 10, color: T.text3, marginLeft: 6 }}>~{r.transit_days}d</span>}
+                                  {i === 0 && <span style={{ fontSize: 12, color: A.good, marginLeft: 6 }}>cheapest</span>}
+                                  {r.transit_days != null && <span style={{ fontSize: 12, color: T.text3, marginLeft: 6 }}>~{r.transit_days}d</span>}
                                 </div>
                                 <div style={{ textAlign: 'right' }}>
                                   <span style={{ fontSize: 13, fontFamily: 'monospace', fontWeight: 600 }}>${r.price_ex_gst.toFixed(2)}</span>
-                                  <span style={{ fontSize: 10, color: T.text3 }}> ex GST</span>
-                                  {r.base_price_ex_gst != null && r.markup_pct != null && r.markup_pct > 0 && <div style={{ fontSize: 9.5, color: T.text3 }}>base ${r.base_price_ex_gst.toFixed(2)} + {r.markup_pct}%</div>}
+                                  <span style={{ fontSize: 12, color: T.text3 }}> ex GST</span>
+                                  {r.base_price_ex_gst != null && r.markup_pct != null && r.markup_pct > 0 && <div style={{ fontSize: 12, color: T.text3 }}>base ${r.base_price_ex_gst.toFixed(2)} + {r.markup_pct}%</div>}
                                 </div>
                               </div>
                               )
                             })}
-                            <div style={{ fontSize: 11, color: selFreightId ? T.blue : T.text3, marginTop: 2 }}>
+                            <div style={{ fontSize: 12, color: selFreightId ? A.accent : T.text3, marginTop: 2 }}>
                               {selFreightId ? 'Selected freight will be added to the order (Book Freight will use it after payment).' : 'No freight selected — order will be created without freight.'}
                             </div>
                           </div>
@@ -259,38 +252,38 @@ export default function TestOrderPage({ user }: Props) {
                 )}
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Customer PO (optional)</span>
+                  <span style={lbl}>Customer PO (optional)</span>
                   <input style={inp} value={po} onChange={e => setPo(e.target.value)} placeholder="TEST-PO-001" maxLength={20} />
                 </label>
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Payment method</span>
+                  <span style={lbl}>Payment method</span>
                   <select style={inp} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value as any)}>
                     <option value="card">Card / Apple Pay (with surcharge)</option>
                     <option value="payto">PayTo — bank, no surcharge</option>
                   </select>
-                  <span style={{ fontSize: 10.5, color: T.text3 }}>The Stripe test checkout shows only the method picked here.</span>
+                  <span style={{ fontSize: 12, color: T.text3 }}>The Stripe test checkout shows only the method picked here.</span>
                 </label>
 
-                {msg && <div style={{ fontSize: 12, color: T.red }}>{msg}</div>}
-                <button onClick={create} disabled={!distId || lines.length === 0 || creating} style={btn(T.blue, !!distId && lines.length > 0 && !creating)}>
+                {msg && <div style={{ fontSize: 12.5, color: A.bad }}>{msg}</div>}
+                <button onClick={create} disabled={!distId || lines.length === 0 || creating} className="al-press al-focus al-primary" style={btn(A.accent, !!distId && lines.length > 0 && !creating)}>
                   {creating ? 'Creating…' : 'Create test order'}
                 </button>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
-                <div style={{ fontSize: 14 }}>Test order <strong>{result.orderNumber}</strong> created — <a href={`/admin/b2b/orders/${result.orderId}`} style={{ color: T.blue }}>open in admin</a>. Total ${result.total_inc.toFixed(2)} inc GST.</div>
+              <div style={{ ...cardStyle(18), display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ fontSize: 14 }}>Test order <strong>{result.orderNumber}</strong> created — <a href={`/admin/b2b/orders/${result.orderId}`} style={{ color: A.accent }}>open in admin</a>. Total ${result.total_inc.toFixed(2)} inc GST.</div>
                 {result.freight && <div style={{ fontSize: 12.5, color: T.text2 }}>Freight attached: <strong style={{ color: T.text }}>{result.freight.label}</strong> — ${result.freight.cost_ex_gst.toFixed(2)} ex GST. After payment, use <strong>Book Freight</strong> on the order to dispatch it.</div>}
                 <div style={{ fontSize: 12.5, color: T.text2 }}>Complete payment to fire the pipeline (MYOB invoice, drop-ship PO + supplier email, admin + distributor emails):</div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  {result.checkoutUrl && <a href={result.checkoutUrl} target="_blank" rel="noreferrer" style={{ ...btn(T.teal), textDecoration: 'none', display: 'inline-block' }}>Open Stripe test checkout ↗</a>}
-                  <button onClick={markPaid} disabled={markState === 'busy' || markState === 'done'} style={btn(T.green, markState !== 'busy' && markState !== 'done')}>
-                    {markState === 'busy' ? 'Running pipeline…' : markState === 'done' ? '✓ Marked paid — pipeline ran' : 'Mark paid now (run pipeline)'}
+                  {result.checkoutUrl && <a href={result.checkoutUrl} target="_blank" rel="noreferrer" className="al-press al-focus al-primary" style={{ ...btn(A.accent), textDecoration: 'none' }}>Open Stripe test checkout ↗</a>}
+                  <button onClick={markPaid} disabled={markState === 'busy' || markState === 'done'} className="al-press al-focus al-primary" style={btn(A.good, markState !== 'busy' && markState !== 'done')}>
+                    {markState === 'busy' ? 'Running pipeline…' : markState === 'done' ? 'Marked paid — pipeline ran' : 'Mark paid now (run pipeline)'}
                   </button>
                 </div>
-                {markState === 'done' && <div style={{ fontSize: 12, color: T.green }}>Pipeline fired. Check the order, MYOB, and your inbox(es).</div>}
-                {msg && <div style={{ fontSize: 12, color: T.red }}>{msg}</div>}
-                <button onClick={() => { setResult(null); setLines([]); setPo(''); setMarkState('idle') }} style={{ ...btn(T.bg4), alignSelf: 'flex-start', color: T.text2 }}>Create another</button>
+                {markState === 'done' && <div style={{ fontSize: 12.5, color: A.good }}>Pipeline fired. Check the order, MYOB, and your inbox(es).</div>}
+                {msg && <div style={{ fontSize: 12.5, color: A.bad }}>{msg}</div>}
+                <button onClick={() => { setResult(null); setLines([]); setPo(''); setMarkState('idle') }} className="al-press al-focus al-ghost" style={{ ...btn(T.bg3), alignSelf: 'flex-start', color: T.text2 }}>Create another</button>
               </div>
             )}
           </div>

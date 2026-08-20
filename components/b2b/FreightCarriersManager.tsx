@@ -7,17 +7,12 @@
 // green, the actual quote/book/label endpoints get wired in follow-ups.
 // Until then b2b_freight_zones (manual postcode rates) stays the
 // fallback at checkout.
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConfirm } from '../ui/Feedback'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
+import { T, alpha } from '../../lib/ui/theme'
+import { A, Btn, StatusPill, Banner, inputStyle, RADIUS } from './ui'
 
 interface CarrierField {
   key: string
@@ -75,34 +70,29 @@ export default function FreightCarriersManager() {
   const anyConnected = useMemo(() => carriers.some(c => c.connected && c.is_active), [carriers])
 
   return (
-    <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:18}}>
+    <div>
       <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:6}}>
-        <div style={{fontSize:13, fontWeight:600, color:T.text, flex:1}}>Carrier connections</div>
-        <span style={{
-          padding:'3px 8px', borderRadius:99, fontSize:10, fontWeight:500,
-          color: anyConnected ? T.green : T.text3,
-          background: anyConnected ? `${T.green}15` : T.bg3,
-          border: `1px solid ${anyConnected ? `${T.green}40` : T.border2}`,
-        }}>
+        <div style={{fontSize:14, fontWeight:650, color:T.text, flex:1}}>Carrier connections</div>
+        <StatusPill color={anyConnected ? A.good : T.text3}>
           {anyConnected
             ? `${carriers.filter(c => c.connected && c.is_active).length} connected`
             : 'None connected'}
-        </span>
+        </StatusPill>
       </div>
-      <div style={{fontSize:12, color:T.text3, marginBottom:14, lineHeight:1.5}}>
+      <div style={{fontSize:12.5, color:T.text3, marginBottom:14, lineHeight:1.5}}>
         Save credentials so we can call each carrier's API. Once a connection tests green, we'll wire that
         carrier's live quote and booking into the cart and admin order screens. Until then the postcode
         zones below are what distributors see at checkout.
       </div>
 
       {error && (
-        <div style={{marginBottom:10, padding:10, fontSize:12, color:T.red, background:`${T.red}15`, border:`1px solid ${T.red}40`, borderRadius:6}}>
-          {error}
+        <div style={{marginBottom:10}}>
+          <Banner tone="error">{error}</Banner>
         </div>
       )}
 
       {loading && carriers.length === 0 && (
-        <div style={{fontSize:12, color:T.text3, padding:'10px 0'}}>Loading carriers…</div>
+        <div style={{fontSize:12.5, color:T.text3, padding:'10px 0'}}>Loading carriers…</div>
       )}
 
       {carriers.map(c => (
@@ -133,9 +123,9 @@ function CarrierCard({ carrier, isOpen, onToggle, onChanged }: {
     : 'error'
 
   const statusMeta: Record<typeof status, { label: string; color: string }> = {
-    connected:    { label: 'Connected',      color: T.green },
-    error:        { label: 'Last test failed', color: T.red },
-    never_tested: { label: 'Not tested yet', color: T.amber },
+    connected:    { label: 'Connected',      color: A.good },
+    error:        { label: 'Last test failed', color: A.bad },
+    never_tested: { label: 'Not tested yet', color: A.warn },
     disconnected: { label: 'Not connected',  color: T.text3 },
   }
   const meta = statusMeta[status]
@@ -144,49 +134,38 @@ function CarrierCard({ carrier, isOpen, onToggle, onChanged }: {
     <div style={{
       marginBottom:10, padding:'14px 16px',
       background: T.bg3,
-      border: `1px solid ${isOpen ? T.border2 : T.border}`,
-      borderRadius:8,
+      border: `1px solid ${isOpen ? T.border2 : 'transparent'}`,
+      borderRadius:RADIUS.sm + 2,
       opacity: carrier.connected && !carrier.is_active ? 0.6 : 1,
     }}>
       <div style={{display:'flex', alignItems:'center', gap:12, flexWrap:'wrap'}}>
         <div style={{flex:1, minWidth:200}}>
-          <div style={{display:'flex', alignItems:'center', gap:8}}>
+          <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
             <strong style={{fontSize:13, color:T.text}}>{carrier.label}</strong>
-            <span style={{
-              padding:'2px 8px', borderRadius:99, fontSize:10,
-              color: meta.color, background:`${meta.color}15`, border:`1px solid ${meta.color}40`,
-            }}>
-              {meta.label}
-            </span>
+            <StatusPill color={meta.color}>{meta.label}</StatusPill>
             {carrier.connected && (
-              <span style={{fontSize:10, color:T.text3, fontFamily:'monospace'}}>
+              <span style={{fontSize:12, color:T.text3, fontFamily:'monospace'}}>
                 {carrier.environment}
               </span>
             )}
           </div>
-          <div style={{fontSize:11, color:T.text3, marginTop:3, lineHeight:1.4}}>
+          <div style={{fontSize:12.5, color:T.text3, marginTop:3, lineHeight:1.4}}>
             {carrier.blurb}
           </div>
           {status === 'error' && carrier.last_test_error && (
-            <div style={{fontSize:11, color:T.red, marginTop:5, fontFamily:'monospace'}}>
+            <div style={{fontSize:12, color:A.bad, marginTop:5, fontFamily:'monospace'}}>
               {carrier.last_test_error}
             </div>
           )}
           {status === 'connected' && carrier.last_test_at && (
-            <div style={{fontSize:10, color:T.text3, marginTop:3}}>
+            <div style={{fontSize:12, color:T.text3, marginTop:3}}>
               Last tested {relativeTime(carrier.last_test_at)}
             </div>
           )}
         </div>
-        <button onClick={onToggle}
-          style={{
-            padding:'5px 12px', borderRadius:5,
-            border:`1px solid ${T.border2}`, background:'transparent',
-            color: isOpen ? T.text3 : T.blue, fontSize:11,
-            cursor:'pointer', fontFamily:'inherit',
-          }}>
+        <Btn variant="ghost" size="sm" onClick={onToggle}>
           {isOpen ? 'Close' : carrier.connected ? 'Edit' : 'Connect'}
-        </button>
+        </Btn>
       </div>
 
       {isOpen && (
@@ -273,6 +252,9 @@ function CarrierForm({ carrier, onChanged, onClose }: {
     }
   }
 
+  // Credential inputs sit on bg3, so lift them one surface.
+  const fieldInput: React.CSSProperties = { ...inputStyle(), background: T.bg2, fontSize: 14 }
+
   return (
     <div style={{
       marginTop:14, paddingTop:14,
@@ -282,8 +264,8 @@ function CarrierForm({ carrier, onChanged, onClose }: {
       {/* Field grid */}
       <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:12}}>
         {carrier.fields.map(f => (
-          <label key={f.key} style={{display:'flex', flexDirection:'column', gap:4}}>
-            <span style={{fontSize:12, color:T.text2, fontWeight:500}}>
+          <label key={f.key} style={{display:'flex', flexDirection:'column', gap:5}}>
+            <span style={{fontSize:12, color:T.text2, fontWeight:650}}>
               {f.label}{f.required && <span style={{color:T.text3}}> *</span>}
             </span>
             <input
@@ -292,99 +274,70 @@ function CarrierForm({ carrier, onChanged, onClose }: {
               onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
               autoComplete="off"
               spellCheck={false}
-              style={{
-                background:T.bg2, border:`1px solid ${T.border2}`, color:T.text,
-                borderRadius:5, padding:'8px 10px', fontSize:13, outline:'none',
-                fontFamily:'inherit', boxSizing:'border-box',
-              }}
+              style={fieldInput}
             />
-            {f.hint && <span style={{fontSize:10, color:T.text3}}>{f.hint}</span>}
+            {f.hint && <span style={{fontSize:12, color:T.text3, lineHeight:1.45}}>{f.hint}</span>}
           </label>
         ))}
 
         {carrier.environments.length > 1 && (
-          <label style={{display:'flex', flexDirection:'column', gap:4}}>
-            <span style={{fontSize:12, color:T.text2, fontWeight:500}}>Environment</span>
+          <label style={{display:'flex', flexDirection:'column', gap:5}}>
+            <span style={{fontSize:12, color:T.text2, fontWeight:650}}>Environment</span>
             <select value={env} onChange={e => setEnv(e.target.value as 'live' | 'sandbox')}
-              style={{
-                background:T.bg2, border:`1px solid ${T.border2}`, color:T.text,
-                borderRadius:5, padding:'8px 10px', fontSize:13, outline:'none',
-                fontFamily:'inherit', boxSizing:'border-box',
-              }}>
+              style={{...fieldInput, cursor:'pointer'}}>
               {carrier.environments.map(e => (
                 <option key={e} value={e}>{e === 'live' ? 'Live (production)' : 'Sandbox (test)'}</option>
               ))}
             </select>
-            <span style={{fontSize:10, color:T.text3}}>Each environment uses different credentials at the carrier.</span>
+            <span style={{fontSize:12, color:T.text3, lineHeight:1.45}}>Each environment uses different credentials at the carrier.</span>
           </label>
         )}
 
-        <label style={{display:'flex', flexDirection:'column', gap:4}}>
-          <span style={{fontSize:12, color:T.text2, fontWeight:500}}>Status</span>
+        <label style={{display:'flex', flexDirection:'column', gap:5}}>
+          <span style={{fontSize:12, color:T.text2, fontWeight:650}}>Status</span>
           <label style={{display:'flex', alignItems:'center', gap:6, color:T.text2, fontSize:13, cursor:'pointer'}}>
             <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)}/>
             Use this connection
           </label>
-          <span style={{fontSize:10, color:T.text3}}>Uncheck to keep the credentials but skip this carrier at checkout.</span>
+          <span style={{fontSize:12, color:T.text3, lineHeight:1.45}}>Uncheck to keep the credentials but skip this carrier at checkout.</span>
         </label>
       </div>
 
       {testMsg && (
-        <div style={{
-          padding:'8px 12px', borderRadius:6, fontSize:12,
-          color: testMsg.ok ? T.green : T.red,
-          background: testMsg.ok ? `${T.green}15` : `${T.red}15`,
-          border: `1px solid ${testMsg.ok ? T.green : T.red}40`,
-        }}>
+        <Banner tone={testMsg.ok ? 'success' : 'error'}>
           {testMsg.ok ? '✓ ' : '✗ '}{testMsg.text}
-        </div>
+        </Banner>
       )}
 
       {err && (
-        <div style={{padding:'8px 12px', borderRadius:6, fontSize:12, color:T.red, background:`${T.red}15`, border:`1px solid ${T.red}40`}}>
-          {err}
-        </div>
+        <Banner tone="error">{err}</Banner>
       )}
 
       <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
-        <button onClick={save} disabled={!!savingMsg}
-          style={{
-            padding:'8px 14px', borderRadius:5,
-            border:`1px solid ${savingMsg ? T.border2 : T.blue}`,
-            background: savingMsg ? T.bg3 : T.blue,
-            color: savingMsg ? T.text3 : '#fff',
-            fontSize:12, fontWeight:500,
-            cursor: savingMsg ? 'not-allowed' : 'pointer',
-            fontFamily:'inherit',
-          }}>
+        <Btn size="sm" onClick={save} disabled={!!savingMsg}>
           {savingMsg || (carrier.connected ? 'Save changes' : 'Connect')}
-        </button>
+        </Btn>
 
         {carrier.connected && (
-          <button onClick={runTest} disabled={!!savingMsg}
-            style={{
-              padding:'8px 14px', borderRadius:5,
-              border:`1px solid ${T.border2}`, background:'transparent',
-              color: T.text2, fontSize:12, fontWeight:500,
-              cursor:'pointer', fontFamily:'inherit',
-            }}>
+          <Btn variant="secondary" size="sm" onClick={runTest} disabled={!!savingMsg}>
             Test connection
-          </button>
+          </Btn>
         )}
 
         <span style={{flex:1}}/>
 
         <a href={carrier.docsUrl} target="_blank" rel="noreferrer"
-          style={{fontSize:11, color:T.text3, textDecoration:'underline'}}>
+          style={{fontSize:12, color:T.text3, textDecoration:'underline'}}>
           {carrier.label} API docs ↗
         </a>
 
         {carrier.connected && (
           <button onClick={disconnect} disabled={!!savingMsg}
+            className="al-press al-focus"
             style={{
-              padding:'8px 14px', borderRadius:5,
-              border:`1px solid ${T.red}40`, background:'transparent',
-              color: T.red, fontSize:12, fontWeight:500,
+              padding:'7px 14px', borderRadius:RADIUS.pill, minHeight:36,
+              border:`1px solid ${alpha(A.bad,'40')}`, background:'transparent',
+              color: A.bad, fontSize:13, fontWeight:600,
               cursor:'pointer', fontFamily:'inherit',
             }}>
             Disconnect

@@ -2,13 +2,16 @@
 // Edit the standard freight cartons + pallet spec + palletise-by-weight
 // threshold. Feeds the cartonizer that packs multi-item orders for MachShip.
 // Dims are entered in mm; weights in kg (stored as grams).
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useEffect, useState } from 'react'
 import { T } from '../../lib/ui/theme'
 import { SkeletonRows } from '../ui'
 import { useConfirm } from '../ui/Feedback'
+import { A, Btn, inputStyle } from './ui'
 
-const inp: React.CSSProperties = { padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%' }
+// Dense grid input — kit look scaled for the carton/satchel rows (floor 12px).
+const inp: React.CSSProperties = { ...inputStyle(), padding: '6px 9px', fontSize: 13, minHeight: 32 }
 const kg = (grams: any) => (grams == null ? '' : String(Math.round(Number(grams) / 100) / 10))
 const toG = (kgVal: string) => { const n = parseFloat(kgVal); return Number.isFinite(n) ? Math.round(n * 1000) : null }
 const toInt = (v: string) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null }
@@ -114,20 +117,24 @@ export default function FreightPackagingManager() {
 
   if (loading) return <SkeletonRows rows={8} />
 
-  const cols = '1.4fr 70px 70px 70px 80px 56px 30px'
-  const hdr: React.CSSProperties = { fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }
+  const cols = '1.4fr 70px 70px 70px 80px 56px 68px'
+  const hdr: React.CSSProperties = { fontSize: 12, color: T.text3, fontWeight: 650 }
+  const rowDelete: React.CSSProperties = {
+    background: 'none', border: 'none', color: A.bad, cursor: 'pointer',
+    fontSize: 12, fontWeight: 600, fontFamily: 'inherit', justifySelf: 'center', padding: '2px 4px',
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {flash && <div style={{ fontSize: 12, color: flash.includes('fail') || flash.includes('Fill') ? T.amber : T.green }}>{flash}</div>}
+      {flash && <div style={{ fontSize: 12.5, color: flash.includes('fail') || flash.includes('Fill') ? A.warn : A.good }}>{flash}</div>}
 
       {/* Boxes */}
       <div>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Standard cartons <span style={{ color: T.text3, fontWeight: 400 }}>· usable internal size (cm) + max weight (kg)</span></div>
+        <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Standard cartons <span style={{ color: T.text3, fontWeight: 400 }}>· usable internal size (cm) + max weight (kg)</span></div>
         <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 8, padding: '0 2px 6px' }}>
           <div style={hdr}>Name</div><div style={hdr}>L (cm)</div><div style={hdr}>W (cm)</div><div style={hdr}>H (cm)</div><div style={hdr}>Max kg</div><div style={{ ...hdr, textAlign: 'center' }}>Active</div><div />
         </div>
-        {boxes.length === 0 && <div style={{ fontSize: 12, color: T.text3, padding: '4px 0 10px' }}>No boxes yet — add your standard cartons below.</div>}
+        {boxes.length === 0 && <div style={{ fontSize: 12.5, color: T.text3, padding: '4px 0 10px' }}>No boxes yet — add your standard cartons below.</div>}
         {boxes.map(b => (
           <div key={b.id} style={{ display: 'grid', gridTemplateColumns: cols, gap: 8, padding: '5px 0', alignItems: 'center', borderTop: `1px solid ${T.border}` }}>
             <input style={inp} value={b.name} onChange={e => updateBoxLocal(b.id, { name: e.target.value })} onBlur={e => patchBox(b.id, { name: e.target.value })} />
@@ -136,7 +143,7 @@ export default function FreightPackagingManager() {
             <input style={inp} inputMode="decimal" value={cm(b.height_mm)} onChange={e => updateBoxLocal(b.id, { height_mm: toMm(e.target.value) ?? 0 })} onBlur={e => patchBox(b.id, { height_mm: toMm(e.target.value) })} />
             <input style={inp} inputMode="decimal" value={kg(b.max_weight_g)} onChange={e => updateBoxLocal(b.id, { max_weight_g: toG(e.target.value) ?? 0 })} onBlur={e => patchBox(b.id, { max_weight_g: toG(e.target.value) })} />
             <input type="checkbox" checked={b.is_active} onChange={e => { updateBoxLocal(b.id, { is_active: e.target.checked }); patchBox(b.id, { is_active: e.target.checked }) }} style={{ justifySelf: 'center', cursor: 'pointer' }} />
-            <button onClick={() => removeBox(b.id, b.name)} title="Delete" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 15, justifySelf: 'center' }}>×</button>
+            <button onClick={() => removeBox(b.id, b.name)} title="Delete" className="al-press al-focus" style={rowDelete}>Delete</button>
           </div>
         ))}
         {/* Add row */}
@@ -146,21 +153,23 @@ export default function FreightPackagingManager() {
           <input style={inp} placeholder="W" inputMode="decimal" value={newBox.width_mm} onChange={e => setNewBox(s => ({ ...s, width_mm: e.target.value }))} />
           <input style={inp} placeholder="H" inputMode="decimal" value={newBox.height_mm} onChange={e => setNewBox(s => ({ ...s, height_mm: e.target.value }))} />
           <input style={inp} placeholder="kg" inputMode="decimal" value={newBox.max_weight_kg} onChange={e => setNewBox(s => ({ ...s, max_weight_kg: e.target.value }))} />
-          <button onClick={addBox} disabled={adding} style={{ gridColumn: '6 / 8', padding: '6px 10px', borderRadius: 5, border: 'none', background: T.blue, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{adding ? '…' : '+ Add'}</button>
+          <div style={{ gridColumn: '6 / 8' }}>
+            <Btn size="sm" full onClick={addBox} disabled={adding}>{adding ? '…' : 'Add'}</Btn>
+          </div>
         </div>
       </div>
 
       {/* Satchels */}
       {(() => {
-        const sCols = '1.5fr 58px 58px 58px 70px 80px 80px 50px 26px'
+        const sCols = '1.5fr 58px 58px 58px 70px 80px 80px 50px 64px'
         return (
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Flat-rate satchels <span style={{ color: T.text3, fontWeight: 400 }}>· e.g. Australia Post · flat price anywhere in Aus</span></div>
-            <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>Offered alongside carrier rates when an order fits — the cart auto-picks the cheapest. An order qualifies when it's under the max weight <strong>and</strong> all items fit inside the satchel size (combined, ~80% fill). Leave L/W/H blank for a weight-only satchel. Prices are GST-inclusive. Satchel orders ship manually (no auto-booking).</div>
+            <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 4 }}>Flat-rate satchels <span style={{ color: T.text3, fontWeight: 400 }}>· e.g. Australia Post · flat price anywhere in Aus</span></div>
+            <div style={{ fontSize: 12, color: T.text3, marginBottom: 8, lineHeight: 1.5 }}>Offered alongside carrier rates when an order fits — the cart auto-picks the cheapest. An order qualifies when it's under the max weight <strong>and</strong> all items fit inside the satchel size (combined, ~80% fill). Leave L/W/H blank for a weight-only satchel. Prices are GST-inclusive. Satchel orders ship manually (no auto-booking).</div>
             <div style={{ display: 'grid', gridTemplateColumns: sCols, gap: 6, padding: '0 2px 6px' }}>
               <div style={hdr}>Name</div><div style={hdr}>L cm</div><div style={hdr}>W cm</div><div style={hdr}>H cm</div><div style={hdr}>Max kg</div><div style={hdr}>Cost $ inc</div><div style={hdr}>Sell $ inc</div><div style={{ ...hdr, textAlign: 'center' }}>On</div><div />
             </div>
-            {satchels.length === 0 && <div style={{ fontSize: 12, color: T.text3, padding: '4px 0 10px' }}>No satchels yet — add your AusPost satchel tiers below (e.g. 500g / 1kg / 3kg / 5kg).</div>}
+            {satchels.length === 0 && <div style={{ fontSize: 12.5, color: T.text3, padding: '4px 0 10px' }}>No satchels yet — add your AusPost satchel tiers below (e.g. 500g / 1kg / 3kg / 5kg).</div>}
             {satchels.map(s => (
               <div key={s.id} style={{ display: 'grid', gridTemplateColumns: sCols, gap: 6, padding: '5px 0', alignItems: 'center', borderTop: `1px solid ${T.border}` }}>
                 <input style={inp} value={s.name} onChange={e => updateSatLocal(s.id, { name: e.target.value })} onBlur={e => patchSatchel(s.id, { name: e.target.value })} />
@@ -171,7 +180,7 @@ export default function FreightPackagingManager() {
                 <input style={inp} inputMode="decimal" value={incFromEx(s.cost_ex_gst)} onChange={e => updateSatLocal(s.id, { cost_ex_gst: exFromInc(e.target.value) ?? 0 })} onBlur={e => patchSatchel(s.id, { cost_ex_gst: exFromInc(e.target.value) })} />
                 <input style={inp} inputMode="decimal" value={incFromEx(s.sell_ex_gst)} onChange={e => updateSatLocal(s.id, { sell_ex_gst: exFromInc(e.target.value) ?? 0 })} onBlur={e => patchSatchel(s.id, { sell_ex_gst: exFromInc(e.target.value) })} />
                 <input type="checkbox" checked={s.is_active} onChange={e => { updateSatLocal(s.id, { is_active: e.target.checked }); patchSatchel(s.id, { is_active: e.target.checked }) }} style={{ justifySelf: 'center', cursor: 'pointer' }} />
-                <button onClick={() => removeSatchel(s.id, s.name)} title="Delete" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 15, justifySelf: 'center' }}>×</button>
+                <button onClick={() => removeSatchel(s.id, s.name)} title="Delete" className="al-press al-focus" style={rowDelete}>Delete</button>
               </div>
             ))}
             {/* Add row */}
@@ -183,7 +192,9 @@ export default function FreightPackagingManager() {
               <input style={inp} placeholder="kg" inputMode="decimal" value={newSat.max_weight_kg} onChange={e => setNewSat(s => ({ ...s, max_weight_kg: e.target.value }))} />
               <input style={inp} placeholder="inc" inputMode="decimal" value={newSat.cost_inc} onChange={e => setNewSat(s => ({ ...s, cost_inc: e.target.value }))} />
               <input style={inp} placeholder="inc" inputMode="decimal" value={newSat.sell_inc} onChange={e => setNewSat(s => ({ ...s, sell_inc: e.target.value }))} />
-              <button onClick={addSatchel} disabled={addingSat} style={{ gridColumn: '8 / 10', padding: '6px 8px', borderRadius: 5, border: 'none', background: T.blue, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{addingSat ? '…' : '+ Add'}</button>
+              <div style={{ gridColumn: '8 / 10' }}>
+                <Btn size="sm" full onClick={addSatchel} disabled={addingSat}>{addingSat ? '…' : 'Add'}</Btn>
+              </div>
             </div>
           </div>
         )
@@ -191,7 +202,7 @@ export default function FreightPackagingManager() {
 
       {/* Pallet + threshold */}
       <div>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Pallet &amp; threshold</div>
+        <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Pallet &amp; threshold</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
           {([['length_mm', 'Pallet L (cm)'], ['width_mm', 'Pallet W (cm)'], ['max_height_mm', 'Max stack H (cm)'], ['max_weight_kg', 'Max kg'], ['threshold_kg', 'Palletise over (kg)']] as const).map(([k, label]) => (
             <label key={k} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -200,11 +211,11 @@ export default function FreightPackagingManager() {
             </label>
           ))}
         </div>
-        <div style={{ fontSize: 11, color: T.text3, margin: '8px 0' }}>An order whose total weight exceeds <strong>Palletise over</strong> ships on a pallet instead of boxes.</div>
-        <button onClick={savePallet} disabled={savingPallet} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: T.blue, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{savingPallet ? 'Saving…' : 'Save pallet settings'}</button>
+        <div style={{ fontSize: 12, color: T.text3, margin: '8px 0' }}>An order whose total weight exceeds <strong>Palletise over</strong> ships on a pallet instead of boxes.</div>
+        <Btn size="sm" onClick={savePallet} disabled={savingPallet}>{savingPallet ? 'Saving…' : 'Save pallet settings'}</Btn>
       </div>
 
-      <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.6, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+      <div style={{ fontSize: 12, color: T.text3, lineHeight: 1.6, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
         These feed the freight cartonizer (coming next): it packs an order's items into the fewest cartons that fit by volume + weight, or onto a pallet once total weight passes the threshold — then quotes/books that. Box edits save as you leave each field.
       </div>
     </div>

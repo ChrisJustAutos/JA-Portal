@@ -3,6 +3,7 @@
 // Distributors list page. Click a row to open the detail page.
 // "Add distributor" opens a drawer with live MYOB customer typeahead —
 // pick a customer card, review pre-filled fields, save → land on detail page.
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useEffect, useState, useMemo } from 'react'
 import Head from 'next/head'
@@ -11,15 +12,8 @@ import PortalTopBar from '../../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../../lib/authServer'
 import type { UserRole } from '../../../../lib/permissions'
-import { alpha } from '../../../../lib/ui/theme'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-}
+import { T, alpha } from '../../../../lib/ui/theme'
+import { A, Btn, cardStyle, StatusPill, Banner, PageTitle, SectionLabel, inputStyle, RADIUS, SHADOW } from '../../../../components/b2b/ui'
 
 interface Props {
   user: {
@@ -107,60 +101,45 @@ export default function DistributorsListPage({ user }: Props) {
         <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="distributors"/>
 
-          {/* Header */}
-          <header style={{marginBottom:18,display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
-            <div>
-              <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
-                <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
-                {' / '}
-                <span style={{color:T.text2}}>Distributors</span>
-              </div>
-              <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>
-                Distributors
-              </h1>
-            </div>
-            <button onClick={() => setDrawerOpen(true)}
-              style={{
-                padding:'9px 16px',borderRadius:6,
-                border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
-                fontSize:13,fontWeight:500,cursor:'pointer',fontFamily:'inherit',
-              }}>
-              + Add distributor
-            </button>
-          </header>
+          {/* Breadcrumb + page header */}
+          <div style={{fontSize:12.5,color:T.text3,marginBottom:6}}>
+            <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
+            {' / '}
+            <span style={{color:T.text2}}>Distributors</span>
+          </div>
+          <PageTitle action={
+            <Btn onClick={() => setDrawerOpen(true)}>Add distributor</Btn>
+          }>
+            Distributors
+          </PageTitle>
 
           {/* Toolbar */}
           <div style={{
             display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',
-            padding:'10px 12px',background:T.bg2,border:`1px solid ${T.border}`,
-            borderRadius:8,marginBottom:14,
+            ...cardStyle(false),padding:'10px 12px',marginBottom:14,
           }}>
             <input
               type="text"
               placeholder="Search by name, MYOB display ID or email…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              style={{
-                flex:1,minWidth:200,
-                background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-                borderRadius:5,padding:'7px 11px',fontSize:13,outline:'none',fontFamily:'inherit',
-              }}
+              className="al-focus"
+              style={{...inputStyle(), flex:1, minWidth:200, width:'auto'}}
             />
-            <button onClick={load} disabled={loading}
-              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
-              {loading ? 'Loading…' : '↻ Refresh'}
-            </button>
+            <Btn variant="ghost" size="sm" onClick={load} disabled={loading}>
+              {loading ? 'Loading…' : 'Refresh'}
+            </Btn>
           </div>
 
           {/* Errors */}
           {error && (
-            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:10}}>
-              {error}
+            <div style={{marginBottom:10}}>
+              <Banner tone="error">{error}</Banner>
             </div>
           )}
 
           {/* Table */}
-          <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
+          <div style={cardStyle(false)}>
             <div style={{overflowX:'auto'}}>
               <table className="b2b-cards" style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
@@ -191,30 +170,25 @@ export default function DistributorsListPage({ user }: Props) {
                       }}>
                       <td className="b2b-card-title" style={td()}>
                         <div style={{color:T.text,fontWeight:500}}>{d.display_name}</div>
-                        {d.abn && <div style={{fontSize:10,color:T.text3,fontFamily:'monospace',marginTop:2}}>ABN {d.abn}</div>}
+                        {d.abn && <div style={{fontSize:12,color:T.text3,fontFamily:'monospace',marginTop:2}}>ABN {d.abn}</div>}
                       </td>
                       <td data-label="MYOB ID" style={{...td(),fontFamily:'monospace',fontSize:12,color:T.text2}}>
                         {displayId(d.myob_primary_customer_display_id)}
                       </td>
-                      <td data-label="Linked" style={{...td(),color:T.text3,fontSize:12}}>
+                      <td data-label="Linked" style={{...td(),color:T.text3,fontSize:12.5}}>
                         {d.myob_linked_customer_uids?.length
                           ? `+${d.myob_linked_customer_uids.length} linked`
                           : '—'}
                       </td>
                       <td data-label="Contact" style={td()}>
                         <div style={{color:T.text2}}>{d.primary_contact_email || '—'}</div>
-                        {d.primary_contact_phone && <div style={{fontSize:10,color:T.text3,marginTop:2}}>{d.primary_contact_phone}</div>}
+                        {d.primary_contact_phone && <div style={{fontSize:12,color:T.text3,marginTop:2}}>{d.primary_contact_phone}</div>}
                       </td>
                       <td data-label="Tier" style={td()}>
                         {d.tier_name ? (
-                          <span style={{
-                            display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,fontWeight:500,
-                            background:`${T.purple}18`,color:T.purple,
-                          }}>
-                            {d.tier_name}
-                          </span>
+                          <StatusPill color={A.accent}>{d.tier_name}</StatusPill>
                         ) : (
-                          <span style={{color:T.text3,fontSize:11}}>—</span>
+                          <span style={{color:T.text3,fontSize:12.5}}>—</span>
                         )}
                       </td>
                       <td data-label="Users" style={{...td(),textAlign:'center',color:d.active_user_count > 0 ? T.text : T.text3,fontVariantNumeric:'tabular-nums'}}>
@@ -222,24 +196,19 @@ export default function DistributorsListPage({ user }: Props) {
                       </td>
                       <td data-label="Signed in" style={{...td(),textAlign:'center'}}>
                         {d.last_sign_in_at ? (
-                          <span title={new Date(d.last_sign_in_at).toLocaleString('en-AU')} style={{
-                            display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,fontWeight:500,
-                            background:`${T.green}20`,color:T.green,
-                          }}>
-                            {new Date(d.last_sign_in_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}
+                          <span title={new Date(d.last_sign_in_at).toLocaleString('en-AU')}>
+                            <StatusPill color={A.good}>
+                              {new Date(d.last_sign_in_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}
+                            </StatusPill>
                           </span>
                         ) : (
                           <ResendCell dist={d}/>
                         )}
                       </td>
                       <td data-label="Active" style={{...td(),textAlign:'center'}}>
-                        <span style={{
-                          display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,
-                          background: d.is_active ? `${T.green}20` : alpha(T.text3, '15'),
-                          color: d.is_active ? T.green : T.text3,
-                        }}>
+                        <StatusPill color={d.is_active ? A.good : T.text3}>
                           {d.is_active ? 'Active' : 'Inactive'}
-                        </span>
+                        </StatusPill>
                       </td>
                       <td className="b2b-card-hide" style={{...td(),textAlign:'right'}}>
                         <span style={{color:T.text3}}>›</span>
@@ -351,11 +320,11 @@ function AddDistributorDrawer({
         position:'fixed',top:0,right:0,bottom:0,width:560,maxWidth:'94vw',
         background:T.bg2,borderLeft:`1px solid ${T.border2}`,
         display:'flex',flexDirection:'column',zIndex:1001,
-        boxShadow:'-12px 0 32px rgba(0,0,0,0.3)',
+        boxShadow:SHADOW.md,
       }}>
         <div style={{padding:'16px 20px',borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-          <div style={{fontSize:14,fontWeight:600}}>Add distributor</div>
-          <button onClick={onClose} style={{background:'transparent',border:'none',color:T.text2,fontSize:20,cursor:'pointer',padding:'0 4px'}}>×</button>
+          <div style={{fontSize:15,fontWeight:650}}>Add distributor</div>
+          <button onClick={onClose} aria-label="Close" className="al-press" style={{background:'transparent',border:'none',color:T.text2,fontSize:20,cursor:'pointer',padding:'0 4px',fontFamily:'inherit'}}>×</button>
         </div>
 
         <div style={{flex:1,overflowY:'auto',padding:20}}>
@@ -367,25 +336,24 @@ function AddDistributorDrawer({
             <div>
               {/* Picked summary */}
               <div style={{
-                padding:'10px 12px',background:T.bg3,border:`1px solid ${T.blue}40`,borderRadius:7,
+                padding:'10px 12px',background:T.bg3,border:`1px solid ${alpha(A.accent,'40')}`,borderRadius:RADIUS.sm,
                 marginBottom:18,display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,
               }}>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:12,color:T.text3,marginBottom:2}}>MYOB Customer</div>
                   <div style={{fontSize:13,color:T.text,fontWeight:500}}>{picked.name}</div>
-                  <div style={{fontFamily:'monospace',fontSize:10,color:T.text3,marginTop:2}}>
+                  <div style={{fontFamily:'monospace',fontSize:12,color:T.text3,marginTop:2}}>
                     {picked.display_id} · {picked.uid}
                   </div>
                 </div>
-                <button onClick={() => { setPicked(null); setStep('search') }}
-                  style={{padding:'5px 10px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+                <Btn variant="ghost" size="sm" onClick={() => { setPicked(null); setStep('search') }}>
                   Change
-                </button>
+                </Btn>
               </div>
 
-              {loadingDetail && <div style={{fontSize:11,color:T.text3,marginBottom:14}}>Loading details from MYOB…</div>}
+              {loadingDetail && <div style={{fontSize:12,color:T.text3,marginBottom:14}}>Loading details from MYOB…</div>}
               {!loadingDetail && (ship || bill) && (
-                <div style={{fontSize:11,color:T.text3,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:'8px 10px',marginBottom:16}}>
+                <div style={{fontSize:12,color:T.text3,background:T.bg3,borderRadius:RADIUS.sm,padding:'8px 10px',marginBottom:16,lineHeight:1.5}}>
                   <div style={{color:T.text2,marginBottom:4}}>Address prefilled from MYOB (saved with the distributor; edit on its page after):</div>
                   {bill && <div>Billing: {[bill.line1,bill.suburb,bill.state,bill.postcode].filter(Boolean).join(', ') || '—'}</div>}
                   {ship && <div>Shipping: {[ship.line1,ship.suburb,ship.state,ship.postcode].filter(Boolean).join(', ') || '—'}</div>}
@@ -393,45 +361,39 @@ function AddDistributorDrawer({
               )}
 
               <FormRow label="Display name" hint="How this distributor appears in the portal">
-                <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} style={input}/>
+                <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} style={inputStyle()}/>
               </FormRow>
               <FormRow label="ABN" hint="Optional">
-                <input type="text" value={abn} onChange={e => setAbn(e.target.value)} placeholder="e.g. 12 345 678 901" style={input}/>
+                <input type="text" value={abn} onChange={e => setAbn(e.target.value)} placeholder="e.g. 12 345 678 901" style={inputStyle()}/>
               </FormRow>
               <FormRow label="Primary contact email" hint="Used for shipping notifications">
-                <input type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} style={input}/>
+                <input type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} style={inputStyle()}/>
               </FormRow>
               <FormRow label="Primary contact phone" hint="Optional">
-                <input type="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} style={input}/>
+                <input type="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} style={inputStyle()}/>
               </FormRow>
               <FormRow label="Internal notes" hint="Only visible to staff">
-                <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} style={{...input,resize:'vertical'}}/>
+                <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} style={{...inputStyle(),resize:'vertical',minHeight:0}}/>
               </FormRow>
 
               {error && (
-                <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginTop:10}}>
-                  {error}
+                <div style={{marginTop:10}}>
+                  <Banner tone="error">{error}</Banner>
                 </div>
               )}
 
               <div style={{marginTop:20,display:'flex',gap:10}}>
-                <button onClick={save} disabled={saving || !displayName.trim()}
-                  style={{
-                    flex:1,padding:'10px 16px',borderRadius:6,
-                    border:`1px solid ${saving ? T.border2 : T.blue}`,
-                    background: saving ? T.bg3 : T.blue,
-                    color: saving ? T.text3 : '#fff',
-                    fontSize:13,fontWeight:500,cursor:saving?'wait':'pointer',fontFamily:'inherit',
-                  }}>
-                  {saving ? 'Creating…' : 'Create distributor'}
-                </button>
-                <button onClick={onClose} disabled={saving}
-                  style={{padding:'10px 14px',borderRadius:6,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:13,cursor:'pointer',fontFamily:'inherit'}}>
+                <div style={{flex:1}}>
+                  <Btn full onClick={save} disabled={saving || !displayName.trim()}>
+                    {saving ? 'Creating…' : 'Create distributor'}
+                  </Btn>
+                </div>
+                <Btn variant="ghost" onClick={onClose} disabled={saving}>
                   Cancel
-                </button>
+                </Btn>
               </div>
 
-              <div style={{fontSize:10,color:T.text3,marginTop:14,lineHeight:1.5}}>
+              <div style={{fontSize:12,color:T.text3,marginTop:14,lineHeight:1.5}}>
                 After creating, you can link a Tuning customer card and invite users from the detail page.
               </div>
             </div>
@@ -472,28 +434,20 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
 
   return (
     <div>
-      <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>
-        Step 1 · Pick a MYOB customer
-      </div>
+      <SectionLabel>Step 1 · Pick a MYOB customer</SectionLabel>
       <input
         type="text"
         placeholder="Type to search MYOB JAWS customers…"
         value={q}
         onChange={e => setQ(e.target.value)}
         autoFocus
-        style={{
-          width:'100%',boxSizing:'border-box',
-          background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-          borderRadius:6,padding:'10px 12px',fontSize:13,outline:'none',fontFamily:'inherit',
-          marginBottom:10,
-        }}
+        className="al-focus"
+        style={{...inputStyle(), marginBottom:10}}
       />
 
-      {loading && <div style={{fontSize:12,color:T.text3,padding:'8px 4px'}}>Searching MYOB…</div>}
+      {loading && <div style={{fontSize:12.5,color:T.text3,padding:'8px 4px'}}>Searching MYOB…</div>}
       {error && (
-        <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
-          {error}
-        </div>
+        <Banner tone="error">{error}</Banner>
       )}
 
       {!loading && !error && results.length === 0 && q && (
@@ -512,17 +466,18 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
         <div style={{display:'flex',flexDirection:'column',gap:4}}>
           {results.map(c => (
             <button key={c.uid} onClick={() => onPick(c)}
+              className="al-press al-focus"
               style={{
                 textAlign:'left',padding:'10px 12px',
-                background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,
+                background:T.bg3,border:'1px solid transparent',borderRadius:RADIUS.sm,
                 color:T.text,cursor:'pointer',fontFamily:'inherit',
                 display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,
               }}>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,fontWeight:500}}>{c.name}</div>
-                <div style={{fontFamily:'monospace',fontSize:10,color:T.text3,marginTop:2}}>
+                <div style={{fontFamily:'monospace',fontSize:12,color:T.text3,marginTop:2}}>
                   {c.display_id || '—'}
-                  {c.is_individual && <span style={{marginLeft:8,color:T.purple}}>· Individual</span>}
+                  {c.is_individual && <span style={{marginLeft:8,color:A.accent,fontFamily:'inherit'}}>· Individual</span>}
                 </div>
               </div>
               <span style={{color:T.text3,fontSize:14}}>›</span>
@@ -538,17 +493,11 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
 function FormRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div style={{marginBottom:14}}>
-      <div style={{fontSize:12,color:T.text2,marginBottom:4,fontWeight:500}}>{label}</div>
+      <div style={{fontSize:12,color:T.text2,marginBottom:5,fontWeight:650}}>{label}</div>
       {children}
-      {hint && <div style={{fontSize:10,color:T.text3,marginTop:3}}>{hint}</div>}
+      {hint && <div style={{fontSize:12,color:T.text3,marginTop:4}}>{hint}</div>}
     </div>
   )
-}
-
-const input: React.CSSProperties = {
-  width:'100%',boxSizing:'border-box',
-  background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-  borderRadius:5,padding:'8px 11px',fontSize:13,outline:'none',fontFamily:'inherit',
 }
 
 // MYOB uses "*None" as the DisplayID for a card with no Card ID — show "—".
@@ -578,25 +527,21 @@ function ResendCell({ dist }: { dist: Distributor }) {
     }
   }
   return (
-    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:3}}>
-      <span style={{
-        display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,
-        background:alpha(T.text3,'15'),color:T.text3,
-      }}>
-        Never
-      </span>
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4}}>
+      <StatusPill color={T.text3}>Never</StatusPill>
       {dist.pending_invites > 0 && state !== 'sent' && (
         <button onClick={resend} disabled={state === 'sending'} title={msg || 'Email a fresh invite link to everyone on this account who hasn\'t signed in yet'}
+          className="al-press al-focus"
           style={{
-            padding:'2px 8px',borderRadius:6,fontSize:10,fontWeight:500,cursor:'pointer',fontFamily:'inherit',
-            border:`1px solid ${state === 'error' ? T.red : T.border2}`,
-            background:'transparent',color: state === 'error' ? T.red : T.blue,
+            padding:'3px 11px',borderRadius:RADIUS.pill,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',
+            border:`1px solid ${state === 'error' ? alpha(A.bad,'55') : T.border2}`,
+            background:'transparent',color: state === 'error' ? A.bad : A.accent,whiteSpace:'nowrap',
           }}>
           {state === 'sending' ? 'Sending…' : state === 'error' ? 'Failed — retry' : 'Resend invite'}
         </button>
       )}
       {state === 'sent' && (
-        <span title={msg || undefined} style={{fontSize:10,color:T.green,fontWeight:600}}>✓ Sent</span>
+        <span title={msg || undefined} style={{fontSize:12,color:A.good,fontWeight:600}}>✓ Sent</span>
       )}
     </div>
   )
@@ -609,9 +554,8 @@ function displayId(v: string | null): string {
 
 function th(width?: number): React.CSSProperties {
   return {
-    fontSize:10,color:T.text3,padding:'10px 12px',
-    textAlign:'left',fontWeight:500,
-    textTransform:'uppercase',letterSpacing:'0.05em',
+    fontSize:12,color:T.text2,padding:'11px 12px',
+    textAlign:'left',fontWeight:650,
     width,whiteSpace:'nowrap',background:T.bg2,
   }
 }

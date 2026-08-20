@@ -15,14 +15,8 @@ import { requirePageAuth } from '../../../../lib/authServer'
 import { roleHasPermission, type UserRole } from '../../../../lib/permissions'
 import { useIsMobile } from '../../../../lib/useIsMobile'
 import { useConfirm, useToast } from '../../../../components/ui/Feedback'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-}
+import { T, alpha } from '../../../../lib/ui/theme'
+import { A, RADIUS, SHADOW, cardStyle, Banner, StatusPill as Pill, orderStatusColor, orderStatusLabel } from '../../../../components/b2b/ui'
 
 interface Props {
   user: {
@@ -101,6 +95,7 @@ interface OrderDetail {
   label_pdf_path: string | null
   // MachShip live freight
   machship_consignment_id: string | null
+  machship_manifest_id: string | null
   machship_consignment_number: string | null
   machship_carrier_id: number | null
   machship_carrier_service_id: number | null
@@ -134,17 +129,13 @@ interface OrderDetail {
   refunds: RefundRow[]
 }
 
+// Per-status labels for transitions + the timeline (Picking vs Packed must
+// stay distinct there); the header status pill uses the kit's vocabulary.
 const STATUS_LABEL: Record<string, string> = {
-  pending_payment: 'Pending payment',
+  pending_payment: 'Awaiting payment',
   paid: 'Paid', picking: 'Picking', packed: 'Packed',
   shipped: 'Shipped', delivered: 'Delivered',
   cancelled: 'Cancelled', refunded: 'Refunded',
-}
-const STATUS_COLOR: Record<string, string> = {
-  pending_payment: T.text3,
-  paid: T.blue, picking: T.amber, packed: T.amber,
-  shipped: T.teal, delivered: T.green,
-  cancelled: T.red, refunded: T.purple,
 }
 
 // What status transitions are allowed from a given status (must mirror server)
@@ -378,7 +369,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
           <B2BAdminTabs active="orders"/>
 
           <header style={{marginBottom:18}}>
-            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+            <div style={{fontSize:12.5,color:T.text3,marginBottom:5}}>
               <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
               {' / '}
               <a href="/admin/b2b/orders" style={{color:T.text3,textDecoration:'none'}}>Orders</a>
@@ -387,7 +378,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
             </div>
             {data && (
               <div style={{display:'flex',alignItems:'baseline',gap:14,flexWrap:'wrap'}}>
-                <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em',fontFamily:'monospace'}}>{data.order_number}</h1>
+                <h1 style={{fontSize:24,fontWeight:700,margin:0,letterSpacing:'-0.02em',fontFamily:'monospace'}}>{data.order_number}</h1>
                 <StatusPill status={data.status}/>
                 <span style={{color:T.text2,fontSize:13}}>· {data.distributor?.display_name || '—'}</span>
                 <span style={{marginLeft:'auto',fontSize:13,color:T.text2,fontVariantNumeric:'tabular-nums'}}>
@@ -398,19 +389,18 @@ export default function AdminOrderDetailPage({ user }: Props) {
           </header>
 
           {flash && (
-            <div style={{padding:'8px 14px',background:`${T.green}15`,border:`1px solid ${T.green}40`,borderRadius:7,color:T.green,fontSize:13,marginBottom:14}}>
-              ✓ {flash}
+            <div style={{marginBottom:14}}>
+              <Banner tone="success">{flash}</Banner>
             </div>
           )}
           {error && (
-            <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
-              {error}
+            <div style={{marginBottom:14}}>
+              <Banner tone="error">{error}</Banner>
             </div>
           )}
           {actionError && (
-            <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14,display:'flex',justifyContent:'space-between',gap:14}}>
-              <span>{actionError}</span>
-              <button onClick={() => setActionError(null)} style={{background:'transparent',border:'none',color:T.red,cursor:'pointer',fontSize:14}}>×</button>
+            <div style={{marginBottom:14}}>
+              <Banner tone="error" onDismiss={() => setActionError(null)}>{actionError}</Banner>
             </div>
           )}
 
@@ -433,12 +423,12 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     const label = m === 'becs' ? 'Bank Direct Debit' : m === 'payto' ? 'PayTo' : 'Card'
                     const settled = !!data.payment_settled_at
                     const state = settled ? 'Settled' : (m === 'becs' ? 'Awaiting settlement' : m === 'payto' ? 'Awaiting confirmation' : 'Unsettled')
-                    return <KV label="Payment" value={`${label} · ${state}`} valueColor={settled ? T.green : (m === 'card' ? undefined : T.amber)}/>
+                    return <KV label="Payment" value={`${label} · ${state}`} valueColor={settled ? A.good : (m === 'card' ? undefined : A.warn)}/>
                   })()}
                   <KV label="Placed"         value={fullDate(data.placed_at)} mono/>
-                  {data.paid_at && <KV label="Paid"      value={fullDate(data.paid_at)}      mono valueColor={T.green}/>}
-                  {data.shipped_at && <KV label="Shipped" value={fullDate(data.shipped_at)} mono valueColor={T.teal}/>}
-                  {data.cancelled_at && <KV label="Cancelled" value={fullDate(data.cancelled_at)} mono valueColor={T.red}/>}
+                  {data.paid_at && <KV label="Paid"      value={fullDate(data.paid_at)}      mono valueColor={A.good}/>}
+                  {data.shipped_at && <KV label="Shipped" value={fullDate(data.shipped_at)} mono valueColor={A.accent}/>}
+                  {data.cancelled_at && <KV label="Cancelled" value={fullDate(data.cancelled_at)} mono valueColor={A.bad}/>}
                 </Card>
 
                 {/* Ship to */}
@@ -455,11 +445,11 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       {data.ship_to.phone && <div style={{color:T.text3,fontSize:12,marginTop:4}}>☎ {data.ship_to.phone}</div>}
                       {data.ship_to.email && <div style={{color:T.text3,fontSize:12}}>✉ {data.ship_to.email}</div>}
                       {data.ship_to.source === 'distributor' && (
-                        <div style={{fontSize:10,color:T.text3,marginTop:6,fontStyle:'italic'}}>From the distributor's ship address (no per-order delivery address on file).</div>
+                        <div style={{fontSize:12,color:T.text3,marginTop:6,fontStyle:'italic'}}>From the distributor's ship address (no per-order delivery address on file).</div>
                       )}
                     </div>
                   ) : (
-                    <div style={{fontSize:12,color:T.amber}}>No delivery address — add a ship address to the distributor before booking freight.</div>
+                    <div style={{fontSize:12.5,color:A.warn}}>No delivery address — add a ship address to the distributor before booking freight.</div>
                   )}
                 </Card>
 
@@ -511,21 +501,21 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   <Row label="(includes GST)"     value={`$${money(data.gst)}`} muted/>
                   {Number(data.refunded_total || 0) > 0 && (
                     <Row label={`Refunded${Number(data.refunded_total) >= data.total_inc - 0.005 ? ' (full)' : ' (partial)'}`}
-                         value={`-$${money(Number(data.refunded_total))}`} valueColor={T.purple}/>
+                         value={`-$${money(Number(data.refunded_total))}`} valueColor={A.bad}/>
                   )}
                 </Card>
 
                 {/* Stripe + MYOB info */}
                 <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',gap:14,minWidth:0}}>
                   <Card title="Stripe">
-                    <KV label="Status" value={data.paid_at ? 'Paid' : 'Pending'} valueColor={data.paid_at ? T.green : T.amber}/>
+                    <KV label="Status" value={data.paid_at ? 'Paid' : 'Pending'} valueColor={data.paid_at ? A.good : A.warn}/>
                     <KV label="Payment Intent" value={data.stripe.payment_intent_id || '—'} mono small/>
                     <KV label="Session ID"     value={data.stripe.checkout_session_id || '—'} mono small/>
                     {data.stripe.payment_intent_id && (
                       <div style={{marginTop:8}}>
                         <a href={`https://dashboard.stripe.com/payments/${data.stripe.payment_intent_id}`}
                           target="_blank" rel="noopener noreferrer"
-                          style={{fontSize:12,color:T.blue,textDecoration:'none'}}>
+                          style={{fontSize:12,color:A.accent,textDecoration:'none'}}>
                           Open in Stripe →
                         </a>
                       </div>
@@ -533,12 +523,12 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   </Card>
                   <Card title="MYOB">
                     <KV label="Company file" value={data.myob.company_file || 'JAWS'}/>
-                    <KV label="Order #"      value={data.myob.order_number || '—'} mono valueColor={data.myob.order_number ? T.text2 : T.amber}/>
+                    <KV label="Order #"      value={data.myob.order_number || '—'} mono valueColor={data.myob.order_number ? T.text2 : A.warn}/>
                     <KV label="Written"      value={data.myob.written_at ? fullDate(data.myob.written_at) : '—'} mono small/>
                     <KV label="Attempts"     value={String(data.myob.write_attempts ?? 0)}/>
                     {data.myob.write_error && (
-                      <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
-                        ⚠ {data.myob.write_error}
+                      <div style={{marginTop:8,padding:'8px 10px',background:alpha(A.bad,'14'),borderRadius:RADIUS.sm,color:A.bad,fontSize:12.5,lineHeight:1.5}}>
+                        {data.myob.write_error}
                         <div style={{marginTop:8}}>
                           <button
                             disabled={actionBusy}
@@ -553,8 +543,9 @@ export default function AdminOrderDetailPage({ user }: Props) {
                               } catch (e: any) { setActionError(e?.message || String(e)) }
                               finally { setActionBusy(false) }
                             }}
-                            style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.red}60`,background:'transparent',color:T.red,fontSize:12,cursor:'pointer'}}>
-                            {actionBusy ? 'Retrying…' : '↻ Retry MYOB write'}
+                            className="al-press al-focus"
+                            style={{padding:'6px 13px',borderRadius:RADIUS.pill,border:'1px solid transparent',background:alpha(A.bad,'14'),color:A.bad,fontSize:12.5,fontWeight:600,fontFamily:'inherit',cursor:'pointer',minHeight:32}}>
+                            {actionBusy ? 'Retrying…' : 'Retry MYOB write'}
                           </button>
                         </div>
                       </div>
@@ -568,19 +559,14 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     {data.refunds.map(rf => (
                       <div key={rf.id} style={{display:'flex',justifyContent:'space-between',gap:14,padding:'8px 0',borderTop:`1px solid ${T.border}`,fontSize:13}}>
                         <div>
-                          <div style={{color:T.text}}>${money(rf.amount)} <span style={{color:T.text3,fontSize:10}}>{rf.currency.toUpperCase()}</span></div>
-                          <div style={{fontSize:10,color:T.text3,marginTop:2,fontFamily:'monospace'}}>
+                          <div style={{color:T.text}}>${money(rf.amount)} <span style={{color:T.text3,fontSize:12}}>{rf.currency.toUpperCase()}</span></div>
+                          <div style={{fontSize:12,color:T.text3,marginTop:2,fontFamily:'monospace'}}>
                             {rf.id} · {new Date(rf.created * 1000).toLocaleString('en-AU')}
                           </div>
                         </div>
                         <div style={{textAlign:'right'}}>
-                          <div style={{fontSize:10,padding:'2px 7px',borderRadius:3,
-                            background: rf.status === 'succeeded' ? `${T.green}15` : `${T.amber}15`,
-                            color: rf.status === 'succeeded' ? T.green : T.amber,
-                            display:'inline-block',textTransform:'uppercase',letterSpacing:'0.04em',fontWeight:500}}>
-                            {rf.status}
-                          </div>
-                          {rf.reason && <div style={{fontSize:10,color:T.text3,marginTop:3}}>{rf.reason.replace(/_/g,' ')}</div>}
+                          <Pill color={rf.status === 'succeeded' ? A.good : A.warn}>{rf.status}</Pill>
+                          {rf.reason && <div style={{fontSize:12,color:T.text3,marginTop:3}}>{rf.reason.replace(/_/g,' ')}</div>}
                         </div>
                       </div>
                     ))}
@@ -619,6 +605,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                           if (t.needsModal === 'shipped') setShipModal(true)
                           else doTransition(t.to)
                         }}
+                        className={`al-press al-focus${t.primary ? ' al-primary' : ''}`}
                         style={actionBtn(!!t.primary, actionBusy)}>
                         {t.label}
                       </button>
@@ -628,7 +615,8 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       <button
                         disabled={actionBusy}
                         onClick={() => setRefundModal(true)}
-                        style={actionBtn(false, actionBusy, T.purple)}>
+                        className="al-press al-focus"
+                        style={actionBtn(false, actionBusy, A.bad)}>
                         Refund…
                       </button>
                     )}
@@ -637,7 +625,8 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       <button
                         disabled={actionBusy}
                         onClick={() => setCancelModal(true)}
-                        style={actionBtn(false, actionBusy, T.red)}>
+                        className="al-press al-focus"
+                        style={actionBtn(false, actionBusy, A.bad)}>
                         Cancel order…
                       </button>
                     )}
@@ -647,8 +636,9 @@ export default function AdminOrderDetailPage({ user }: Props) {
                         disabled={actionBusy}
                         onClick={doDelete}
                         title="Permanently delete this order from the portal"
-                        style={{ ...actionBtn(false, actionBusy, T.red), marginTop: 6, borderTop: `1px solid ${T.border}` }}>
-                        🗑 Delete order
+                        className="al-press al-focus"
+                        style={{ ...actionBtn(false, actionBusy, A.bad), marginTop: 6 }}>
+                        Delete order
                       </button>
                     )}
                   </Card>
@@ -678,18 +668,20 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       onBlur={saveNotes}
                       placeholder="Staff-only notes about this order. Saves on blur."
                       rows={5}
+                      className="al-focus"
                       style={{
                         width:'100%',boxSizing:'border-box',
-                        background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-                        borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
-                        resize:'vertical',fontFamily:'inherit',
+                        background:T.bg3,border:'1px solid transparent',color:T.text,
+                        borderRadius:RADIUS.sm,padding:'10px 12px',fontSize:13.5,outline:'none',
+                        resize:'vertical',fontFamily:'inherit',lineHeight:1.5,
                       }}/>
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginTop:6}}>
-                      <span style={{fontSize:10,color: notesError ? T.red : T.text3}}>
+                      <span style={{fontSize:12,color: notesError ? A.bad : T.text3}}>
                         {notesError || (notesBusy ? 'Saving…' : notesDraft !== (data.internal_notes || '') ? 'Unsaved changes' : 'Saved')}
                       </span>
                       <button onClick={saveNotes} disabled={notesBusy || notesDraft === (data.internal_notes || '')}
-                        style={{padding:'6px 14px',borderRadius:6,border:`1px solid ${notesDraft !== (data.internal_notes || '') ? T.blue : T.border2}`,background: notesDraft !== (data.internal_notes || '') && !notesBusy ? T.blue : 'transparent',color: notesDraft !== (data.internal_notes || '') && !notesBusy ? '#fff' : T.text3,fontSize:12,fontWeight:600,fontFamily:'inherit',cursor: notesBusy || notesDraft === (data.internal_notes || '') ? 'default' : 'pointer'}}>
+                        className="al-press al-focus al-primary"
+                        style={{padding:'7px 16px',borderRadius:RADIUS.pill,border:'1px solid transparent',background: notesDraft !== (data.internal_notes || '') && !notesBusy ? A.accent : T.bg3,color: notesDraft !== (data.internal_notes || '') && !notesBusy ? '#fff' : T.text3,fontSize:12.5,fontWeight:600,fontFamily:'inherit',minHeight:34,cursor: notesBusy || notesDraft === (data.internal_notes || '') ? 'default' : 'pointer'}}>
                         {notesBusy ? 'Saving…' : 'Save notes'}
                       </button>
                     </div>
@@ -715,11 +707,8 @@ export default function AdminOrderDetailPage({ user }: Props) {
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{
-      background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
-      padding:'16px 22px',
-    }}>
-      <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:12,fontWeight:500}}>{title}</div>
+    <section style={{ ...cardStyle(true), padding:'16px 22px' }}>
+      <div style={{fontSize:13,fontWeight:650,color:T.text2,marginBottom:12}}>{title}</div>
       {children}
     </section>
   )
@@ -732,7 +721,7 @@ function KV({ label, value, mono, small, valueColor }: { label: string; value: s
       <span style={{
         color: valueColor || T.text2,
         fontFamily: mono ? 'monospace' : 'inherit',
-        fontSize: small ? 10 : 12,
+        fontSize: small ? 12 : 12.5,
         textAlign:'right',
         wordBreak: mono ? 'break-all' : 'normal',
       }}>{value}</span>
@@ -757,19 +746,7 @@ function Row({ label, value, bold, muted, valueColor }: { label: string; value: 
 }
 
 function StatusPill({ status }: { status: string }) {
-  const color = STATUS_COLOR[status] || T.text3
-  const label = STATUS_LABEL[status] || status
-  return (
-    <span style={{
-      display:'inline-flex',alignItems:'center',gap:6,
-      padding:'3px 10px',borderRadius:5,
-      background:`${color}15`,border:`1px solid ${color}40`,color,
-      fontSize:12,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em',
-    }}>
-      <span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:color}}/>
-      {label}
-    </span>
-  )
+  return <Pill color={orderStatusColor(status)}>{orderStatusLabel(status)}</Pill>
 }
 
 function Timeline({ events }: { events: OrderEvent[] }) {
@@ -778,14 +755,14 @@ function Timeline({ events }: { events: OrderEvent[] }) {
     <div style={{display:'flex',flexDirection:'column',gap:10}}>
       {events.map((ev, i) => {
         const isStatus = ev.event_type === 'status_changed'
-        const color    = isStatus && ev.to_status ? (STATUS_COLOR[ev.to_status] || T.text3) :
-                         ev.event_type === 'myob_credit_note_written' ? T.purple :
-                         ev.event_type === 'myob_credit_note_failed'  ? T.red :
-                         ev.event_type === 'refund_failed'            ? T.red :
-                         ev.event_type.startsWith('refund') ? T.purple :
+        const color    = isStatus && ev.to_status ? orderStatusColor(ev.to_status) :
+                         ev.event_type === 'myob_credit_note_written' ? A.bad :
+                         ev.event_type === 'myob_credit_note_failed'  ? A.bad :
+                         ev.event_type === 'refund_failed'            ? A.bad :
+                         ev.event_type.startsWith('refund') ? A.bad :
                          ev.event_type === 'admin_edited' ? T.text3 :
-                         ev.event_type === 'checkout_started' ? T.amber :
-                         T.blue
+                         ev.event_type === 'checkout_started' ? A.warn :
+                         A.accent
         return (
           <div key={ev.id} style={{display:'flex',gap:10,fontSize:12}}>
             <div style={{
@@ -796,7 +773,7 @@ function Timeline({ events }: { events: OrderEvent[] }) {
               <div style={{color:T.text,fontWeight:500}}>
                 {labelForEvent(ev)}
               </div>
-              <div style={{color:T.text3,fontSize:10,marginTop:2}}>
+              <div style={{color:T.text3,fontSize:12,marginTop:2}}>
                 {new Date(ev.created_at).toLocaleString('en-AU')}
                 {' · '}{ev.actor_name}
               </div>
@@ -804,7 +781,7 @@ function Timeline({ events }: { events: OrderEvent[] }) {
                 <div style={{color:T.text2,fontSize:12,marginTop:3,fontStyle:'italic',lineHeight:1.4}}>{ev.notes}</div>
               )}
               {ev.event_type === 'status_changed' && ev.metadata?.tracking_number && (
-                <div style={{color:T.text3,fontSize:10,marginTop:3,fontFamily:'monospace'}}>
+                <div style={{color:T.text3,fontSize:12,marginTop:3,fontFamily:'monospace'}}>
                   {ev.metadata.carrier && `${ev.metadata.carrier} · `}{ev.metadata.tracking_number}
                 </div>
               )}
@@ -843,10 +820,10 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
       <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:1000}}/>
       <div style={{
         position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',
-        background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:10,
+        background:T.bg2,border:`1px solid ${T.border}`,borderRadius:RADIUS.md,
         padding:20, width:'calc(100vw - 24px)', maxWidth:500, boxSizing:'border-box',
         maxHeight:'calc(100vh - 32px)', overflowY:'auto', zIndex:1001,
-        boxShadow:'0 20px 50px rgba(0,0,0,0.5)',
+        boxShadow:SHADOW.md,
       }}>
         {children}
       </div>
@@ -861,7 +838,13 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
 // When the order was placed on a live MachShip quote (machship_carrier_id
 // populated), the panel also shows:
 //   - "Book via MachShip" — calls /book-freight which creates the
-//     consignment, pulls the label, stores tracking + ETA on the order.
+//     consignment, pulls the label, stores tracking + ETA on the order. It
+//     leaves the consignment UNMANIFESTED: nothing reaches the carrier and no
+//     tax invoice is raised, so the order can be picked and packed first.
+//   - "Ship now" — the despatch step (Chris 2026-08-20). Manifests the
+//     consignment (which also books the carrier pickup), converts the MYOB
+//     order → tax invoice, receipts the payment, prints the invoice and emails
+//     the distributor. Bulk equivalent lives on the orders list.
 //   - "Refresh from MachShip" — calls /refresh-freight to re-fetch the
 //     current status + ETA. The 30-min cron does this automatically;
 //     the button is for when admin wants it RIGHT NOW.
@@ -877,10 +860,62 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   const isShipped       = !!order.shipped_at
   const hasLiveQuote    = !!order.machship_carrier_id && !!order.machship_carrier_service_id
   const hasConsignment  = !!order.machship_consignment_id
+  // Booking now leaves the consignment Unmanifested — nothing reaches the
+  // carrier and no tax invoice is raised until "Ship Now" (Chris 2026-08-20).
+  const isManifested    = !!order.machship_manifest_id || (order.freight_status || '').toLowerCase() === 'manifested'
+  const awaitingDespatch = hasConsignment && !isManifested && (order.freight_status || '').toLowerCase() !== 'consignment_missing'
+  const [shipNowBusy,  setShipNowBusy]  = useState(false)
   const [bookingBusy,  setBookingBusy]  = useState(false)
   const [refreshBusy,  setRefreshBusy]  = useState(false)
   const [pickBusy,     setPickBusy]     = useState(false)
   const [pickDone,     setPickDone]     = useState(false)
+  // Ship Now — manifests the consignment with MachShip (which also books the
+  // carrier pickup) and then converts the MYOB order to a tax invoice, receipts
+  // the payment, prints the A4 invoice and emails/pushes the distributor.
+  async function shipNow(acceptUnsettled = false) {
+    const ok = acceptUnsettled ? true : await confirmDialog({
+      title: 'Ship now?',
+      message: `This manifests consignment ${order.machship_consignment_number || order.machship_consignment_id} with the carrier (booking a pickup), raises the MYOB tax invoice and emails the distributor. It can't be undone from here.`,
+      confirmLabel: 'Ship now',
+    })
+    if (!ok) return
+    setShipNowBusy(true); setActionError(null)
+    try {
+      const r = await fetch('/api/b2b/admin/orders/ship-now', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [order.id], ...(acceptUnsettled ? { accept_unsettled: true } : {}) }),
+      })
+      const j = await r.json()
+      const first = Array.isArray(j?.results) ? j.results[0] : null
+      // BECS credit gate: the debit hasn't cleared. Offer the explicit admin
+      // approval rather than a dead end — the acceptance is logged on the order.
+      // (This gate used to sit on booking; it belongs here, where the goods
+      // actually leave and the tax invoice is raised.)
+      if (first?.becsUnsettled && !acceptUnsettled) {
+        setShipNowBusy(false)
+        if (await confirmDialog({
+          title: 'BECS payment hasn’t settled yet',
+          message: 'Funds take 2–3 business days to clear. Ship now anyway? This despatches on an unsettled direct debit and raises the tax invoice — admin accepts the credit risk (logged on the order).',
+          confirmLabel: 'Ship anyway',
+          danger: true,
+        })) {
+          return shipNow(true)
+        }
+        return
+      }
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      const one = first
+      if (one?.already) onFlash('Already manifested — nothing re-sent.')
+      else onFlash(one?.warning ? `Shipped, with a warning: ${one.warning}` : 'Shipped — manifested, invoiced and distributor notified.')
+      onReloaded()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+    } finally {
+      setShipNowBusy(false)
+    }
+  }
+
   async function printPickList() {
     setPickBusy(true)
     setActionError(null)
@@ -1013,7 +1048,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
     }
   }
 
-  async function bookViaMachShip(force = false, dispatchOverride?: string | null, acceptUnsettled = false) {
+  async function bookViaMachShip(force = false, dispatchOverride?: string | null) {
     if (bookingBusy) return
     if (hasConsignment && !force && !(await confirmDialog({ title: 'A consignment is already booked. Re-book?' }))) return
     // dispatchOverride: '' = collect ASAP (now), a value = scheduled (later);
@@ -1027,30 +1062,16 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
         body: JSON.stringify({
           ...(dispatch ? { dispatch_at: new Date(dispatch).toISOString() } : {}),
           pack_mode: packMode || 'auto',
-          ...(acceptUnsettled ? { accept_unsettled: true } : {}),
         }),
       })
       const j = await r.json()
       if (!r.ok) {
-        // BECS credit gate: the payment hasn't settled — offer the explicit
-        // admin approval instead of a dead end (Chris 2026-08-10). The
-        // acceptance is stamped on the order timeline server-side.
-        if (j?.detail?.becs_unsettled && !acceptUnsettled) {
-          setBookingBusy(false)
-          if (await confirmDialog({
-            title: 'BECS payment hasn’t settled yet',
-            message: 'Funds take 2–3 business days to clear. Book freight now anyway? This ships on an unsettled direct debit — admin accepts the credit risk (logged on the order).',
-            confirmLabel: 'Book anyway',
-            danger: true,
-          })) {
-            return bookViaMachShip(force, dispatchOverride, true)
-          }
-          return
-        }
         throw new Error(j.error || `HTTP ${r.status}`)
       }
-      if (j.label_warning) onFlash(`Booked, but label fetch warning: ${j.label_warning}`)
-      else                 onFlash(`Booked: ${j.consignment_number || j.consignment_id}`)
+      // Booking no longer despatches — it leaves the consignment Unmanifested so
+      // the order can be picked and packed. Say so, or staff will assume it's gone.
+      if (j.label_warning) onFlash(`Booked (not manifested), but label fetch warning: ${j.label_warning}`)
+      else                 onFlash(`Booked: ${j.consignment_number || j.consignment_id} — press “Ship now” once it's packed`)
       onReloaded()
     } catch (e: any) {
       setActionError(e?.message || String(e))
@@ -1088,58 +1109,70 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
     <Card title="Shipping">
       {(() => {
         const mb = (extra: React.CSSProperties = {}): React.CSSProperties => ({
-          borderRadius: 6, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
-          ...(isMobile ? { width: '100%', padding: '11px 14px', fontSize: 13, minHeight: 44 } : { padding: '5px 12px', fontSize: 11 }),
+          borderRadius: RADIUS.pill, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
+          border: '1px solid transparent', whiteSpace: 'nowrap',
+          ...(isMobile ? { width: '100%', padding: '11px 14px', fontSize: 13, minHeight: 44 } : { padding: '6px 13px', fontSize: 12.5, minHeight: 32 }),
           ...extra,
         })
         return (
           <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center' }}>
-              {isShipped ? (
-                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 3, background: `${T.teal}20`, color: T.teal, border: `1px solid ${T.teal}40` }}>
-                  ✓ Shipped {order.shipped_at ? fullDate(order.shipped_at) : ''}
-                </span>
+              {awaitingDespatch ? (
+                <Pill color={A.warn}>Awaiting despatch — not manifested</Pill>
+              ) : isShipped ? (
+                <Pill color={A.accent}>Shipped {order.shipped_at ? fullDate(order.shipped_at) : ''}</Pill>
               ) : (
-                <span style={{ fontSize: 11, color: T.text3 }}>Not shipped yet</span>
+                <span style={{ fontSize: 12.5, color: T.text3 }}>Not shipped yet</span>
               )}
             </div>
             {!isMobile && <span style={{ flex: 1 }}/>}
             {hasLiveQuote && !hasConsignment && (
               <button onClick={() => bookViaMachShip(false)} disabled={bookingBusy}
-                style={mb({ border: `1px solid ${T.teal}60`, background: `${T.teal}15`, color: T.teal, cursor: bookingBusy ? 'wait' : 'pointer' })}>
-                {bookingBusy ? 'Booking…' : '⚡ Book via MachShip'}
+                className="al-press al-focus"
+                style={mb({ background: alpha(A.accent, '15'), color: A.accent, cursor: bookingBusy ? 'wait' : 'pointer' })}>
+                {bookingBusy ? 'Booking…' : 'Book via MachShip'}
+              </button>
+            )}
+            {awaitingDespatch && (
+              <button onClick={() => shipNow()} disabled={shipNowBusy}
+                title="Manifests the consignment with MachShip (books the carrier pickup), raises the MYOB tax invoice, prints it and emails the distributor"
+                className="al-press al-focus"
+                style={mb({ background: A.accent, color: '#fff', cursor: shipNowBusy ? 'wait' : 'pointer' })}>
+                {shipNowBusy ? 'Shipping…' : 'Ship now'}
               </button>
             )}
             {hasConsignment && (
               <button onClick={refreshFromMachShip} disabled={refreshBusy}
-                style={mb({ border: `1px solid ${T.border2}`, background: 'transparent', color: T.blue, fontWeight: 500, cursor: refreshBusy ? 'wait' : 'pointer' })}>
-                {refreshBusy ? 'Refreshing…' : '↻ Refresh from MachShip'}
+                className="al-press al-focus al-ghost"
+                style={mb({ background: 'transparent', color: A.accent, cursor: refreshBusy ? 'wait' : 'pointer' })}>
+                {refreshBusy ? 'Refreshing…' : 'Refresh from MachShip'}
               </button>
             )}
-            <button onClick={onEdit} style={mb({ border: `1px solid ${T.border2}`, background: 'transparent', color: T.blue, fontWeight: 500 })}>
-              {isShipped ? 'Edit shipping' : '+ Manual book'}
+            <button onClick={onEdit} className="al-press al-focus al-ghost" style={mb({ background: 'transparent', color: A.accent })}>
+              {isShipped ? 'Edit shipping' : 'Manual book'}
             </button>
             {order.label_pdf_path && (
-              <button onClick={openLabel} style={mb({ border: `1px solid ${T.teal}40`, background: 'transparent', color: T.teal, fontWeight: 500 })}>
-                🖨 Print label
+              <button onClick={openLabel} className="al-press al-focus al-ghost" style={mb({ background: 'transparent', color: A.accent })}>
+                Print label
               </button>
             )}
             <button onClick={printPickList} disabled={pickBusy}
               title="Prints the box-by-box pick list on the upstairs printer (auto-prints on payment; this is a reprint)"
-              style={mb({ border: `1px solid ${pickDone ? T.green : T.border2}`, background: 'transparent', color: pickDone ? T.green : T.blue, fontWeight: 500, cursor: pickBusy ? 'wait' : 'pointer' })}>
-              {pickDone ? '✓ Pick list queued' : pickBusy ? 'Queuing…' : '📋 Print pick list'}
+              className="al-press al-focus al-ghost"
+              style={mb({ background: 'transparent', color: pickDone ? A.good : A.accent, cursor: pickBusy ? 'wait' : 'pointer' })}>
+              {pickDone ? 'Pick list queued' : pickBusy ? 'Queuing…' : 'Print pick list'}
             </button>
             {unbilledDropship.length > 0 && (
               <button onClick={receiveDropship} disabled={receiveBusy}
                 title="Supplier confirmed the drop-ship order — converts the PO to a bill in MYOB (receives the stock into the supplier's DS location), then converts this order to a tax invoice and receipts the payment"
-                style={mb({ border: `1px solid ${T.amber}60`, background: `${T.amber}15`, color: T.amber, cursor: receiveBusy ? 'wait' : 'pointer' })}>
-                {receiveBusy ? 'Billing PO…' : '📦 Supplier confirmed — bill PO + invoice'}
+                className="al-press al-focus"
+                style={mb({ background: alpha(A.warn, '15'), color: A.warn, cursor: receiveBusy ? 'wait' : 'pointer' })}>
+                {receiveBusy ? 'Billing PO…' : 'Supplier confirmed — bill PO + invoice'}
               </button>
             )}
             {dropshipPos.length > 0 && unbilledDropship.length === 0 && (
-              <span title={dropshipPos.map(p => `${p.supplier_name}: bill ${p.myob_bill_number || p.myob_bill_uid}`).join(' · ')}
-                style={{ fontSize: 11, padding: '2px 8px', borderRadius: 3, background: `${T.green}15`, color: T.green, border: `1px solid ${T.green}40`, whiteSpace: 'nowrap' }}>
-                ✓ PO billed{lastBilledAt ? ` ${fullDate(lastBilledAt)}` : ''}
+              <span title={dropshipPos.map(p => `${p.supplier_name}: bill ${p.myob_bill_number || p.myob_bill_uid}`).join(' · ')}>
+                <Pill color={A.good}>PO billed{lastBilledAt ? ` ${fullDate(lastBilledAt)}` : ''}</Pill>
               </span>
             )}
           </div>
@@ -1149,14 +1182,15 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
       {/* Pack mode — override the cartonizer for this order before booking. */}
       {hasLiveQuote && !hasConsignment && (
         <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
-          <span style={{fontSize:11, color:T.text3, whiteSpace:'nowrap'}}>Pack as</span>
+          <span style={{fontSize:12, color:T.text3, whiteSpace:'nowrap'}}>Pack as</span>
           <select value={packMode} onChange={e => setPackMode(e.target.value)}
-            style={{flex: isMobile ? 1 : undefined, minWidth: isMobile ? 0 : undefined, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding: isMobile ? '9px 10px' : '5px 8px', fontSize: isMobile ? 16 : 12, outline:'none', fontFamily:'inherit'}}>
+            className="al-focus"
+            style={{flex: isMobile ? 1 : undefined, minWidth: isMobile ? 0 : undefined, background:T.bg3, border:'1px solid transparent', color:T.text, borderRadius:RADIUS.sm, padding: isMobile ? '9px 10px' : '6px 9px', fontSize: isMobile ? 16 : 12.5, outline:'none', fontFamily:'inherit'}}>
             <option value="auto">Auto (weight/volume)</option>
             <option value="cartons">Cartons</option>
             <option value="pallet">Pallet</option>
           </select>
-          {!isMobile && <span style={{fontSize:10, color:T.text3}}>used when you book below</span>}
+          {!isMobile && <span style={{fontSize:12, color:T.text3}}>used when you book below</span>}
         </div>
       )}
 
@@ -1165,15 +1199,16 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
       {hasLiveQuote && !hasConsignment && (
         <div style={{marginBottom:10}}>
           <button onClick={() => { const v = !planOpen; setPlanOpen(v); if (v && planUnits === null) loadPlan() }}
-            style={{background:'none', border:'none', padding:0, color:T.blue, fontSize:12, cursor:'pointer', fontFamily:'inherit'}}>
+            className="al-press al-focus"
+            style={{background:'none', border:'none', padding:0, color:A.accent, fontSize:12.5, fontWeight:550, cursor:'pointer', fontFamily:'inherit'}}>
             {planOpen ? '▾' : '▸'} Combine consignments{planOverridden ? ' — manual plan set' : ''}
           </button>
           {planOpen && (
-            <div style={{marginTop:8, border:`1px solid ${T.border2}`, borderRadius:6, padding:10, background:T.bg3}}>
+            <div style={{marginTop:8, borderRadius:RADIUS.sm, padding:'10px 12px', background:T.bg3}}>
               {planBusy && planUnits === null && <div style={{fontSize:12, color:T.text3}}>Loading pack plan…</div>}
               {planUnits !== null && (
                 <>
-                  <div style={{fontSize:11, color:T.text3, marginBottom:8, lineHeight:1.5}}>
+                  <div style={{fontSize:12, color:T.text3, marginBottom:8, lineHeight:1.5}}>
                     {planOverridden
                       ? 'Manual plan — freight books and the pick list print exactly these consignments.'
                       : 'Automatic plan (what the cartonizer will book). Tick the consignments to merge into one box — e.g. oil + sump together to save a consignment.'}
@@ -1188,12 +1223,12 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                       <label key={i} style={{display:'flex', alignItems:'flex-start', gap:8, padding:'6px 4px', borderTop: i > 0 ? `1px dashed ${T.border}` : 'none', cursor: selectable ? 'pointer' : 'default', opacity: selectable ? 1 : 0.6}}>
                         <input type="checkbox" disabled={!selectable} checked={checked}
                           onChange={() => setPlanSel(s => checked ? s.filter(x => x !== i) : [...s, i])}
-                          style={{marginTop:2, accentColor:T.teal}}/>
+                          style={{marginTop:2, accentColor:A.accent}}/>
                         <span style={{fontSize:12, lineHeight:1.5}}>
                           <span style={{fontWeight:600}}>Consignment {label}</span>
                           <span style={{color:T.text3}}> — {u.itemType === 'Pallet' ? 'Pallet' : (u.ownPackaging ? 'own packaging' : u.name)} · {Math.round(u.length_mm)}×{Math.round(u.width_mm)}×{Math.round(u.height_mm)} mm · {((u.weight_g * qty) / 1000).toFixed(1)} kg</span>
                           {(u.contents || []).length > 0 && (
-                            <span style={{display:'block', fontSize:11, color:T.text2}}>
+                            <span style={{display:'block', fontSize:12, color:T.text2}}>
                               {(u.contents || []).map(cl => `${cl.qty}× ${cl.name}`).join(' · ')}
                             </span>
                           )}
@@ -1202,27 +1237,30 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                     )
                   }) })()}
                   <div style={{display:'flex', alignItems:'center', gap:8, marginTop:10, flexWrap:'wrap'}}>
-                    <span style={{fontSize:11, color:T.text3}}>into</span>
+                    <span style={{fontSize:12, color:T.text3}}>into</span>
                     <select value={planBox} onChange={e => setPlanBox(e.target.value)}
-                      style={{background:T.bg2, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding:'5px 8px', fontSize:12, outline:'none', fontFamily:'inherit'}}>
+                      className="al-focus"
+                      style={{background:T.bg2, border:'1px solid transparent', color:T.text, borderRadius:RADIUS.sm, padding:'6px 9px', fontSize:12.5, outline:'none', fontFamily:'inherit'}}>
                       {planBoxes.map(b => (
                         <option key={b.name} value={b.name}>{b.name} ({Math.round(b.length_mm)}×{Math.round(b.width_mm)}×{Math.round(b.height_mm)} mm, max {(b.max_weight_g / 1000).toFixed(0)} kg)</option>
                       ))}
                       <option value="">One parcel, own packaging (no standard box)</option>
                     </select>
                     <button onClick={combinePlan} disabled={planBusy || planSel.length < 2}
-                      style={{border:'none', borderRadius:5, padding:'6px 12px', fontSize:12, fontWeight:600, fontFamily:'inherit', background: planSel.length >= 2 && !planBusy ? T.teal : T.bg4, color: planSel.length >= 2 && !planBusy ? '#08110d' : T.text3, cursor: planSel.length >= 2 && !planBusy ? 'pointer' : 'not-allowed'}}>
+                      className="al-press al-focus al-primary"
+                      style={{border:'1px solid transparent', borderRadius:RADIUS.pill, padding:'7px 14px', fontSize:12.5, fontWeight:600, fontFamily:'inherit', minHeight:32, background: planSel.length >= 2 && !planBusy ? A.accent : T.bg4, color: planSel.length >= 2 && !planBusy ? '#fff' : T.text3, cursor: planSel.length >= 2 && !planBusy ? 'pointer' : 'not-allowed'}}>
                       {planBusy ? 'Saving…' : `Combine${planSel.length >= 2 ? ` ${planSel.length}` : ''}`}
                     </button>
                     {planOverridden && (
                       <button onClick={resetPlan} disabled={planBusy}
-                        style={{background:'none', border:'none', color:T.text3, fontSize:11, cursor:'pointer', fontFamily:'inherit', textDecoration:'underline'}}>
+                        className="al-press al-focus"
+                        style={{background:'none', border:'none', color:T.text3, fontSize:12, cursor:'pointer', fontFamily:'inherit', textDecoration:'underline'}}>
                         Reset to automatic
                       </button>
                     )}
                   </div>
                   {planOverridden && (
-                    <div style={{fontSize:10, color:T.amber, marginTop:8}}>Reprint the pick list after changing the plan so the warehouse packs it the same way.</div>
+                    <div style={{fontSize:12, color:A.warn, marginTop:8}}>Reprint the pick list after changing the plan so the warehouse packs it the same way.</div>
                   )}
                 </>
               )}
@@ -1235,22 +1273,23 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
           MachShip's desired despatch so the carrier collects then. */}
       {hasLiveQuote && !hasConsignment && (
         <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
-          <span style={{fontSize:11, color:T.text3, whiteSpace:'nowrap'}}>Collection time</span>
+          <span style={{fontSize:12, color:T.text3, whiteSpace:'nowrap'}}>Collection time</span>
           <input
             type="datetime-local"
             value={dispatchAt}
             min={localNow()}
             onChange={e => setDispatchAt(e.target.value)}
-            style={{flex:1, minWidth: isMobile ? 0 : 160, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding: isMobile ? '9px 10px' : '5px 8px', fontSize: isMobile ? 16 : 12, outline:'none', fontFamily:'inherit', colorScheme:'dark'}}
+            className="al-focus"
+            style={{flex:1, minWidth: isMobile ? 0 : 160, background:T.bg3, border:'1px solid transparent', color:T.text, borderRadius:RADIUS.sm, padding: isMobile ? '9px 10px' : '6px 9px', fontSize: isMobile ? 16 : 12.5, outline:'none', fontFamily:'inherit', colorScheme:'dark'}}
           />
           {dispatchAt
-            ? <button onClick={() => setDispatchAt('')} style={{background:'none', border:'none', color:T.text3, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>clear (ASAP)</button>
-            : <span style={{fontSize:10, color:T.text3}}>blank = ASAP</span>}
+            ? <button onClick={() => setDispatchAt('')} className="al-press al-focus" style={{background:'none', border:'none', color:T.text3, fontSize:12, cursor:'pointer', fontFamily:'inherit'}}>clear (ASAP)</button>
+            : <span style={{fontSize:12, color:T.text3}}>blank = ASAP</span>}
         </div>
       )}
 
       {actionError && (
-        <div style={{fontSize:11, color:T.red, marginBottom:10, lineHeight:1.5}}>{actionError}</div>
+        <div style={{fontSize:12.5, color:A.bad, marginBottom:10, lineHeight:1.5}}>{actionError}</div>
       )}
 
       <KV label="Method"   value={order.freight_service_label || order.freight_method_label || '—'}/>
@@ -1258,8 +1297,8 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
       <KV label="Tracking" value={order.tracking_number || '—'} mono/>
       {effectiveTrackingUrl && order.tracking_number && (
         <div style={{display:'grid', gridTemplateColumns:'90px 1fr', gap:'4px 12px', alignItems:'baseline'}}>
-          <span style={{fontSize:11, color:T.text3}}>Track</span>
-          <a href={effectiveTrackingUrl} target="_blank" rel="noopener noreferrer" style={{color:T.blue, fontSize:13, textDecoration:'none'}}>Open tracking page →</a>
+          <span style={{fontSize:12, color:T.text3}}>Track</span>
+          <a href={effectiveTrackingUrl} target="_blank" rel="noopener noreferrer" style={{color:A.accent, fontSize:13, textDecoration:'none'}}>Open tracking page →</a>
         </div>
       )}
       <KV label="Cost ex"  value={order.freight_cost_ex_gst != null ? `$${money(order.freight_cost_ex_gst)}` : '—'} mono/>
@@ -1286,11 +1325,13 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
           boxShadow: '0 -4px 16px rgba(0,0,0,0.4)', display: 'flex', gap: 10,
         }}>
           <button onClick={() => bookViaMachShip(false, '')} disabled={bookingBusy}
-            style={{ flex: 2, minHeight: 50, borderRadius: 12, border: 'none', background: bookingBusy ? T.bg4 : T.teal, color: bookingBusy ? T.text3 : '#08110d', fontWeight: 700, fontSize: 15.5, cursor: bookingBusy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
-            {bookingBusy ? 'Booking…' : '⚡ Book now'}
+            className="al-press al-focus al-primary"
+            style={{ flex: 2, minHeight: 50, borderRadius: RADIUS.pill, border: 'none', background: bookingBusy ? T.bg4 : A.accent, color: bookingBusy ? T.text3 : '#fff', fontWeight: 700, fontSize: 15.5, cursor: bookingBusy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+            {bookingBusy ? 'Booking…' : 'Book now'}
           </button>
           <button onClick={() => { setLaterTime(''); setLaterOpen(true) }} disabled={bookingBusy}
-            style={{ flex: 1, minHeight: 50, borderRadius: 12, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text, fontWeight: 600, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>
+            className="al-press al-focus"
+            style={{ flex: 1, minHeight: 50, borderRadius: RADIUS.pill, border: 'none', background: T.bg3, color: T.text, fontWeight: 600, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>
             Later…
           </button>
         </div>
@@ -1306,22 +1347,25 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
             padding: `18px 16px calc(18px + env(safe-area-inset-bottom))`, boxShadow: '0 -10px 40px rgba(0,0,0,0.5)',
           }}>
             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Schedule collection</div>
-            <div style={{ fontSize: 12, color: T.text3, marginBottom: 14 }}>Books the consignment now; the carrier collects at the time you choose.</div>
-            <label style={{ fontSize: 11, color: T.text3, display: 'block', marginBottom: 4 }}>Collection time</label>
+            <div style={{ fontSize: 12.5, color: T.text3, marginBottom: 14 }}>Books the consignment now; the carrier collects at the time you choose.</div>
+            <label style={{ fontSize: 12, fontWeight: 650, color: T.text2, display: 'block', marginBottom: 5 }}>Collection time</label>
             <input type="datetime-local" value={laterTime} min={localNow()} onChange={e => setLaterTime(e.target.value)}
-              style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 8, padding: '11px 12px', fontSize: 16, outline: 'none', fontFamily: 'inherit', colorScheme: 'dark', marginBottom: 12 }}/>
-            <label style={{ fontSize: 11, color: T.text3, display: 'block', marginBottom: 4 }}>Pack as</label>
+              className="al-focus"
+              style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: '1px solid transparent', color: T.text, borderRadius: RADIUS.sm, padding: '11px 13px', fontSize: 16, outline: 'none', fontFamily: 'inherit', colorScheme: 'dark', marginBottom: 12, minHeight: 44 }}/>
+            <label style={{ fontSize: 12, fontWeight: 650, color: T.text2, display: 'block', marginBottom: 5 }}>Pack as</label>
             <select value={packMode} onChange={e => setPackMode(e.target.value)}
-              style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 8, padding: '11px 12px', fontSize: 16, outline: 'none', fontFamily: 'inherit', marginBottom: 16 }}>
+              className="al-focus"
+              style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: '1px solid transparent', color: T.text, borderRadius: RADIUS.sm, padding: '11px 13px', fontSize: 16, outline: 'none', fontFamily: 'inherit', marginBottom: 16, minHeight: 44 }}>
               <option value="auto">Auto (weight/volume)</option>
               <option value="cartons">Cartons</option>
               <option value="pallet">Pallet</option>
             </select>
             <button disabled={!laterTime || bookingBusy} onClick={() => { setLaterOpen(false); bookViaMachShip(false, laterTime) }}
-              style={{ width: '100%', minHeight: 50, borderRadius: 12, border: 'none', background: (!laterTime || bookingBusy) ? T.bg4 : T.teal, color: (!laterTime || bookingBusy) ? T.text3 : '#08110d', fontWeight: 700, fontSize: 15.5, cursor: (!laterTime || bookingBusy) ? 'not-allowed' : 'pointer', fontFamily: 'inherit', marginBottom: 8 }}>
+              className="al-press al-focus al-primary"
+              style={{ width: '100%', minHeight: 50, borderRadius: RADIUS.pill, border: 'none', background: (!laterTime || bookingBusy) ? T.bg4 : A.accent, color: (!laterTime || bookingBusy) ? T.text3 : '#fff', fontWeight: 700, fontSize: 15.5, cursor: (!laterTime || bookingBusy) ? 'not-allowed' : 'pointer', fontFamily: 'inherit', marginBottom: 8 }}>
               Book for this time
             </button>
-            <button onClick={() => setLaterOpen(false)} style={{ width: '100%', background: 'none', border: 'none', color: T.text3, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', padding: 6 }}>Cancel</button>
+            <button onClick={() => setLaterOpen(false)} className="al-press al-focus" style={{ width: '100%', background: 'none', border: 'none', color: T.text3, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', padding: 6 }}>Cancel</button>
           </div>
         </>
       )}
@@ -1398,7 +1442,7 @@ function DropShipCard({ order, onReloaded, onFlash }: {
       <div style={{fontSize:12, color:T.text3, lineHeight:1.5, marginBottom:10}}>
         This order has drop-ship items. Raising a PO creates one MYOB purchase order per supplier, shipped direct to the distributor.
       </div>
-      {err && <div style={{fontSize:11, color:T.red, marginBottom:10}}>{err}</div>}
+      {err && <div style={{fontSize:12.5, color:A.bad, marginBottom:10, lineHeight:1.5}}>{err}</div>}
       {raised.length > 0 ? (
         <div style={{display:'flex', flexDirection:'column', gap:6, marginBottom:10}}>
           {raised.map((po, i) => (
@@ -1407,15 +1451,16 @@ function DropShipCard({ order, onReloaded, onFlash }: {
               <span style={{flex:1}}/>
               <span style={{fontFamily:'monospace', color:T.text2}}>{po.myob_po_number || po.myob_po_uid?.slice(0, 8) || 'PO'}</span>
               <span style={{color:T.text3}}>{po.line_count} line{po.line_count === 1 ? '' : 's'}</span>
-              {po.email_status === 'sent'    && <span title={po.emailed_to || ''} style={{color:T.green}}>✉ emailed</span>}
-              {po.email_status === 'no_email'&& <span title="No email on the MYOB supplier card" style={{color:T.amber}}>no email</span>}
-              {po.email_status === 'failed'  && <span style={{color:T.red}}>✉ failed</span>}
+              {po.email_status === 'sent'    && <span title={po.emailed_to || ''} style={{color:A.good}}>emailed</span>}
+              {po.email_status === 'no_email'&& <span title="No email on the MYOB supplier card" style={{color:A.warn}}>no email</span>}
+              {po.email_status === 'failed'  && <span style={{color:A.bad}}>email failed</span>}
               <button
                 onClick={() => resend(po.supplier_uid)}
                 disabled={resendingUid === po.supplier_uid}
                 title="Re-send the PO email to this supplier"
-                style={{background:'none', border:`1px solid ${T.border2}`, color:T.text2, borderRadius:5, padding:'2px 8px', fontSize:10.5, cursor: resendingUid === po.supplier_uid ? 'wait' : 'pointer', fontFamily:'inherit'}}>
-                {resendingUid === po.supplier_uid ? 'Sending…' : '↻ Re-send'}
+                className="al-press al-focus al-ghost"
+                style={{background:'none', border:'1px solid transparent', color:T.text2, borderRadius:RADIUS.pill, padding:'3px 10px', fontSize:12, fontWeight:600, cursor: resendingUid === po.supplier_uid ? 'wait' : 'pointer', fontFamily:'inherit'}}>
+                {resendingUid === po.supplier_uid ? 'Sending…' : 'Re-send'}
               </button>
             </div>
           ))}
@@ -1426,8 +1471,9 @@ function DropShipCard({ order, onReloaded, onFlash }: {
       <button
         onClick={() => raise(alreadyRaised)}
         disabled={busy}
-        style={{padding:'6px 12px', borderRadius:5, border:`1px solid ${T.teal}60`, background:`${T.teal}15`, color:T.teal, fontSize:11, cursor: busy ? 'wait' : 'pointer', fontFamily:'inherit', fontWeight:600}}>
-        {busy ? 'Raising…' : alreadyRaised ? '↻ Re-raise drop-ship PO' : '⚡ Raise drop-ship PO'}
+        className="al-press al-focus"
+        style={{padding:'7px 14px', borderRadius:RADIUS.pill, border:'1px solid transparent', background:alpha(A.accent,'15'), color:A.accent, fontSize:12.5, minHeight:32, cursor: busy ? 'wait' : 'pointer', fontFamily:'inherit', fontWeight:600}}>
+        {busy ? 'Raising…' : alreadyRaised ? 'Re-raise drop-ship PO' : 'Raise drop-ship PO'}
       </button>
     </Card>
   )
@@ -1493,17 +1539,17 @@ function ShipModal({ order, busy, onClose, onConfirm }: {
       <Field label="Shipping label (optional)" hint="PDF or image — saved to the order so it can be re-printed">
         <div style={{display:'flex', alignItems:'center', gap:8}}>
           <input type="file" accept="application/pdf,image/png,image/jpeg" onChange={e => onLabelPick(e.target.files?.[0] || null)}
-            style={{flex:1, fontSize:12, color:T.text2}}/>
-          {labelName && <span style={{fontSize:11, color:T.text3}}>{labelName}</span>}
+            style={{flex:1, fontSize:12.5, color:T.text2}}/>
+          {labelName && <span style={{fontSize:12, color:T.text3}}>{labelName}</span>}
         </div>
-        {labelErr && <div style={{marginTop:4, fontSize:11, color:T.red}}>{labelErr}</div>}
+        {labelErr && <div style={{marginTop:4, fontSize:12, color:A.bad}}>{labelErr}</div>}
         {order.label_pdf_path && !labelB64 && (
-          <div style={{marginTop:4, fontSize:11, color:T.text3}}>A label is already attached. Pick a new file to replace it.</div>
+          <div style={{marginTop:4, fontSize:12, color:T.text3}}>A label is already attached. Pick a new file to replace it.</div>
         )}
       </Field>
 
       <ModalButtons>
-        <button onClick={onClose} disabled={busy} style={modalBtnSecondary()}>Cancel</button>
+        <button onClick={onClose} disabled={busy} className="al-press al-focus" style={modalBtnSecondary()}>Cancel</button>
         <button
           onClick={() => onConfirm({
             carrier: carrier.trim(),
@@ -1513,7 +1559,7 @@ function ShipModal({ order, busy, onClose, onConfirm }: {
             label_pdf_base64: labelB64 || undefined,
             label_filename: labelName || undefined,
           })}
-          disabled={!ok || busy} style={modalBtnPrimary(ok && !busy, T.teal)}>
+          disabled={!ok || busy} className="al-press al-focus al-primary" style={modalBtnPrimary(ok && !busy, A.accent)}>
           {busy ? 'Saving…' : order.shipped_at ? 'Save shipping' : 'Mark as shipped'}
         </button>
       </ModalButtons>
@@ -1554,15 +1600,16 @@ function RefundModal({ order, busy, onClose, onConfirm }: { order: OrderDetail; 
         Refundable: <strong style={{color:T.text}}>${money(remaining)}</strong> (paid: ${money(order.total_inc)} · already refunded: ${money(Number(order.refunded_total || 0))})
       </p>
 
-      <div style={{display:'flex',gap:8,marginBottom:14}}>
-        <button onClick={() => setMode('full')}    style={modeBtn(mode === 'full',    T.purple)}>Full refund</button>
-        <button onClick={() => setMode('items')}   style={modeBtn(mode === 'items',   T.purple)}>Items</button>
-        <button onClick={() => setMode('partial')} style={modeBtn(mode === 'partial', T.purple)}>Partial</button>
+      {/* Seg-style mode picker */}
+      <div style={{display:'flex',background:T.bg3,borderRadius:RADIUS.pill,padding:3,marginBottom:14}}>
+        <button onClick={() => setMode('full')}    className="al-press al-focus" style={modeBtn(mode === 'full',    A.bad)}>Full refund</button>
+        <button onClick={() => setMode('items')}   className="al-press al-focus" style={modeBtn(mode === 'items',   A.bad)}>Items</button>
+        <button onClick={() => setMode('partial')} className="al-press al-focus" style={modeBtn(mode === 'partial', A.bad)}>Partial</button>
       </div>
 
       {mode === 'items' && (
         <div style={{marginBottom:14}}>
-          <div style={{border:`1px solid ${T.border2}`,borderRadius:6,maxHeight:280,overflowY:'auto'}}>
+          <div style={{border:`1px solid ${T.border}`,borderRadius:RADIUS.sm,maxHeight:280,overflowY:'auto'}}>
             {order.lines.map((ln, i) => {
               const maxQty = ln.qty - Number(ln.refunded_qty || 0)
               const done = maxQty <= 0
@@ -1576,7 +1623,7 @@ function RefundModal({ order, busy, onClose, onConfirm }: { order: OrderDetail; 
                     style={{cursor: done ? 'default' : 'pointer',flexShrink:0}}/>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:13,color:T.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ln.name}</div>
-                    <div style={{fontSize:10,color:T.text3,fontFamily:'monospace'}}>
+                    <div style={{fontSize:12,color:T.text3,fontFamily:'monospace'}}>
                       {ln.sku}
                       {done ? ' · Refunded' : Number(ln.refunded_qty || 0) > 0 ? ` · refundable ${maxQty} of ${ln.qty}` : ''}
                     </div>
@@ -1596,10 +1643,10 @@ function RefundModal({ order, busy, onClose, onConfirm }: { order: OrderDetail; 
             })}
             <div style={{display:'flex',justifyContent:'space-between',gap:10,padding:'9px 10px',borderTop:`1px solid ${T.border2}`,fontSize:13}}>
               <span style={{color:T.text2}}>Refund total ({selCount} {selCount === 1 ? 'line' : 'lines'})</span>
-              <strong style={{fontFamily:'monospace',color: itemsTotal > remaining + 0.005 ? T.red : T.text}}>${money(itemsTotal)}</strong>
+              <strong style={{fontFamily:'monospace',color: itemsTotal > remaining + 0.005 ? A.bad : T.text}}>${money(itemsTotal)}</strong>
             </div>
           </div>
-          <div style={{fontSize:10,color:T.text3,marginTop:6}}>
+          <div style={{fontSize:12,color:T.text3,marginTop:6}}>
             Freight and card surcharge aren't part of item refunds — use Partial for those.
           </div>
         </div>
@@ -1625,14 +1672,14 @@ function RefundModal({ order, busy, onClose, onConfirm }: { order: OrderDetail; 
       </Field>
 
       <ModalButtons>
-        <button onClick={onClose} disabled={busy} style={modalBtnSecondary()}>Cancel</button>
+        <button onClick={onClose} disabled={busy} className="al-press al-focus" style={modalBtnSecondary()}>Cancel</button>
         <button onClick={() => onConfirm(
             mode === 'full' ? null : finalAmount,
             reason,
             notes || undefined,
             mode === 'items' ? Object.entries(sel).map(([line_id, qty]) => ({ line_id, qty })) : undefined,
           )}
-          disabled={!valid || busy} style={modalBtnPrimary(valid && !busy, T.purple)}>
+          disabled={!valid || busy} className="al-press al-focus al-primary" style={modalBtnPrimary(valid && !busy, A.bad)}>
           {busy ? 'Issuing…' : `Refund $${money(finalAmount)}`}
         </button>
       </ModalButtons>
@@ -1656,7 +1703,7 @@ function CancelModal({ order, busy, canRefund, onClose, onConfirm }: { order: Or
       </p>
 
       {isPaid && canRefund && (
-        <label style={{display:'flex',gap:10,padding:12,borderRadius:6,border:`1px solid ${alsoRefund ? T.purple : T.border2}`,background:alsoRefund ? `${T.purple}10` : 'transparent',cursor:'pointer',marginBottom:14}}>
+        <label style={{display:'flex',gap:10,padding:12,borderRadius:RADIUS.sm,border:`1px solid ${alsoRefund ? A.bad : T.border2}`,background:alsoRefund ? alpha(A.bad,'10') : 'transparent',cursor:'pointer',marginBottom:14}}>
           <input type="checkbox" checked={alsoRefund} onChange={e => setAlsoRefund(e.target.checked)} style={{marginTop:2}}/>
           <span style={{fontSize:13,color:T.text2,lineHeight:1.5}}>
             Also refund the remaining <strong style={{color:T.text}}>${money(remaining)}</strong> via Stripe.
@@ -1665,8 +1712,10 @@ function CancelModal({ order, busy, canRefund, onClose, onConfirm }: { order: Or
       )}
 
       {isPaid && !canRefund && (
-        <div style={{padding:10,borderRadius:6,background:`${T.amber}15`,border:`1px solid ${T.amber}40`,color:T.amber,fontSize:12,marginBottom:14}}>
-          ⚠ This order is paid, but you don't have refund permissions. You can cancel without refund (money stays in Stripe), or ask an admin to issue the refund first.
+        <div style={{marginBottom:14}}>
+          <Banner tone="warn">
+            This order is paid, but you don't have refund permissions. You can cancel without refund (money stays in Stripe), or ask an admin to issue the refund first.
+          </Banner>
         </div>
       )}
 
@@ -1685,9 +1734,9 @@ function CancelModal({ order, busy, canRefund, onClose, onConfirm }: { order: Or
       </Field>
 
       <ModalButtons>
-        <button onClick={onClose} disabled={busy} style={modalBtnSecondary()}>Don't cancel</button>
+        <button onClick={onClose} disabled={busy} className="al-press al-focus" style={modalBtnSecondary()}>Don't cancel</button>
         <button onClick={() => onConfirm(alsoRefund, alsoRefund ? reason : undefined, notes || undefined)}
-          disabled={busy} style={modalBtnPrimary(!busy, T.red)}>
+          disabled={busy} className="al-press al-focus al-primary" style={modalBtnPrimary(!busy, A.bad)}>
           {busy ? 'Cancelling…' : alsoRefund ? `Refund & cancel` : 'Cancel order'}
         </button>
       </ModalButtons>
@@ -1697,10 +1746,10 @@ function CancelModal({ order, busy, canRefund, onClose, onConfirm }: { order: Or
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <label style={{display:'flex',flexDirection:'column',gap:4,marginBottom:14}}>
-      <span style={{fontSize:12,color:T.text2,fontWeight:500}}>{label}</span>
+    <label style={{display:'flex',flexDirection:'column',gap:5,marginBottom:14}}>
+      <span style={{fontSize:12,color:T.text2,fontWeight:650}}>{label}</span>
       {children}
-      {hint && <span style={{fontSize:10,color:T.text3}}>{hint}</span>}
+      {hint && <span style={{fontSize:12,color:T.text3,lineHeight:1.45}}>{hint}</span>}
     </label>
   )
 }
@@ -1713,77 +1762,82 @@ function ModalButtons({ children }: { children: React.ReactNode }) {
 
 // ─── Style helpers ─────────────────────────────────────────────────────
 
+// Full-width pill action. Primary = solid accent; a colour on a non-primary
+// button gives it that colour's tinted-pill treatment (refund/cancel = bad).
 function actionBtn(primary: boolean, busy: boolean, color?: string): React.CSSProperties {
-  const c = color || T.blue
+  const c = color || A.accent
   return {
-    width:'100%',padding:'10px 14px',borderRadius:6,marginBottom:6,
-    border:`1px solid ${primary ? c : T.border2}`,
-    background: primary && !busy ? c : 'transparent',
+    width:'100%',padding:'10px 16px',borderRadius:RADIUS.pill,marginBottom:6,
+    border:'1px solid transparent',
+    background: primary && !busy ? c : color ? alpha(c,'14') : T.bg3,
     color: primary && !busy ? '#fff' : (color || T.text2),
-    fontSize:13,fontWeight: primary ? 600 : 400,
+    fontSize:13,fontWeight:600,minHeight:40,
     cursor: busy ? 'wait' : 'pointer',
     fontFamily:'inherit',
     opacity: busy ? 0.6 : 1,
-    textAlign:'left' as any,
   }
 }
 
 function modalTitle(): React.CSSProperties {
-  return { fontSize:16,fontWeight:600,margin:'0 0 6px',color:T.text,letterSpacing:'-0.005em' }
+  return { fontSize:17,fontWeight:700,margin:'0 0 6px',color:T.text,letterSpacing:'-0.01em' }
 }
 function modalDesc(): React.CSSProperties {
   return { fontSize:13,color:T.text3,margin:'0 0 18px',lineHeight:1.5 }
 }
+// Kit inputStyle look at modal density.
 function modalInput(): React.CSSProperties {
   return {
     width:'100%',boxSizing:'border-box',
-    background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-    borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',
+    background:T.bg3,border:'1px solid transparent',color:T.text,
+    borderRadius:RADIUS.sm,padding:'10px 12px',fontSize:14,minHeight:40,
+    outline:'none',fontFamily:'inherit',
   }
 }
 function modalBtnPrimary(enabled: boolean, color: string): React.CSSProperties {
   return {
-    padding:'9px 16px',borderRadius:6,
-    border:`1px solid ${enabled ? color : T.border2}`,
+    padding:'10px 18px',borderRadius:RADIUS.pill,
+    border:'1px solid transparent',
     background: enabled ? color : T.bg3,
     color: enabled ? '#fff' : T.text3,
-    fontSize:13,fontWeight:500,
+    fontSize:13,fontWeight:600,minHeight:40,
     cursor: enabled ? 'pointer' : 'not-allowed',
     fontFamily:'inherit',
   }
 }
 function modalBtnSecondary(): React.CSSProperties {
   return {
-    padding:'9px 16px',borderRadius:6,
-    border:`1px solid ${T.border2}`,
-    background:'transparent',color:T.text2,
-    fontSize:13,fontFamily:'inherit',cursor:'pointer',
+    padding:'10px 18px',borderRadius:RADIUS.pill,
+    border:'1px solid transparent',
+    background:T.bg3,color:T.text,
+    fontSize:13,fontWeight:600,minHeight:40,fontFamily:'inherit',cursor:'pointer',
   }
 }
 function stepBtn(enabled: boolean): React.CSSProperties {
   return {
-    width:22,height:22,padding:0,borderRadius:4,lineHeight:1,
-    border:`1px solid ${T.border2}`,
+    width:26,height:26,padding:0,borderRadius:RADIUS.pill,lineHeight:1,
+    border:'1px solid transparent',
     background:T.bg3,color: enabled ? T.text : T.text3,
-    fontSize:13,fontFamily:'inherit',
+    fontSize:14,fontFamily:'inherit',
+    display:'inline-flex',alignItems:'center',justifyContent:'center',
     cursor: enabled ? 'pointer' : 'default',
   }
 }
-function modeBtn(active: boolean, color: string): React.CSSProperties {
+// Segmented-control option pill (container supplies the bg3 track).
+function modeBtn(active: boolean, _color: string): React.CSSProperties {
   return {
-    flex:1,padding:'8px 12px',borderRadius:5,
-    border:`1px solid ${active ? color : T.border2}`,
-    background: active ? `${color}20` : 'transparent',
-    color: active ? color : T.text2,
-    fontSize:13,fontWeight: active ? 600 : 400,
+    flex:1,padding:'9px 6px',borderRadius:RADIUS.pill,minHeight:38,
+    border:'none',
+    background: active ? T.bg4 : 'transparent',
+    color: active ? T.text : T.text2,
+    boxShadow: active ? SHADOW.sm : 'none',
+    fontSize:12.5,fontWeight:600,textAlign:'center',
     cursor:'pointer',fontFamily:'inherit',
   }
 }
 function th(width?: number): React.CSSProperties {
   return {
-    fontSize:10,color:T.text3,padding:'9px 12px',
-    textAlign:'left',fontWeight:500,
-    textTransform:'uppercase',letterSpacing:'0.05em',
+    fontSize:12,color:T.text3,padding:'9px 12px',
+    textAlign:'left',fontWeight:600,
     width,whiteSpace:'nowrap',
   }
 }

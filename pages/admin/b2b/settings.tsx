@@ -2,6 +2,7 @@
 //
 // B2B portal settings — staff-only.
 // Layout matches the rest of /admin/b2b/* (PortalTopBar + main content).
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useEffect, useMemo, useState } from 'react'
 import Head from 'next/head'
@@ -16,14 +17,8 @@ import EmailTemplatesManager from '../../../components/b2b/EmailTemplatesManager
 import FreightPackagingManager from '../../../components/b2b/FreightPackagingManager'
 import FreightCarriersManager from '../../../components/b2b/FreightCarriersManager'
 import { useConfirm } from '../../../components/ui/Feedback'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
+import { T, alpha } from '../../../lib/ui/theme'
+import { A, Btn, btnStyle, cardStyle, Banner, PageTitle, Field, inputStyle, RADIUS, SHADOW } from '../../../components/b2b/ui'
 
 interface Props {
   user: {
@@ -36,20 +31,21 @@ interface Props {
 }
 
 // Tiles shown on the settings page. id matches each <Section id="…">.
+// Accents come from the Alloy semantic set (teal/purple retired).
 const SETTINGS_SECTIONS: Array<{ id: string; title: string; icon: string; accent: string }> = [
-  { id: 'models',            title: 'Models',                 icon: 'vehicle-sales', accent: T.green },
-  { id: 'product-types',     title: 'Product Types',          icon: 'stock',         accent: T.purple },
-  { id: 'tiers',             title: 'Distributor Tiers',      icon: 'distributors',  accent: T.blue },
-  { id: 'invoice-numbering', title: 'Invoice Numbering',      icon: 'invoices',      accent: T.amber },
-  { id: 'credit-numbering',  title: 'Credit Note Numbering',  icon: 'ap',            accent: T.red },
-  { id: 'card-surcharge',    title: 'Card Surcharge',         icon: 'payables',      accent: T.teal },
-  { id: 'carriers',          title: 'Freight Carriers',       icon: 'orders',        accent: T.teal },
-  { id: 'freight-pricing',   title: 'Freight Pricing & Sender', icon: 'payables',    accent: T.blue },
-  { id: 'freight-zones',     title: 'Freight Zones',          icon: 'stock',         accent: T.amber },
-  { id: 'freight-packaging', title: 'Freight Packaging',      icon: 'stock',         accent: T.teal },
-  { id: 'slack',             title: 'Slack Notifications',    icon: 'calls',         accent: T.purple },
-  { id: 'order-notify',      title: 'Order Notifications',    icon: 'messages',      accent: T.green },
-  { id: 'email-templates',   title: 'Email Notifications',    icon: 'messages',      accent: T.blue },
+  { id: 'models',            title: 'Models',                 icon: 'vehicle-sales', accent: A.good },
+  { id: 'product-types',     title: 'Product Types',          icon: 'stock',         accent: A.accent },
+  { id: 'tiers',             title: 'Distributor Tiers',      icon: 'distributors',  accent: A.accent },
+  { id: 'invoice-numbering', title: 'Invoice Numbering',      icon: 'invoices',      accent: A.warn },
+  { id: 'credit-numbering',  title: 'Credit Note Numbering',  icon: 'ap',            accent: A.bad },
+  { id: 'card-surcharge',    title: 'Card Surcharge',         icon: 'payables',      accent: A.accent },
+  { id: 'carriers',          title: 'Freight Carriers',       icon: 'orders',        accent: A.good },
+  { id: 'freight-pricing',   title: 'Freight Pricing & Sender', icon: 'payables',    accent: A.accent },
+  { id: 'freight-zones',     title: 'Freight Zones',          icon: 'stock',         accent: A.warn },
+  { id: 'freight-packaging', title: 'Freight Packaging',      icon: 'stock',         accent: A.good },
+  { id: 'slack',             title: 'Slack Notifications',    icon: 'calls',         accent: A.accent },
+  { id: 'order-notify',      title: 'Order Notifications',    icon: 'messages',      accent: A.good },
+  { id: 'email-templates',   title: 'Email Notifications',    icon: 'messages',      accent: A.accent },
   { id: 'status',            title: 'System Status',          icon: 'reports',       accent: T.text3 },
 ]
 
@@ -256,27 +252,24 @@ export default function B2BSettingsPage({ user }: Props) {
         <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="settings"/>
 
-          {/* Breadcrumb header — same pattern as catalogue.tsx */}
-          <header style={{marginBottom:18}}>
-            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
-              <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
-              {' / '}
-              <span style={{color:T.text2}}>Settings</span>
-            </div>
-            <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>B2B portal settings</h1>
-            <div style={{fontSize:13,color:T.text3,marginTop:4}}>
-              Configure how the distributor portal interacts with Stripe and MYOB.
-            </div>
-          </header>
+          {/* Breadcrumb + page header */}
+          <div style={{fontSize:12.5,color:T.text3,marginBottom:6}}>
+            <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
+            {' / '}
+            <span style={{color:T.text2}}>Settings</span>
+          </div>
+          <PageTitle sub="Configure how the distributor portal interacts with Stripe and MYOB.">
+            B2B portal settings
+          </PageTitle>
 
           {/* Toasts — fixed so they stay visible above an open settings window */}
           {error && (
-            <div style={{position:'fixed',top:70,left:'50%',transform:'translateX(-50%)',zIndex:1000,maxWidth:560,padding:12,background:`${T.red}1f`,border:`1px solid ${T.red}55`,borderRadius:8,color:T.red,fontSize:13,boxShadow:'0 10px 30px rgba(0,0,0,0.4)'}}>
+            <div style={{position:'fixed',top:70,left:'50%',transform:'translateX(-50%)',zIndex:1000,maxWidth:560,padding:'10px 16px',background:T.bg2,border:`1px solid ${alpha(A.bad,'55')}`,borderRadius:RADIUS.sm + 2,color:A.bad,fontSize:13,boxShadow:SHADOW.md}}>
               {error}
             </div>
           )}
           {savedFlash && (
-            <div style={{position:'fixed',top:70,left:'50%',transform:'translateX(-50%)',zIndex:1000,padding:'8px 14px',background:`${T.green}1f`,border:`1px solid ${T.green}55`,borderRadius:8,color:T.green,fontSize:13,boxShadow:'0 10px 30px rgba(0,0,0,0.4)'}}>
+            <div style={{position:'fixed',top:70,left:'50%',transform:'translateX(-50%)',zIndex:1000,padding:'8px 16px',background:T.bg2,border:`1px solid ${alpha(A.good,'55')}`,borderRadius:RADIUS.sm + 2,color:A.good,fontSize:13,boxShadow:SHADOW.md}}>
               ✓ {savedFlash}
             </div>
           )}
@@ -291,8 +284,9 @@ export default function B2BSettingsPage({ user }: Props) {
               <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(190px, 1fr))',gap:14,marginBottom:8}}>
                 {SETTINGS_SECTIONS.map(s => (
                   <button key={s.id} onClick={() => setOpenSectionId(s.id)}
-                    style={{display:'flex',alignItems:'center',gap:12,padding:'15px 16px',background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,cursor:'pointer',fontFamily:'inherit',color:T.text,textAlign:'left'}}>
-                    <span style={{width:42,height:42,borderRadius:11,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:`${s.accent}1f`,color:s.accent,border:`1px solid ${s.accent}33`}}>
+                    className="al-press al-focus al-raise"
+                    style={{...cardStyle(false),display:'flex',alignItems:'center',gap:12,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:T.text,textAlign:'left'}}>
+                    <span style={{width:42,height:42,borderRadius:RADIUS.sm + 1,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:alpha(s.accent,'1f'),color:s.accent}}>
                       <AppIcon name={s.icon} size={22}/>
                     </span>
                     <span style={{fontSize:13,fontWeight:600}}>{s.title}</span>
@@ -368,36 +362,17 @@ export default function B2BSettingsPage({ user }: Props) {
                   </Field>
                 </div>
 
-                <div style={{
-                  padding:'12px 14px',
-                  background:T.bg3,
-                  border:`1px solid ${overLimit ? T.red : T.border2}`,
-                  borderRadius:6,
-                  marginBottom:14,
-                  display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,
-                }}>
-                  <div>
-                    <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:2}}>Next invoice number</div>
-                    <div style={{fontSize:18,fontWeight:600,fontFamily:'monospace',color:overLimit?T.red:T.text}}>
-                      {livePreview || '—'}
-                    </div>
-                  </div>
-                  <div style={{textAlign:'right',fontSize:12,color: overLimit ? T.red : T.text3}}>
-                    {livePreviewLength} / 13 chars
-                    {overLimit && <div style={{fontWeight:500}}>Exceeds MYOB limit</div>}
-                  </div>
-                </div>
+                <NumberPreview label="Next invoice number" preview={livePreview} length={livePreviewLength} overLimit={overLimit}/>
 
-                <button
+                <Btn
                   onClick={() => save({
                     myob_invoice_number_prefix: prefix,
                     myob_invoice_number_padding: padding,
                     myob_invoice_number_seq: parseInt(seqInput || '0', 10) || 0,
                   })}
-                  disabled={saving || overLimit || !prefix.trim()}
-                  style={primaryBtn(!saving && !overLimit && !!prefix.trim())}>
+                  disabled={saving || overLimit || !prefix.trim()}>
                   {saving ? 'Saving…' : 'Save numbering'}
-                </button>
+                </Btn>
               </Section>
 
               {/* ─── Credit note numbering ─── */}
@@ -435,36 +410,17 @@ export default function B2BSettingsPage({ user }: Props) {
                   </Field>
                 </div>
 
-                <div style={{
-                  padding:'12px 14px',
-                  background:T.bg3,
-                  border:`1px solid ${cnOverLimit ? T.red : T.border2}`,
-                  borderRadius:6,
-                  marginBottom:14,
-                  display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,
-                }}>
-                  <div>
-                    <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:2}}>Next credit note number</div>
-                    <div style={{fontSize:18,fontWeight:600,fontFamily:'monospace',color:cnOverLimit?T.red:T.text}}>
-                      {cnLivePreview || '—'}
-                    </div>
-                  </div>
-                  <div style={{textAlign:'right',fontSize:12,color: cnOverLimit ? T.red : T.text3}}>
-                    {cnLivePreviewLength} / 13 chars
-                    {cnOverLimit && <div style={{fontWeight:500}}>Exceeds MYOB limit</div>}
-                  </div>
-                </div>
+                <NumberPreview label="Next credit note number" preview={cnLivePreview} length={cnLivePreviewLength} overLimit={cnOverLimit}/>
 
-                <button
+                <Btn
                   onClick={() => save({
                     myob_credit_note_number_prefix: cnPrefix,
                     myob_credit_note_number_padding: cnPadding,
                     myob_credit_note_number_seq: parseInt(cnSeqInput || '0', 10) || 0,
                   })}
-                  disabled={saving || cnOverLimit || !cnPrefix.trim()}
-                  style={primaryBtn(!saving && !cnOverLimit && !!cnPrefix.trim())}>
+                  disabled={saving || cnOverLimit || !cnPrefix.trim()}>
                   {saving ? 'Saving…' : 'Save numbering'}
-                </button>
+                </Btn>
               </Section>
 
               {/* ─── Card surcharge ─── */}
@@ -494,12 +450,11 @@ export default function B2BSettingsPage({ user }: Props) {
                   </Field>
                 </div>
 
-                <button
+                <Btn
                   onClick={() => save({ card_fee_percent: feePct, card_fee_fixed: feeFixed })}
-                  disabled={saving}
-                  style={primaryBtn(!saving)}>
+                  disabled={saving}>
                   {saving ? 'Saving…' : 'Save surcharge'}
-                </button>
+                </Btn>
               </Section>
 
               {/* ─── Carrier connections ─── */}
@@ -523,17 +478,16 @@ export default function B2BSettingsPage({ user }: Props) {
                   />
                 </Field>
                 <div style={{marginTop:14}}>
-                  <button
+                  <Btn
                     onClick={() => save({ freight_markup_percent: freightMarkup })}
-                    disabled={saving}
-                    style={primaryBtn(!saving)}>
+                    disabled={saving}>
                     {saving ? 'Saving…' : 'Save markup'}
-                  </button>
+                  </Btn>
                 </div>
 
                 <div style={{height:24}}/>
 
-                <div style={{fontSize:13,color:T.text2,fontWeight:500,marginBottom:8}}>Sender (pickup) address</div>
+                <div style={{fontSize:13,color:T.text2,fontWeight:650,marginBottom:8}}>Sender (pickup) address</div>
                 <div className="b2b-col2" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
                   <Field label="Contact name">
                     <input type="text" value={msFromName} onChange={e => setMsFromName(e.target.value)} style={inputStyle()} placeholder="Workshop staff name"/>
@@ -564,7 +518,7 @@ export default function B2BSettingsPage({ user }: Props) {
                   </Field>
                 </div>
                 <div style={{marginTop:14}}>
-                  <button
+                  <Btn
                     onClick={() => save({
                       machship_from_name:          msFromName,
                       machship_from_company:       msFromCompany,
@@ -576,10 +530,9 @@ export default function B2BSettingsPage({ user }: Props) {
                       machship_from_postcode:      msFromPost,
                       machship_from_state:         msFromState,
                     })}
-                    disabled={saving}
-                    style={primaryBtn(!saving)}>
+                    disabled={saving}>
                     {saving ? 'Saving…' : 'Save sender address'}
-                  </button>
+                  </Btn>
                 </div>
               </Section>
 
@@ -610,12 +563,11 @@ export default function B2BSettingsPage({ user }: Props) {
                 </Field>
 
                 <div style={{marginTop:14}}>
-                  <button
+                  <Btn
                     onClick={() => save({ slack_new_order_webhook_url: slackUrl })}
-                    disabled={saving}
-                    style={primaryBtn(!saving)}>
+                    disabled={saving}>
                     {saving ? 'Saving…' : 'Save Slack URL'}
-                  </button>
+                  </Btn>
                 </div>
               </Section>
 
@@ -632,14 +584,14 @@ export default function B2BSettingsPage({ user }: Props) {
                   />
                 </Field>
                 <div style={{marginTop:14,marginBottom:20}}>
-                  <button onClick={() => save({ outbound_from_email: fromEmail })} disabled={saving} style={primaryBtn(!saving)}>
+                  <Btn onClick={() => save({ outbound_from_email: fromEmail })} disabled={saving}>
                     {saving ? 'Saving…' : 'Save sender'}
-                  </button>
+                  </Btn>
                 </div>
 
                 <Field label="Email logo" hint="Shown in the header of every notification email. Upload an image, or paste a public image URL. Leave blank for the plain 'Just Autos' text header.">
                   {logoUrl && (
-                    <div style={{marginBottom:10,padding:10,background:'#fff',borderRadius:8,display:'inline-block'}}>
+                    <div style={{marginBottom:10,padding:10,background:'#fff',borderRadius:RADIUS.sm,display:'inline-block'}}>
                       <img src={logoUrl} alt="Email logo preview" style={{maxHeight:56,maxWidth:240,display:'block'}}/>
                     </div>
                   )}
@@ -649,23 +601,23 @@ export default function B2BSettingsPage({ user }: Props) {
                       value={logoUrl}
                       onChange={e => setLogoUrl(e.target.value)}
                       placeholder="https://…/logo.png"
-                      style={{...inputStyle(), flex:1, minWidth:220}}
+                      style={{...inputStyle(), flex:1, minWidth:220, width:'auto'}}
                     />
-                    <label style={{...primaryBtn(!logoUploading), display:'inline-block', cursor: logoUploading ? 'wait' : 'pointer'}}>
+                    <label className="al-press" style={{...btnStyle('secondary'), cursor: logoUploading ? 'wait' : 'pointer'}}>
                       {logoUploading ? 'Uploading…' : 'Upload…'}
                       <input type="file" accept="image/*" disabled={logoUploading} onChange={e => { const f = e.target.files?.[0]; if (f) uploadLogo(f); e.currentTarget.value = '' }} style={{display:'none'}}/>
                     </label>
                   </div>
-                  {logoErr && <div style={{fontSize:12, color:'#f04e4e', marginTop:6}}>{logoErr}</div>}
+                  {logoErr && <div style={{fontSize:12, color:A.bad, marginTop:6}}>{logoErr}</div>}
                 </Field>
                 <div style={{marginTop:14,marginBottom:20,display:'flex',gap:8}}>
-                  <button onClick={() => save({ email_logo_url: logoUrl })} disabled={saving} style={primaryBtn(!saving)}>
+                  <Btn onClick={() => save({ email_logo_url: logoUrl })} disabled={saving}>
                     {saving ? 'Saving…' : 'Save logo'}
-                  </button>
+                  </Btn>
                   {logoUrl && (
-                    <button onClick={() => { setLogoUrl(''); save({ email_logo_url: '' }) }} disabled={saving} style={{padding:'9px 16px',borderRadius:7,border:'1px solid rgba(var(--t-ink),0.18)',background:'transparent',color:'var(--t-text2)',fontSize:13,fontFamily:'inherit',cursor: saving ? 'default':'pointer'}}>
+                    <Btn variant="ghost" onClick={() => { setLogoUrl(''); save({ email_logo_url: '' }) }} disabled={saving}>
                       Remove
-                    </button>
+                    </Btn>
                   )}
                 </div>
 
@@ -679,9 +631,9 @@ export default function B2BSettingsPage({ user }: Props) {
                   />
                 </Field>
                 <div style={{marginTop:14}}>
-                  <button onClick={() => save({ admin_order_notify_emails: adminEmails })} disabled={saving} style={primaryBtn(!saving)}>
+                  <Btn onClick={() => save({ admin_order_notify_emails: adminEmails })} disabled={saving}>
                     {saving ? 'Saving…' : 'Save recipients'}
-                  </button>
+                  </Btn>
                 </div>
               </Section>
 
@@ -737,11 +689,11 @@ function Section({ id, activeId, onClose, title, description, children }: {
     <div onClick={onClose}
       style={{position:'fixed',inset:0,zIndex:950,background:'rgba(8,10,13,0.8)',backdropFilter:'blur(6px)',display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'64px 20px 32px',overflowY:'auto'}}>
       <div onClick={e => e.stopPropagation()}
-        style={{width:'100%',maxWidth:760,background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:14,boxShadow:'0 24px 60px rgba(0,0,0,0.5)',overflow:'hidden'}}>
+        style={{width:'100%',maxWidth:760,background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:RADIUS.md,boxShadow:SHADOW.md,overflow:'hidden'}}>
         <div style={{display:'flex',alignItems:'center',gap:10,padding:'16px 22px',borderBottom:`1px solid ${T.border}`,position:'sticky',top:0,background:T.bg2,zIndex:1}}>
-          <h2 style={{fontSize:16,fontWeight:600,margin:0,letterSpacing:'-0.005em'}}>{title}</h2>
+          <h2 style={{fontSize:16,fontWeight:650,margin:0,letterSpacing:'-0.005em'}}>{title}</h2>
           <span style={{flex:1}}/>
-          <button onClick={onClose} style={{background:'none',border:'none',color:T.text3,fontSize:24,cursor:'pointer',lineHeight:1,padding:'0 4px'}}>×</button>
+          <button onClick={onClose} aria-label="Close" className="al-press" style={{background:'none',border:'none',color:T.text3,fontSize:24,cursor:'pointer',lineHeight:1,padding:'0 4px',fontFamily:'inherit'}}>×</button>
         </div>
         <div style={{padding:'20px 22px'}}>
           {description && (
@@ -754,34 +706,31 @@ function Section({ id, activeId, onClose, title, description, children }: {
   )
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+// Numbering live-preview box (invoice + credit note streams share it)
+function NumberPreview({ label, preview, length, overLimit }: {
+  label: string; preview: string; length: number; overLimit: boolean
+}) {
   return (
-    <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:12,color:T.text2,fontWeight:500}}>{label}</span>
-      {children}
-      {hint && <span style={{fontSize:10,color:T.text3}}>{hint}</span>}
-    </label>
+    <div style={{
+      padding:'12px 14px',
+      background:T.bg3,
+      border:`1px solid ${overLimit ? A.bad : 'transparent'}`,
+      borderRadius:RADIUS.sm,
+      marginBottom:14,
+      display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,
+    }}>
+      <div>
+        <div style={{fontSize:12,color:T.text2,fontWeight:650,marginBottom:2}}>{label}</div>
+        <div style={{fontSize:18,fontWeight:600,fontFamily:'monospace',color:overLimit?A.bad:T.text}}>
+          {preview || '—'}
+        </div>
+      </div>
+      <div style={{textAlign:'right',fontSize:12,color: overLimit ? A.bad : T.text3}}>
+        {length} / 13 chars
+        {overLimit && <div style={{fontWeight:600}}>Exceeds MYOB limit</div>}
+      </div>
+    </div>
   )
-}
-
-function inputStyle(): React.CSSProperties {
-  return {
-    background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-    borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
-    fontFamily:'inherit',width:'100%',boxSizing:'border-box',
-  }
-}
-
-function primaryBtn(enabled: boolean): React.CSSProperties {
-  return {
-    padding:'9px 16px',borderRadius:6,
-    border:`1px solid ${enabled ? T.blue : T.border2}`,
-    background: enabled ? T.blue : T.bg3,
-    color: enabled ? '#fff' : T.text3,
-    fontSize:13,fontWeight:500,
-    cursor: enabled ? 'pointer' : 'not-allowed',
-    fontFamily:'inherit',
-  }
 }
 
 // ─── Taxonomy editor (shared by Models + Product Types) ──────────────────
@@ -882,24 +831,24 @@ function TaxonomyEditor({
   }
 
   if (loadErr) {
-    return <div style={{padding:8,color:T.red,fontSize:12}}>Couldn't load: {loadErr}</div>
+    return <Banner tone="error">Couldn't load: {loadErr}</Banner>
   }
   if (!items) {
-    return <div style={{padding:8,color:T.text3,fontSize:12}}>Loading…</div>
+    return <div style={{padding:8,color:T.text3,fontSize:12.5}}>Loading…</div>
   }
 
   return (
     <div>
       {actionErr && (
-        <div style={{padding:8,marginBottom:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:6,color:T.red,fontSize:12}}>
-          {actionErr}
+        <div style={{marginBottom:10}}>
+          <Banner tone="error">{actionErr}</Banner>
         </div>
       )}
 
       {items.length === 0 ? (
         <div style={{padding:'12px 0',color:T.text3,fontSize:13}}>No {itemLabel}s yet — add one below.</div>
       ) : (
-        <div style={{display:'flex',flexDirection:'column',gap:1,marginBottom:14,background:T.border,borderRadius:6,overflow:'hidden'}}>
+        <div style={{display:'flex',flexDirection:'column',gap:1,marginBottom:14,background:T.border,borderRadius:RADIUS.sm,overflow:'hidden'}}>
           {items.map(item => (
             <TaxonomyRow key={item.id} item={item} busy={busy}
               onRename={(name) => patch(item.id, { name })}
@@ -918,14 +867,11 @@ function TaxonomyEditor({
           placeholder={`Add a ${itemLabel}…`}
           maxLength={80}
           disabled={busy}
-          style={{...inputStyle(), flex:1}}
+          style={{...inputStyle(), flex:1, width:'auto'}}
         />
-        <button
-          onClick={create}
-          disabled={busy || !newName.trim()}
-          style={primaryBtn(!busy && !!newName.trim())}>
+        <Btn onClick={create} disabled={busy || !newName.trim()}>
           Add
-        </button>
+        </Btn>
       </div>
     </div>
   )
@@ -951,7 +897,7 @@ function TaxonomyRow({ item, busy, onRename, onToggleActive, onDelete }: {
 
   return (
     <div style={{
-      display:'flex',alignItems:'center',gap:10,padding:'10px 12px',
+      display:'flex',alignItems:'center',gap:10,padding:'8px 12px',
       background:T.bg2,opacity: item.is_active ? 1 : 0.55,
     }}>
       <div style={{flex:1,minWidth:0}}>
@@ -966,11 +912,12 @@ function TaxonomyRow({ item, busy, onRename, onToggleActive, onDelete }: {
               if (e.key === 'Enter') commit()
               if (e.key === 'Escape') { setDraft(item.name); setEditing(false) }
             }}
-            style={{...inputStyle(), padding:'4px 8px', fontSize:13}}
+            style={{...inputStyle(), padding:'6px 10px', fontSize:13, minHeight:32}}
           />
         ) : (
           <button
             onClick={() => setEditing(true)}
+            className="al-focus"
             style={{
               background:'transparent',border:'none',color:T.text,fontSize:13,
               padding:0,cursor:'pointer',fontFamily:'inherit',textAlign:'left',
@@ -980,42 +927,39 @@ function TaxonomyRow({ item, busy, onRename, onToggleActive, onDelete }: {
           </button>
         )}
       </div>
-      <div style={{fontSize:11,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>
+      <div style={{fontSize:12,color:T.text3,whiteSpace:'nowrap'}}>
         {item.usage_count} product{item.usage_count === 1 ? '' : 's'}
       </div>
       <button
         onClick={onToggleActive}
         disabled={busy}
+        className="al-press al-focus"
         title={item.is_active ? 'Deactivate (hide from distributors)' : 'Reactivate'}
         style={{
-          padding:'4px 10px',borderRadius:4,
-          border:`1px solid ${item.is_active ? T.green : T.border2}`,
+          padding:'4px 12px',borderRadius:RADIUS.pill,minHeight:28,
+          border:`1px solid ${item.is_active ? alpha(A.good,'55') : T.border2}`,
           background:'transparent',
-          color: item.is_active ? T.green : T.text3,
-          fontSize:11,fontFamily:'inherit',cursor:'pointer',whiteSpace:'nowrap',
+          color: item.is_active ? A.good : T.text3,
+          fontSize:12,fontWeight:600,fontFamily:'inherit',cursor:'pointer',whiteSpace:'nowrap',
         }}>
         {item.is_active ? 'Active' : 'Inactive'}
       </button>
       <button
         onClick={onDelete}
         disabled={busy}
-        title="Delete"
-        style={{
-          background:'transparent',border:'none',color:T.text3,
-          fontSize:16,cursor:'pointer',padding:'0 4px',
-        }}>
-        ×
+        className="al-press al-focus al-ghost"
+        style={{...btnStyle('ghost','sm'), color:A.bad, minHeight:28, padding:'4px 12px', fontSize:12}}>
+        Delete
       </button>
     </div>
   )
 }
 
 function DiagRow({ label, status, value }: { label: string; status: 'ok'|'pending'|'missing'; value: string }) {
-  const color = status === 'ok' ? T.green : status === 'pending' ? T.amber : T.red
-  const dot = status === 'ok' ? '●' : status === 'pending' ? '◐' : '○'
+  const color = status === 'ok' ? A.good : status === 'pending' ? A.warn : A.bad
   return (
-    <div style={{display:'flex',alignItems:'center',gap:12,padding:'8px 0',borderTop:`1px solid ${T.border}`}}>
-      <span style={{color, fontSize:14, width:14}}>{dot}</span>
+    <div style={{display:'flex',alignItems:'center',gap:12,padding:'9px 0',borderTop:`1px solid ${T.border}`}}>
+      <span style={{width:8,height:8,borderRadius:RADIUS.pill,background:color,boxShadow:`0 0 0 3px ${alpha(color,'26')}`,flexShrink:0}}/>
       <span style={{fontSize:13,color:T.text2,minWidth:160}}>{label}</span>
       <span style={{fontSize:13,color:T.text3,flex:1}}>{value}</span>
     </div>

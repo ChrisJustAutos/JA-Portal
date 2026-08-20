@@ -9,6 +9,8 @@
 //   1. Drop XLSX → POST /api/b2b/admin/jaws-stocktake/upload → redirect to detail
 //   2. On the detail page, Run match → review variance + coverage → export CSV.
 //      Any adjustment is made by hand in MYOB (this feature is report-only).
+//
+// Alloy restyle 2026-08-12: theme accents → semantic A set, kit pills/cards.
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Head from 'next/head'
@@ -17,9 +19,10 @@ import PortalTopBar from '../../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../../lib/authServer'
 import { UserRole, roleHasPermission } from '../../../../lib/permissions'
-import { T } from '../../../../lib/ui/theme'
+import { T, alpha } from '../../../../lib/ui/theme'
 import { SkeletonRows } from '../../../../components/ui'
 import { useConfirm } from '../../../../components/ui/Feedback'
+import { A, RADIUS, btnStyle, cardStyle, Banner, PageTitle, SectionLabel, StatusPill, EmptyState } from '../../../../components/b2b/ui'
 
 const STUCK_THRESHOLD_MIN = 5
 
@@ -127,8 +130,8 @@ export default function JawsStocktakeIndexPage({ user }: { user: SessionUser }) 
   }, [])
 
   const gridCols = canEdit
-    ? '1fr 110px 90px 110px 120px 130px 70px'
-    : '1fr 110px 90px 110px 120px 130px'
+    ? '1fr 120px 90px 110px 120px 130px 90px'
+    : '1fr 120px 90px 110px 120px 130px'
 
   return (
     <>
@@ -138,35 +141,26 @@ export default function JawsStocktakeIndexPage({ user }: { user: SessionUser }) 
         <main className="b2b-admin-main" style={{flex:1, padding:'28px 32px', width:'100%', boxSizing:'border-box', overflow:'auto'}}>
           <B2BAdminTabs active="stocktake" />
 
-          <div style={{display:'flex', alignItems:'baseline', gap:12, marginBottom:6}}>
-            <h1 style={{margin:0, fontSize:22, fontWeight:600}}>JAWS Stocktake</h1>
-            <span style={{fontSize:11, color:T.text3}}>
-              Upload an XLSX to compare counts against MYOB (JAWS)
-            </span>
-          </div>
-          <p style={{margin:'0 0 20px 0', fontSize:12, color:T.text3, maxWidth:820, lineHeight:1.6}}>
+          <PageTitle sub="Upload an XLSX to compare counts against MYOB (JAWS)">JAWS Stocktake</PageTitle>
+          <p style={{margin:'-8px 0 20px 0', fontSize:12.5, color:T.text3, maxWidth:820, lineHeight:1.6}}>
             Drop a spreadsheet with SKU/Product Code and Counted Quantity columns. Portal resolves each SKU against
             MYOB (JAWS) inventory and shows you the per-line variance against on-hand, plus a coverage check of in-stock
             items that weren't counted. <strong style={{color:T.text2}}>Report-only — nothing is written to MYOB; make any adjustment in MYOB yourself.</strong>
           </p>
 
-          {error && <div style={{background:'rgba(240,78,78,0.1)', border:`1px solid ${T.red}40`, borderRadius:8, padding:'10px 14px', color:T.red, fontSize:13, marginBottom:12}}>{error}</div>}
+          {error && <div style={{marginBottom:12}}><Banner tone="error" onDismiss={() => setError('')}>{error}</Banner></div>}
 
           {canEdit && <UploadCard onUploaded={(id) => router.push(`/admin/b2b/jaws-stocktake/${id}`)} />}
 
           <div style={{marginTop:30}}>
-            <h2 style={{margin:'0 0 12px 0', fontSize:14, fontWeight:600, color:T.text2, textTransform:'uppercase', letterSpacing:'0.05em'}}>
-              Recent uploads
-            </h2>
+            <SectionLabel>Recent uploads</SectionLabel>
             {loading ? (
               <SkeletonRows rows={8}/>
             ) : uploads.length === 0 ? (
-              <div style={{padding:20, textAlign:'center', color:T.text3, fontSize:13, background:T.bg2, borderRadius:8, border:`1px dashed ${T.border2}`}}>
-                No uploads yet.
-              </div>
+              <EmptyState title="No uploads yet" sub={canEdit ? 'Drop an XLSX above to start a stocktake.' : undefined} />
             ) : (
-              <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
-                <div style={{display:'grid', gridTemplateColumns:gridCols, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+              <div style={cardStyle(false)}>
+                <div style={{display:'grid', gridTemplateColumns:gridCols, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:12, color:T.text2, fontWeight:650}}>
                   <div>File</div>
                   <div>Status</div>
                   <div style={{textAlign:'right'}}>Rows</div>
@@ -189,41 +183,36 @@ export default function JawsStocktakeIndexPage({ user }: { user: SessionUser }) 
                     const remaining = activeMin !== null ? Math.max(1, Math.ceil(STUCK_THRESHOLD_MIN - activeMin)) : STUCK_THRESHOLD_MIN
                     deleteTitle = `Cannot delete while matching. If genuinely stuck, retry in ~${remaining} min.`
                   }
-                  const deleteColor = isStuck ? T.amber : T.red
+                  const deleteColor = isStuck ? A.warn : A.bad
 
                   return (
-                    <div key={u.id} style={{display:'grid', gridTemplateColumns:gridCols, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center', opacity: isDeleting ? 0.4 : 1, transition:'opacity 0.15s'}}>
+                    <div key={u.id} style={{display:'grid', gridTemplateColumns:gridCols, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12.5, alignItems:'center', opacity: isDeleting ? 0.4 : 1, transition:'opacity 0.15s'}}>
                       <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', cursor:'pointer'}}>
                         <div style={{color:T.text}}>{u.filename}</div>
-                        {u.uploaded_by_name && <div style={{fontSize:10, color:T.text3, marginTop:2}}>by {u.uploaded_by_name}</div>}
+                        {u.uploaded_by_name && <div style={{fontSize:12, color:T.text3, marginTop:2}}>by {u.uploaded_by_name}</div>}
                       </div>
                       <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{cursor:'pointer'}}>
-                        <StatusBadge status={u.status}/>
+                        <UploadStatusPill status={u.status}/>
                         {isStuck && (
-                          <div style={{fontSize:9, color:T.amber, marginTop:3, fontWeight:600}}>⚠ stuck {Math.round(activeMin!)}m</div>
+                          <div style={{fontSize:12, color:A.warn, marginTop:3, fontWeight:600}}>stuck {Math.round(activeMin!)}m</div>
                         )}
                       </div>
                       <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>{u.total_rows ?? '—'}</div>
                       <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:u.matched_count != null ? T.text2 : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
                         {u.matched_count != null ? `${u.matched_count}/${(u.matched_count || 0) + (u.unmatched_count || 0)}` : '—'}
                       </div>
-                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:u.in_stock_uncounted != null ? (u.in_stock_uncounted > 0 ? T.amber : T.green) : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
+                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:u.in_stock_uncounted != null ? (u.in_stock_uncounted > 0 ? A.warn : A.good) : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
                         {u.in_stock_uncounted != null ? u.in_stock_uncounted : '—'}
                       </div>
-                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{color:T.text3, fontSize:11, cursor:'pointer'}}>{fmtRelative(u.uploaded_at)}</div>
+                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{color:T.text3, fontSize:12, cursor:'pointer'}}>{fmtRelative(u.uploaded_at)}</div>
                       {canEdit && (
                         <div style={{textAlign:'right'}}>
                           <button
                             onClick={(e) => { e.stopPropagation(); deleteUpload(u) }}
                             disabled={isDeleting || cannotDelete}
                             title={deleteTitle}
-                            style={{
-                              padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit',
-                              background:'transparent',
-                              color: (isDeleting || cannotDelete) ? T.text3 : deleteColor,
-                              border: `1px solid ${(isDeleting || cannotDelete) ? T.border2 : deleteColor + '40'}`,
-                              cursor: (isDeleting || cannotDelete) ? 'default' : 'pointer',
-                            }}>
+                            className="al-press al-focus al-ghost"
+                            style={{ ...btnStyle('ghost', 'sm', isDeleting || cannotDelete), fontSize: 12, color: (isDeleting || cannotDelete) ? T.text3 : deleteColor }}>
                             {isDeleting ? '…' : 'Delete'}
                           </button>
                         </div>
@@ -240,20 +229,16 @@ export default function JawsStocktakeIndexPage({ user }: { user: SessionUser }) 
   )
 }
 
-function StatusBadge({ status }: { status: string }) {
+function UploadStatusPill({ status }: { status: string }) {
   const map: Record<string, { label: string; color: string }> = {
     parsed:    { label: 'Parsed',    color: T.text3 },
-    matching:  { label: 'Matching…', color: T.blue },
-    matched:   { label: 'Matched',   color: T.amber },
-    completed: { label: 'Completed', color: T.green },
-    failed:    { label: 'Failed',    color: T.red },
+    matching:  { label: 'Matching…', color: A.accent },
+    matched:   { label: 'Matched',   color: A.warn },
+    completed: { label: 'Completed', color: A.good },
+    failed:    { label: 'Failed',    color: A.bad },
   }
   const e = map[status] || { label: status, color: T.text3 }
-  return (
-    <span style={{padding:'3px 8px', borderRadius:3, background:`${e.color}22`, color:e.color, fontSize:10, fontWeight:600, letterSpacing:'0.05em', textTransform:'uppercase'}}>
-      {e.label}
-    </span>
-  )
+  return <StatusPill color={e.color}>{e.label}</StatusPill>
 }
 
 function UploadCard({ onUploaded }: { onUploaded: (id: string) => void }) {
@@ -293,24 +278,24 @@ function UploadCard({ onUploaded }: { onUploaded: (id: string) => void }) {
         const f = e.dataTransfer.files?.[0]
         if (f) handleFile(f)
       }}
+      className="al-raise"
       style={{
-        background: dragOver ? `${T.blue}15` : T.bg2,
-        border: `2px dashed ${dragOver ? T.blue : T.border2}`,
-        borderRadius: 12, padding: '40px 30px', textAlign: 'center',
+        background: dragOver ? alpha(A.accent, '15') : T.bg2,
+        border: `2px dashed ${dragOver ? A.accent : T.border2}`,
+        borderRadius: RADIUS.md, padding: '40px 30px', textAlign: 'center',
         transition: 'background 0.15s, border-color 0.15s',
         cursor: uploading ? 'default' : 'pointer',
       }}
       onClick={() => !uploading && fileInputRef.current?.click()}>
       <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{display:'none'}}
         onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }}/>
-      <div style={{fontSize:32, marginBottom:12, opacity:0.6}}>📄</div>
-      <div style={{fontSize:14, fontWeight:600, color:T.text, marginBottom:6}}>
+      <div style={{fontSize:15, fontWeight:600, color:T.text, marginBottom:6}}>
         {uploading ? 'Parsing…' : 'Drop XLSX here, or click to browse'}
       </div>
-      <div style={{fontSize:11, color:T.text3}}>
+      <div style={{fontSize:12.5, color:T.text3}}>
         Spreadsheet should have SKU/Product Code and Counted Quantity columns
       </div>
-      {error && <div style={{marginTop:14, fontSize:12, color:T.red}}>{error}</div>}
+      {error && <div style={{marginTop:14, fontSize:12.5, color:A.bad}}>{error}</div>}
     </div>
   )
 }

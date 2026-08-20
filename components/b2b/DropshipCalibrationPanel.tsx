@@ -2,15 +2,11 @@
 // Drop-ship freight calibration UI (controls + coverage + product×zone matrix).
 // Shared by the standalone page (/admin/b2b/dropship-calibration) and the modal
 // launched from the catalogue drop-ship freight editor.
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useState } from 'react'
-
-const T = {
-  bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)',
-  border: 'var(--t-border)', border2: 'var(--t-border2)',
-  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
+import { T, alpha } from '../../lib/ui/theme'
+import { A, Btn, btnStyle, cardStyle, inputStyle, RADIUS } from './ui'
 
 // Relative road-freight cost from a WA (Perth) origin — Perth = 1.0, rising with
 // distance. Estimates a gap zone from the zones we DO have data for:
@@ -151,8 +147,14 @@ export default function DropshipCalibrationPanel() {
     setFlash(`Applied to ${ok} product${ok === 1 ? '' : 's'}${fail ? `, ${fail} failed` : ''}.`)
   }
 
-  const card: React.CSSProperties = { background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }
-  const inp: React.CSSProperties = { padding: '7px 9px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none' }
+  const card: React.CSSProperties = cardStyle(18)
+  // Dense control inputs — kit look scaled for the toolbar (floor is 12px type).
+  const inp: React.CSSProperties = { ...inputStyle(), padding: '8px 11px', fontSize: 13, minHeight: 38, width: 'auto' }
+  // Matrix cell inputs stay tight so the table keeps its density.
+  const cellInp: React.CSSProperties = {
+    width: 64, padding: '4px 6px', textAlign: 'right', background: T.bg3,
+    borderRadius: 6, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
+  }
 
   return (
     <div>
@@ -164,45 +166,45 @@ export default function DropshipCalibrationPanel() {
 
       {/* Controls */}
       <div style={{ ...card, display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 16 }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: T.text3 }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 650, color: T.text2 }}>
           Supplier (name search)
           <input style={{ ...inp, width: 160 }} value={supplierName} onChange={e => setSupplierName(e.target.value)} placeholder="MPI" />
         </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: T.text3 }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 650, color: T.text2 }}>
           History (months)
           <input style={{ ...inp, width: 100 }} inputMode="numeric" value={sinceMonths} onChange={e => setSinceMonths(e.target.value)} />
         </label>
-        <button onClick={pull} disabled={loading} style={{ padding: '8px 16px', borderRadius: 7, border: 'none', background: T.blue, color: '#fff', fontSize: 13, fontWeight: 600, cursor: loading ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+        <Btn onClick={pull} disabled={loading}>
           {loading ? 'Pulling…' : 'Pull purchase history'}
-        </button>
-        {error && <span style={{ fontSize: 12, color: T.red }}>{error}</span>}
+        </Btn>
+        {error && <span style={{ fontSize: 12.5, color: A.bad }}>{error}</span>}
       </div>
 
       {data && (
         <>
           {/* Coverage */}
           <div style={{ ...card, marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
-              {data.supplier ? <>Supplier: <span style={{ color: T.teal }}>{data.supplier.name}</span></> : 'Supplier not found'}
+            <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 10 }}>
+              {data.supplier ? <>Supplier: <span style={{ color: A.accent }}>{data.supplier.name}</span></> : 'Supplier not found'}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 10 }}>
               {([
                 ['Bills found', data.totals.billsFetched, T.text],
-                ['With freight $', data.totals.withFreight, T.green],
-                ['With postcode', data.totals.withPostcode, data.totals.withPostcode ? T.green : T.amber],
-                ['Mapped to zone', data.totals.withZone, data.totals.withZone ? T.green : T.amber],
+                ['With freight $', data.totals.withFreight, A.good],
+                ['With postcode', data.totals.withPostcode, data.totals.withPostcode ? A.good : A.warn],
+                ['Mapped to zone', data.totals.withZone, data.totals.withZone ? A.good : A.warn],
                 ['Single-product', data.totals.singleProduct, T.text],
                 ['Multi-product', data.totals.multiProduct, T.text3],
                 ['No product match', data.totals.noProductMatch, T.text3],
               ] as [string, number, string][]).map(([label, val, col]) => (
-                <div key={label} style={{ background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 8, padding: '8px 10px' }}>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: col }}>{val}</div>
-                  <div style={{ fontSize: 10.5, color: T.text3 }}>{label}</div>
+                <div key={label} style={{ background: T.bg3, borderRadius: RADIUS.sm, padding: '8px 10px' }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: col, fontVariantNumeric: 'tabular-nums' }}>{val}</div>
+                  <div style={{ fontSize: 12, color: T.text3 }}>{label}</div>
                 </div>
               ))}
             </div>
             {data.totals.withPostcode === 0 && (
-              <div style={{ fontSize: 12, color: T.amber, marginTop: 10, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 12.5, color: A.warn, marginTop: 10, lineHeight: 1.5 }}>
                 ⚠ None of these bills carry a delivery postcode in their Ship-to address, so they can&rsquo;t be mapped to a zone.
                 The freight + customer address may live on the drop-ship purchase <em>orders</em> instead — tell me and I&rsquo;ll pull those.
               </div>
@@ -213,44 +215,46 @@ export default function DropshipCalibrationPanel() {
           {data.products.length > 0 && data.totals.withZone > 0 ? (
             <div style={{ ...card, overflowX: 'auto' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 12, flexWrap: 'wrap' }}>
-                <div style={{ fontSize: 12, color: T.text2, maxWidth: 360 }}>
-                  Cells show MPI&rsquo;s <strong>cost (inc GST)</strong>. <span style={{ color: T.amber }}>Amber</span> = zone-wide estimate (no per-product data). Customer is billed <strong>cost × markup</strong> on Apply.
+                <div style={{ fontSize: 12.5, color: T.text2, maxWidth: 360 }}>
+                  Cells show MPI&rsquo;s <strong>cost (inc GST)</strong>. <span style={{ color: A.warn }}>Amber</span> = zone-wide estimate (no per-product data). Customer is billed <strong>cost × markup</strong> on Apply.
                 </div>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: T.text3 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: T.text2 }}>
                     Markup %
-                    <input inputMode="decimal" value={markupPct} onChange={e => setMarkupPct(e.target.value)} style={{ width: 56, padding: '6px 7px', textAlign: 'right', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 5, color: T.text, fontSize: 12.5, fontFamily: 'inherit', outline: 'none' }} />
+                    <input inputMode="decimal" value={markupPct} onChange={e => setMarkupPct(e.target.value)} style={{ ...cellInp, width: 56, fontSize: 12.5 }} />
                   </label>
-                  {flash && <span style={{ fontSize: 12, color: T.green }}>{flash}</span>}
-                  <button onClick={autoEstimate} title="Estimate empty zone defaults from the zones you have, scaled by distance from WA" style={{ padding: '8px 14px', borderRadius: 7, border: `1px solid ${T.border2}`, background: 'transparent', color: T.teal, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  {flash && <span style={{ fontSize: 12.5, color: A.good }}>{flash}</span>}
+                  <Btn variant="secondary" size="sm" onClick={autoEstimate} title="Estimate empty zone defaults from the zones you have, scaled by distance from WA">
                     Auto-estimate gaps (MPI in WA)
-                  </button>
-                  <button onClick={fillEmpty} style={{ padding: '8px 14px', borderRadius: 7, border: `1px solid ${T.border2}`, background: 'transparent', color: T.blue, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  </Btn>
+                  <Btn variant="secondary" size="sm" onClick={fillEmpty}>
                     Fill empty cells from zone defaults
-                  </button>
-                  <button onClick={apply} disabled={applying} style={{ padding: '8px 16px', borderRadius: 7, border: 'none', background: T.green, color: '#06210f', fontSize: 13, fontWeight: 700, cursor: applying ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                  </Btn>
+                  <button onClick={apply} disabled={applying}
+                    className="al-press al-focus al-primary"
+                    style={{ ...btnStyle('primary', 'sm'), background: applying ? T.bg3 : A.good, color: applying ? T.text3 : '#06210f', cursor: applying ? 'wait' : 'pointer' }}>
                     {applying ? 'Applying…' : `Apply to drop-ship rates (cost +${Number(markupPct) || 0}%)`}
                   </button>
                 </div>
               </div>
-              <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 700 }}>
+              <table style={{ borderCollapse: 'collapse', fontSize: 12.5, minWidth: 700 }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: 'left', padding: '6px 8px', position: 'sticky', left: 0, background: T.bg2, color: T.text3, fontWeight: 600, fontSize: 10.5 }}>Product</th>
+                    <th style={{ textAlign: 'left', padding: '6px 8px', position: 'sticky', left: 0, background: T.bg2, color: T.text2, fontWeight: 650, fontSize: 12 }}>Product</th>
                     {data.zones.map(z => (
-                      <th key={z.id} style={{ padding: '6px 6px', color: T.text3, fontWeight: 600, fontSize: 10, whiteSpace: 'nowrap' }}>{z.name}</th>
+                      <th key={z.id} style={{ padding: '6px 6px', color: T.text2, fontWeight: 650, fontSize: 12, whiteSpace: 'nowrap' }}>{z.name}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  <tr style={{ borderTop: `1px solid ${T.border}`, background: `${T.blue}0d` }}>
-                    <td style={{ padding: '5px 8px', position: 'sticky', left: 0, background: T.bg2, whiteSpace: 'nowrap', fontSize: 11, color: T.blue, fontWeight: 600 }} title="Per-zone default — fills empty product cells">Zone default →</td>
+                  <tr style={{ borderTop: `1px solid ${T.border}`, background: alpha(A.accent, '0d') }}>
+                    <td style={{ padding: '5px 8px', position: 'sticky', left: 0, background: T.bg2, whiteSpace: 'nowrap', fontSize: 12, color: A.accent, fontWeight: 650 }} title="Per-zone default — fills empty product cells">Zone default →</td>
                     {data.zones.map(z => (
                       <td key={z.id} style={{ padding: '3px 4px' }}>
                         <input
                           inputMode="decimal" placeholder="—" value={zoneDefaults[z.id] ?? ''}
                           onChange={e => setZoneDefaults(s => ({ ...s, [z.id]: e.target.value }))}
-                          style={{ width: 64, padding: '4px 5px', textAlign: 'right', background: T.bg3, border: `1px solid ${T.blue}55`, borderRadius: 4, color: T.blue, fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit', outline: 'none' }}
+                          style={{ ...cellInp, border: `1px solid ${alpha(A.accent, '55')}`, color: A.accent, fontWeight: 600 }}
                         />
                       </td>
                     ))}
@@ -258,7 +262,7 @@ export default function DropshipCalibrationPanel() {
                   {data.products.map(p => (
                     <tr key={p.catalogue_id} style={{ borderTop: `1px solid ${T.border}` }}>
                       <td style={{ padding: '5px 8px', position: 'sticky', left: 0, background: T.bg2, whiteSpace: 'nowrap', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.name}>
-                        <span style={{ color: T.text }}>{p.name}</span> <span style={{ color: T.text3, fontSize: 10 }}>{p.sku}</span>
+                        <span style={{ color: T.text }}>{p.name}</span> <span style={{ color: T.text3, fontSize: 12 }}>{p.sku}</span>
                       </td>
                       {data.zones.map(z => {
                         const key = `${p.catalogue_id}|${z.id}`
@@ -269,7 +273,7 @@ export default function DropshipCalibrationPanel() {
                             <input
                               inputMode="decimal" value={edits[key] ?? ''}
                               onChange={e => setEdits(s => ({ ...s, [key]: e.target.value }))}
-                              style={{ width: 64, padding: '4px 5px', textAlign: 'right', background: T.bg3, border: `1px solid ${isFallback ? T.amber + '66' : T.border2}`, borderRadius: 4, color: isFallback ? T.amber : T.text, fontSize: 11.5, fontFamily: 'inherit', outline: 'none' }}
+                              style={{ ...cellInp, border: `1px solid ${isFallback ? alpha(A.warn, '66') : T.border2}`, color: isFallback ? A.warn : T.text }}
                               title={hasProductData ? `${data.perProductZone[p.catalogue_id][z.id].count} bill(s)` : (data.perZone?.[z.id] ? `zone estimate from ${data.perZone[z.id].count} bill(s)` : 'no data')}
                             />
                           </td>

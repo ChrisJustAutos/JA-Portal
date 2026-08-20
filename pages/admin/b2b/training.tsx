@@ -4,6 +4,7 @@
 // distributor (every current + future team member) or individual users.
 // Each assigned person shows their best-attempt status inline
 // (Passed / Attempted / Not started) from b2b_training_attempts.
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
@@ -13,6 +14,7 @@ import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import { T, alpha } from '../../../lib/ui/theme'
 import { useToast } from '../../../components/ui/Feedback'
+import { A, Btn, btnStyle, cardStyle, StatusPill, Banner, PageTitle, inputStyle, RADIUS } from '../../../components/b2b/ui'
 
 interface AdminModule {
   id: string
@@ -157,12 +159,12 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
   function statusPill(u: UserRow, m: AdminModule) {
     const r = resultBy.get(`${u.id}:${m.slug}`)
     if (r?.passed) {
-      return <Pill color={T.green} label={`Passed ${r.best_score_pct != null ? `${Math.round(r.best_score_pct)}%` : ''}${r.passed_at ? ` · ${fmtDate(r.passed_at)}` : ''}`} />
+      return <StatusPill color={A.good}>{`Passed ${r.best_score_pct != null ? `${Math.round(r.best_score_pct)}%` : ''}${r.passed_at ? ` · ${fmtDate(r.passed_at)}` : ''}`}</StatusPill>
     }
     if (r && r.attempts > 0) {
-      return <Pill color={T.amber} label={`Attempted · best ${r.best_score_pct != null ? `${Math.round(r.best_score_pct)}%` : '—'}`} />
+      return <StatusPill color={A.warn}>{`Attempted · best ${r.best_score_pct != null ? `${Math.round(r.best_score_pct)}%` : '—'}`}</StatusPill>
     }
-    return <Pill color={T.text3} label="Not started" />
+    return <StatusPill color={T.text3}>Not started</StatusPill>
   }
 
   return (
@@ -176,26 +178,19 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
         <B2BAdminTabs active="training" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1100 }}>
 
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ flex: 1, minWidth: 260 }}>
-              <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Training assignments</h1>
-              <div style={{ fontSize: 13, color: T.text3, marginTop: 4 }}>
-                Courses only appear in a distributor's portal when assigned here — tick a whole distributor (covers every current and future team member) or individual people.
-              </div>
-            </div>
-            <button onClick={() => setShowUpload(s => !s)}
-              style={{
-                fontSize: 12.5, fontWeight: 700, padding: '9px 16px', borderRadius: 8, whiteSpace: 'nowrap',
-                border: `1px solid ${T.blue}`, background: showUpload ? 'transparent' : T.blue,
-                color: showUpload ? T.blue : '#fff', cursor: 'pointer', fontFamily: 'inherit',
-              }}>
-              {showUpload ? 'Close' : '＋ Upload document → course'}
-            </button>
-          </div>
+          <PageTitle
+            sub="Courses only appear in a distributor's portal when assigned here — tick a whole distributor (covers every current and future team member) or individual people."
+            action={
+              <Btn variant={showUpload ? 'secondary' : 'primary'} onClick={() => setShowUpload(s => !s)}>
+                {showUpload ? 'Close' : 'Upload document → course'}
+              </Btn>
+            }>
+            Training assignments
+          </PageTitle>
 
           {showUpload && <UploadCoursePanel onClose={() => setShowUpload(false)} />}
 
-          {error && <div style={{ background: alpha(T.red, '1a'), border: `1px solid ${alpha(T.red, '40')}`, borderRadius: 8, padding: 12, color: T.red, fontSize: 13 }}>{error}</div>}
+          {error && <Banner tone="error">{error}</Banner>}
           {loading && <div style={{ color: T.text3, textAlign: 'center', padding: 30 }}>Loading…</div>}
 
           {/* Compact overview: per module, assigned / passed counts */}
@@ -205,12 +200,12 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
                 const covered = coveredUserIds(m.id)
                 const passed = Array.from(covered).filter(uid => resultBy.get(`${uid}:${m.slug}`)?.passed).length
                 return (
-                  <div key={m.id} style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: '12px 14px' }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: T.text2, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.slug}</div>
+                  <div key={m.id} style={{ ...cardStyle(false), padding: '12px 14px' }}>
+                    <div style={{ fontSize: 13, fontWeight: 650, color: T.text2, fontFamily: 'monospace' }}>{m.slug}</div>
                     <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>
-                      {covered.size} assigned <span style={{ color: T.text3, fontWeight: 500 }}>·</span> <span style={{ color: passed > 0 ? T.green : T.text3 }}>{passed} passed</span>
+                      {covered.size} assigned <span style={{ color: T.text3, fontWeight: 500 }}>·</span> <span style={{ color: passed > 0 ? A.good : T.text3 }}>{passed} passed</span>
                     </div>
-                    {!m.enabled && <div style={{ fontSize: 11, color: T.amber, marginTop: 3 }}>module disabled — hidden even if assigned</div>}
+                    {!m.enabled && <div style={{ fontSize: 12, color: A.warn, marginTop: 3 }}>module disabled — hidden even if assigned</div>}
                   </div>
                 )
               })}
@@ -218,30 +213,28 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
           )}
 
           {!loading && !error && modules.length === 0 && (
-            <div style={{ padding: 30, textAlign: 'center', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, color: T.text3, fontStyle: 'italic' }}>
+            <div style={{ ...cardStyle(true), padding: 30, textAlign: 'center', color: T.text3 }}>
               No training modules in b2b_training_modules yet.
             </div>
           )}
 
           {/* Per-module assignment panels */}
           {!loading && !error && modules.map(m => (
-            <section key={m.id} style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, overflow: 'hidden' }}>
+            <section key={m.id} style={cardStyle(false)}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '14px 18px', borderBottom: `1px solid ${T.border}` }}>
                 <div style={{ flex: 1, minWidth: 220 }}>
                   <div style={{ fontSize: 15, fontWeight: 700 }}>{m.title}</div>
-                  <div style={{ fontSize: 12, color: T.text3, marginTop: 3 }}>
-                    <span style={{ fontFamily: 'monospace' }}>{m.slug}</span>
+                  <div style={{ fontSize: 12.5, color: T.text3, marginTop: 3 }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.slug}</span>
                     {' · '}{m.sections_count} sections · {m.slides_count} slides · {m.questions_count} questions · pass mark {m.pass_pct}%
                   </div>
                 </div>
                 <a href={`/admin/b2b/training/${encodeURIComponent(m.slug)}`}
-                  style={{
-                    fontSize: 12, fontWeight: 600, color: T.blue, textDecoration: 'none', whiteSpace: 'nowrap',
-                    border: `1px solid ${alpha(T.blue, '55')}`, borderRadius: 7, padding: '5px 12px',
-                  }}>
-                  ▶ Preview as distributor
+                  className="al-press al-focus"
+                  style={{ ...btnStyle('secondary', 'sm'), color: A.accent, textDecoration: 'none' }}>
+                  Preview as distributor
                 </a>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: m.enabled ? T.text2 : T.amber, cursor: 'pointer' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: m.enabled ? T.text2 : A.warn, cursor: 'pointer' }}>
                   <input type="checkbox" checked={m.enabled} onChange={e => toggleEnabled(m, e.target.checked)} />
                   {m.enabled ? 'Enabled' : 'Disabled (hidden for everyone)'}
                 </label>
@@ -266,32 +259,33 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
                             return n
                           })}
                           aria-label={isOpen ? 'Collapse' : 'Expand'}
-                          style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 11, width: 22, padding: 0, fontFamily: 'inherit' }}>
+                          className="al-press al-focus"
+                          style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 12, width: 22, padding: 0, fontFamily: 'inherit' }}>
                           {isOpen ? '▾' : '▸'}
                         </button>
                         <div style={{ flex: 1, minWidth: 160, fontSize: 13, fontWeight: 600 }}>
                           {d.display_name}
-                          {d.is_active === false && <span style={{ fontSize: 10, color: T.text3, fontWeight: 500 }}> · inactive</span>}
+                          {d.is_active === false && <span style={{ fontSize: 12, color: T.text3, fontWeight: 500 }}> · inactive</span>}
                         </div>
                         {coveredCount > 0 && (
-                          <span style={{ fontSize: 11, color: passedCount === coveredCount ? T.green : T.text3, whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: 12, color: passedCount === coveredCount ? A.good : T.text3, whiteSpace: 'nowrap' }}>
                             {passedCount}/{coveredCount} passed
                           </span>
                         )}
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: T.text2, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: T.text2, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                           <input type="checkbox" checked={whole} onChange={e => toggleWhole(m, d, e.target.checked)} />
                           Whole distributor
                         </label>
                       </div>
                       {isOpen && (
                         <div style={{ padding: '0 6px 10px 28px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          {dUsers.length === 0 && <div style={{ fontSize: 12, color: T.text3, fontStyle: 'italic' }}>No portal users.</div>}
+                          {dUsers.length === 0 && <div style={{ fontSize: 12.5, color: T.text3 }}>No portal users.</div>}
                           {dUsers.map(u => {
                             const ticked = hasUser(m.id, u.id)
                             return (
                               <div key={u.id} style={{
                                 display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-                                background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 7, padding: '7px 10px',
+                                background: T.bg3, borderRadius: RADIUS.sm, padding: '7px 10px',
                                 opacity: u.is_active === false ? 0.55 : 1,
                               }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 180, cursor: whole ? 'default' : 'pointer' }}
@@ -303,7 +297,7 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
                                   <span style={{ fontSize: 12.5, color: T.text }}>
                                     {u.full_name || u.email}
                                     {u.full_name && <span style={{ color: T.text3 }}> · {u.email}</span>}
-                                    {u.is_active === false && <span style={{ fontSize: 10, color: T.text3 }}> · inactive</span>}
+                                    {u.is_active === false && <span style={{ fontSize: 12, color: T.text3 }}> · inactive</span>}
                                   </span>
                                 </label>
                                 {(ticked || whole) && statusPill(u, m)}
@@ -315,7 +309,7 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
                     </div>
                   )
                 })}
-                {distributors.length === 0 && <div style={{ fontSize: 12, color: T.text3, padding: '10px 6px' }}>No distributors yet.</div>}
+                {distributors.length === 0 && <div style={{ fontSize: 12.5, color: T.text3, padding: '10px 6px' }}>No distributors yet.</div>}
               </div>
             </section>
           ))}
@@ -401,17 +395,13 @@ function UploadCoursePanel({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const inputStyle: React.CSSProperties = {
-    background: T.bg3, color: T.text, border: `1px solid ${T.border2}`, borderRadius: 8,
-    padding: '9px 11px', fontSize: 13, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box',
-  }
-  const labelStyle: React.CSSProperties = { fontSize: 11.5, fontWeight: 700, color: T.text2, marginBottom: 5, display: 'block' }
+  const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 650, color: T.text2, marginBottom: 5, display: 'block' }
 
   return (
-    <section style={{ background: T.bg2, border: `1px solid ${alpha(T.blue, '45')}`, borderRadius: 12, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <section style={{ ...cardStyle(false), border: `1px solid ${alpha(A.accent, '45')}`, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div>
         <div style={{ fontSize: 14, fontWeight: 700 }}>Upload a document → training course</div>
-        <div style={{ fontSize: 12, color: T.text3, marginTop: 3 }}>
+        <div style={{ fontSize: 12.5, color: T.text3, marginTop: 3 }}>
           Every page of the PDF becomes a slide, and a quiz is drafted automatically. The course is saved as a <b>draft</b> — you review and edit the questions before enabling and assigning it.
         </div>
       </div>
@@ -421,46 +411,44 @@ function UploadCoursePanel({ onClose }: { onClose: () => void }) {
           <label style={labelStyle}>Document (PDF)</label>
           <input ref={fileRef} type="file" accept=".pdf,application/pdf" disabled={busy}
             onChange={e => setFileName(e.target.files?.[0]?.name || '')}
-            style={{ ...inputStyle, padding: '7px 9px' }} />
-          <div style={{ fontSize: 11, color: T.text3, marginTop: 4 }}>Export Word/PowerPoint documents as PDF first.</div>
+            style={{ ...inputStyle(), padding: '9px 11px' }} />
+          <div style={{ fontSize: 12, color: T.text3, marginTop: 4 }}>Export Word/PowerPoint documents as PDF first.</div>
         </div>
         <div>
           <label style={labelStyle}>Course title</label>
           <input value={title} disabled={busy} onChange={e => onTitle(e.target.value)}
-            placeholder="e.g. JA103 — EasyLock Fitting Guide" style={inputStyle} />
+            placeholder="e.g. JA103 — EasyLock Fitting Guide" style={inputStyle()} />
         </div>
         <div>
           <label style={labelStyle}>Slug</label>
           <input value={slug} disabled={busy}
             onChange={e => { setSlugTouched(true); setSlug(suggestSlug(e.target.value) || e.target.value.toLowerCase()) }}
-            placeholder="ja103-easylock-fitting" style={{ ...inputStyle, fontFamily: 'monospace' }} />
-          <div style={{ fontSize: 11, color: T.text3, marginTop: 4 }}>Lowercase letters, numbers and hyphens — becomes the course URL.</div>
+            placeholder="ja103-easylock-fitting" style={{ ...inputStyle(), fontFamily: 'monospace' }} />
+          <div style={{ fontSize: 12, color: T.text3, marginTop: 4 }}>Lowercase letters, numbers and hyphens — becomes the course URL.</div>
         </div>
         <div>
           <label style={labelStyle}>Pass mark %</label>
           <input type="number" min={1} max={100} value={passPct} disabled={busy}
-            onChange={e => setPassPct(Math.max(1, Math.min(100, Number(e.target.value) || 0)))} style={inputStyle} />
+            onChange={e => setPassPct(Math.max(1, Math.min(100, Number(e.target.value) || 0)))} style={inputStyle()} />
         </div>
       </div>
 
       {err && (
-        <div style={{ background: alpha(T.red, '18'), border: `1px solid ${alpha(T.red, '40')}`, borderRadius: 8, padding: 10, fontSize: 12.5, color: T.red }}>
-          {err}
-        </div>
+        <Banner tone="error">{err}</Banner>
       )}
 
       {phase === 'uploading' && (
         <div>
-          <div style={{ fontSize: 12, color: T.text2, marginBottom: 5 }}>Uploading {fileName || 'document'}… {uploadPct}%</div>
+          <div style={{ fontSize: 12.5, color: T.text2, marginBottom: 5 }}>Uploading {fileName || 'document'}… {uploadPct}%</div>
           <div style={{ height: 5, background: T.bg3, borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${uploadPct}%`, background: T.blue, borderRadius: 3, transition: 'width 0.15s ease' }} />
+            <div style={{ height: '100%', width: `${uploadPct}%`, background: A.accent, borderRadius: 3, transition: 'width 0.15s ease' }} />
           </div>
         </div>
       )}
       {phase === 'generating' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, color: T.text2 }}>
           <span style={{
-            width: 15, height: 15, border: `2px solid ${alpha(T.blue, '40')}`, borderTopColor: T.blue,
+            width: 15, height: 15, border: `2px solid ${alpha(A.accent, '40')}`, borderTopColor: A.accent,
             borderRadius: '50%', display: 'inline-block', animation: 'ja-train-spin 0.8s linear infinite', flexShrink: 0,
           }} />
           Reading document and drafting the quiz — this can take a couple of minutes…
@@ -469,32 +457,14 @@ function UploadCoursePanel({ onClose }: { onClose: () => void }) {
       )}
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={start} disabled={busy}
-          style={{
-            fontSize: 13, fontWeight: 700, padding: '10px 20px', borderRadius: 8,
-            border: `1px solid ${T.blue}`, background: T.blue, color: '#fff',
-            cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', opacity: busy ? 0.6 : 1,
-          }}>
+        <Btn onClick={start} disabled={busy}>
           {phase === 'uploading' ? 'Uploading…' : phase === 'generating' ? 'Generating…' : 'Generate course'}
-        </button>
-        <button onClick={onClose} disabled={busy}
-          style={{
-            fontSize: 13, fontWeight: 600, padding: '10px 16px', borderRadius: 8,
-            border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2,
-            cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', opacity: busy ? 0.6 : 1,
-          }}>
+        </Btn>
+        <Btn variant="ghost" onClick={onClose} disabled={busy}>
           Cancel
-        </button>
+        </Btn>
       </div>
     </section>
-  )
-}
-
-function Pill({ color, label }: { color: string; label: string }) {
-  return (
-    <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 9, background: alpha(color, '18'), color, whiteSpace: 'nowrap' }}>
-      {label}
-    </span>
   )
 }
 

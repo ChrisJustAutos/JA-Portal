@@ -2,6 +2,9 @@
 // Stock reorder / prediction sheet (replaces the JAWS Stock Order Excel).
 // Editable date range, growth %, forecast months; per-row Morgan's judgment,
 // MOQ + notes; Sync pulls stock + sales from MYOB (JAWS via CData); Export xlsx.
+//
+// Alloy restyle 2026-08-12: theme T + kit pills/cards; the Excel-replica
+// column order/labels and the dense grid are deliberately unchanged.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Head from 'next/head'
@@ -10,17 +13,12 @@ import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import { useConfirm } from '../../../components/ui/Feedback'
 import { computeReorder, monthsInRange, ReorderItem, ReorderSettings } from '../../../lib/b2b-reorder'
+import { T, alpha } from '../../../lib/ui/theme'
+import { A, RADIUS, Btn, btnStyle, cardStyle, PageTitle } from '../../../components/b2b/ui'
 
-const T = {
-  bg: 'var(--t-bg)', bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)', bg4: 'var(--t-bg4)',
-  border: 'var(--t-border)', border2: 'var(--t-border2)',
-  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
-
-const inp: React.CSSProperties = { padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', colorScheme: 'dark' }
-const cellInp: React.CSSProperties = { width: '100%', padding: '4px 6px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 4, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', textAlign: 'right' }
-const btn = (c: string, solid?: boolean): React.CSSProperties => ({ padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: solid ? c : 'transparent', color: solid ? '#fff' : c, border: `1px solid ${solid ? c : c + '55'}` })
+// Dense sheet inputs — Alloy look (filled, soft radius) at staff-table density.
+const inp: React.CSSProperties = { padding: '6px 9px', background: T.bg3, border: '1px solid transparent', borderRadius: 8, color: T.text, fontSize: 12.5, fontFamily: 'inherit', outline: 'none', colorScheme: 'dark' }
+const cellInp: React.CSSProperties = { width: '100%', padding: '4px 7px', background: T.bg3, border: '1px solid transparent', borderRadius: 6, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', textAlign: 'right' }
 const num = (n: number) => Number(n || 0).toLocaleString('en-AU', { maximumFractionDigits: 2 })
 
 const GRID = '120px 1.4fr 56px 56px 56px 56px 70px 60px 70px 70px 64px 64px 80px 70px 90px 80px 1fr'
@@ -169,102 +167,108 @@ export default function StockReorderPage({ user }: { user: any }) {
         <main className="b2b-admin-main" style={{ flex: 1, padding: '28px 32px', width: '100%', boxSizing: 'border-box' }}>
           <B2BAdminTabs active="reorder" />
 
+          <PageTitle sub="Replaces the JAWS Stock Order Excel — stock + sales pulled from MYOB on Sync">Stock Order</PageTitle>
+
           {/* Controls */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-            <div style={{ fontSize: 18, fontWeight: 600, marginRight: 8 }}>Stock Order</div>
-            <label style={{ fontSize: 11, color: T.text3 }}>Sales from <input type="date" value={settings.from_date || ''} onChange={e => applyRange(e.target.value || null, settings.to_date)} style={{ ...inp, marginLeft: 4 }} /></label>
-            <label style={{ fontSize: 11, color: T.text3 }}>to <input type="date" value={settings.to_date || ''} onChange={e => applyRange(settings.from_date, e.target.value || null)} style={{ ...inp, marginLeft: 4 }} /></label>
-            <span style={{ fontSize: 11, color: T.text3 }}>= {months} mo</span>
+            <label style={{ fontSize: 12, color: T.text3 }}>Sales from <input type="date" value={settings.from_date || ''} onChange={e => applyRange(e.target.value || null, settings.to_date)} style={{ ...inp, marginLeft: 4 }} /></label>
+            <label style={{ fontSize: 12, color: T.text3 }}>to <input type="date" value={settings.to_date || ''} onChange={e => applyRange(settings.from_date, e.target.value || null)} style={{ ...inp, marginLeft: 4 }} /></label>
+            <span style={{ fontSize: 12, color: T.text3 }}>= {months} mo</span>
             <div style={{ display: 'flex', gap: 4 }}>
               {([['3 mo', lastNMonths(3)], ['6 mo', lastNMonths(6)], ['9 mo', lastNMonths(9)], ['12 mo', lastNMonths(12)], ['This FY', thisFinancialYear()]] as const).map(([label, r]) => {
                 const on = settings.from_date === r.from && settings.to_date === r.to
-                return <button key={label} onClick={() => applyRange(r.from, r.to)} style={{ ...btn(on ? T.blue : T.text2), padding: '5px 9px', background: on ? `${T.blue}1a` : 'transparent' }}>{label}</button>
+                return (
+                  <button key={label} onClick={() => applyRange(r.from, r.to)} className="al-press al-focus"
+                    style={{ padding: '5px 12px', borderRadius: RADIUS.pill, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', border: '1px solid transparent', background: on ? alpha(A.accent, '1a') : 'transparent', color: on ? A.accent : T.text2 }}>
+                    {label}
+                  </button>
+                )
               })}
             </div>
-            <label style={{ fontSize: 11, color: T.text3 }}>Growth % <input type="number" step="1" value={Math.round(settings.growth_pct * 100)} onChange={e => saveSettings({ growth_pct: (Number(e.target.value) || 0) / 100 })} style={{ ...inp, width: 64, marginLeft: 4, textAlign: 'right' }} /></label>
-            <label style={{ fontSize: 11, color: T.text3 }}>Cover months <input type="number" step="1" min={1} value={settings.forecast_months} onChange={e => saveSettings({ forecast_months: Math.max(1, Number(e.target.value) || 1) })} style={{ ...inp, width: 56, marginLeft: 4, textAlign: 'right' }} /></label>
+            <label style={{ fontSize: 12, color: T.text3 }}>Growth % <input type="number" step="1" value={Math.round(settings.growth_pct * 100)} onChange={e => saveSettings({ growth_pct: (Number(e.target.value) || 0) / 100 })} style={{ ...inp, width: 64, marginLeft: 4, textAlign: 'right' }} /></label>
+            <label style={{ fontSize: 12, color: T.text3 }}>Cover months <input type="number" step="1" min={1} value={settings.forecast_months} onChange={e => saveSettings({ forecast_months: Math.max(1, Number(e.target.value) || 1) })} style={{ ...inp, width: 56, marginLeft: 4, textAlign: 'right' }} /></label>
             <div style={{ flex: 1 }} />
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter rows…" style={{ ...inp, width: 180 }} />
-            <button onClick={() => setAdding(a => !a)} style={btn(T.text2)}>+ Add item</button>
-            <button onClick={sync} disabled={syncing} style={btn(T.teal)}>{syncing ? 'Syncing…' : '↻ Sync MYOB'}</button>
-            <button onClick={() => window.open('/api/b2b/admin/reorder/export', '_blank')} style={btn(T.green)}>⤓ Export Excel</button>
+            <Btn variant="ghost" size="sm" onClick={() => setAdding(a => !a)}>Add item</Btn>
+            <Btn variant="secondary" size="sm" onClick={sync} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync MYOB'}</Btn>
+            <Btn variant="primary" size="sm" onClick={() => window.open('/api/b2b/admin/reorder/export', '_blank')}>Export Excel</Btn>
           </div>
 
           {adding && (
-            <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, padding: 12, marginBottom: 14, maxWidth: 520 }}>
+            <div style={{ ...cardStyle(12), marginBottom: 14, maxWidth: 520 }}>
               <input autoFocus value={addQ} onChange={e => searchAdd(e.target.value)} placeholder="Search catalogue by SKU or name…" style={{ ...inp, width: '100%', boxSizing: 'border-box' }} />
               <div style={{ marginTop: 8, maxHeight: 220, overflowY: 'auto' }}>
                 {addResults.map(m => (
                   <div key={m.sku} onClick={() => addItem(m)} style={{ padding: '6px 8px', fontSize: 12, cursor: 'pointer', borderBottom: `1px solid ${T.border}`, display: 'flex', gap: 8 }}>
-                    <span style={{ fontFamily: 'monospace', color: T.text2, minWidth: 120 }}>{m.sku}</span><span>{m.name}</span><span style={{ marginLeft: 'auto', color: T.blue }}>+ add</span>
+                    <span style={{ fontFamily: 'monospace', color: T.text2, minWidth: 120 }}>{m.sku}</span><span>{m.name}</span><span style={{ marginLeft: 'auto', color: A.accent }}>+ add</span>
                   </div>
                 ))}
-                {addQ && addResults.length === 0 && <div style={{ fontSize: 11, color: T.text3, padding: 6 }}>No catalogue matches (or already on the sheet).</div>}
+                {addQ && addResults.length === 0 && <div style={{ fontSize: 12, color: T.text3, padding: 6 }}>No catalogue matches (or already on the sheet).</div>}
               </div>
             </div>
           )}
 
-          {msg && <div style={{ fontSize: 12, color: T.text2, marginBottom: 10 }}>{msg}</div>}
+          {msg && <div style={{ fontSize: 12.5, color: T.text2, marginBottom: 10 }}>{msg}</div>}
 
           {/* Bulk edit / delete bar — appears when rows are selected */}
           {selected.size > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: `${T.blue}14`, border: `1px solid ${T.blue}44`, borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: alpha(A.accent, '14'), border: `1px solid ${alpha(A.accent, '38')}`, borderRadius: RADIUS.sm + 2, padding: '10px 12px', marginBottom: 12 }}>
               <span style={{ fontSize: 12, fontWeight: 700 }}>{selected.size} selected</span>
               <span style={{ width: 1, height: 18, background: T.border }} />
-              <label style={{ fontSize: 11, color: T.text3 }}>MOQ <input value={bulk.moq} onChange={e => setBulk(b => ({ ...b, moq: e.target.value }))} inputMode="numeric" placeholder="—" style={{ ...inp, width: 60, marginLeft: 4, textAlign: 'right' }} /></label>
-              <label style={{ fontSize: 11, color: T.text3 }}>Morgan’s <input value={bulk.morgans} onChange={e => setBulk(b => ({ ...b, morgans: e.target.value }))} inputMode="numeric" placeholder="—" style={{ ...inp, width: 60, marginLeft: 4, textAlign: 'right' }} /></label>
-              <label style={{ fontSize: 11, color: T.text3 }}>Notes <input value={bulk.notes} onChange={e => setBulk(b => ({ ...b, notes: e.target.value }))} placeholder="—" style={{ ...inp, width: 200, marginLeft: 4 }} /></label>
-              <button onClick={bulkApply} disabled={bulkBusy} style={btn(T.blue, true)}>{bulkBusy ? 'Applying…' : 'Apply to selected'}</button>
-              <span style={{ fontSize: 10, color: T.text3 }}>blank = unchanged</span>
+              <label style={{ fontSize: 12, color: T.text3 }}>MOQ <input value={bulk.moq} onChange={e => setBulk(b => ({ ...b, moq: e.target.value }))} inputMode="numeric" placeholder="—" style={{ ...inp, width: 60, marginLeft: 4, textAlign: 'right' }} /></label>
+              <label style={{ fontSize: 12, color: T.text3 }}>Morgan’s <input value={bulk.morgans} onChange={e => setBulk(b => ({ ...b, morgans: e.target.value }))} inputMode="numeric" placeholder="—" style={{ ...inp, width: 60, marginLeft: 4, textAlign: 'right' }} /></label>
+              <label style={{ fontSize: 12, color: T.text3 }}>Notes <input value={bulk.notes} onChange={e => setBulk(b => ({ ...b, notes: e.target.value }))} placeholder="—" style={{ ...inp, width: 200, marginLeft: 4 }} /></label>
+              <Btn variant="primary" size="sm" onClick={bulkApply} disabled={bulkBusy}>{bulkBusy ? 'Applying…' : 'Apply to selected'}</Btn>
+              <span style={{ fontSize: 12, color: T.text3 }}>blank = unchanged</span>
               <div style={{ flex: 1 }} />
-              <button onClick={bulkDelete} disabled={bulkBusy} style={btn(T.red)}>🗑 Delete selected</button>
-              <button onClick={() => setSelected(new Set())} style={btn(T.text3)}>Clear</button>
+              <button onClick={bulkDelete} disabled={bulkBusy} className="al-press al-focus al-ghost" style={{ ...btnStyle('ghost', 'sm', bulkBusy), color: A.bad }}>Delete selected</button>
+              <Btn variant="ghost" size="sm" onClick={() => setSelected(new Set())}>Clear</Btn>
             </div>
           )}
 
           {/* Sheet */}
-          <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflowX: 'auto' }}>
-            <div style={{ minWidth: 1280 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: GRID_SEL, gap: 6, padding: '8px 12px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 8.5, color: T.text3, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', alignItems: 'end' }}>
+          <div style={{ ...cardStyle(false), overflowX: 'auto' }}>
+            <div style={{ minWidth: 1360 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: GRID_SEL, gap: 6, padding: '8px 12px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 12, color: T.text2, fontWeight: 650, lineHeight: 1.2, alignItems: 'end' }}>
                 <div><input type="checkbox" title="Select all" checked={allShownSelected} onChange={toggleAll} style={{ cursor: 'pointer' }} /></div>
                 {Th('Stock No.')}{Th('Name')}{Th('On hand', true)}{Th('Cmtd', true, 'Committed')}{Th('Avail', true, 'Available = on hand − committed')}{Th('On ord', true, 'On order')}{Th(`Sales ${months}mo`, true, 'Total units sold over the date range')}{Th('Avg/mo', true)}{Th('Round', true, 'Monthly round up')}{Th('+Grow', true, 'With growth %')}{Th('Proj', true, `Projected demand over ${settings.forecast_months} months`)}{Th('Order', true, `Order needed to keep a ${settings.forecast_months}-month buffer = max(0, 2×projected − (available + on order))`)}{Th('Suggested', true)}{Th('MOQ', true)}{Th("Morgan's", true, "Manual override")}{Th('Final', true)}{Th('Notes')}
               </div>
               {loading ? (
-                <div style={{ padding: 30, textAlign: 'center', color: T.text3, fontSize: 12 }}>Loading…</div>
+                <div style={{ padding: 30, textAlign: 'center', color: T.text3, fontSize: 12.5 }}>Loading…</div>
               ) : shown.length === 0 ? (
-                <div style={{ padding: 30, textAlign: 'center', color: T.text3, fontSize: 12 }}>No items{q ? ' match' : ' yet — “+ Add item”, then “↻ Sync MYOB”'}.</div>
+                <div style={{ padding: 30, textAlign: 'center', color: T.text3, fontSize: 12.5 }}>No items{q ? ' match' : ' yet — “Add item”, then “Sync MYOB”'}.</div>
               ) : shown.map(it => {
                 const c = computeReorder(it, settings, months)
                 const sel = selected.has(it.id)
                 return (
-                  <div key={it.id} style={{ display: 'grid', gridTemplateColumns: GRID_SEL, gap: 6, padding: '6px 12px', borderTop: `1px solid ${T.border}`, alignItems: 'center', fontSize: 12, background: sel ? `${T.blue}12` : 'transparent' }}>
+                  <div key={it.id} style={{ display: 'grid', gridTemplateColumns: GRID_SEL, gap: 6, padding: '6px 12px', borderTop: `1px solid ${T.border}`, alignItems: 'center', fontSize: 12, background: sel ? alpha(A.accent, '12') : 'transparent' }}>
                     <div><input type="checkbox" checked={sel} onChange={() => toggleSel(it.id)} style={{ cursor: 'pointer' }} /></div>
                     <div style={{ fontFamily: 'monospace', color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sku}</div>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name || '—'}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text2 }}>{num(it.on_hand)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{num(it.committed)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text2 }}>{num(c.available)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{num(it.on_order)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text }}>{num(it.sales_qty)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{num(Math.round(c.monthlyAvg * 10) / 10)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{num(c.monthlyRound)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{num(c.withGrowth)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{num(c.projected)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: c.orderNeed > 0 ? T.amber : T.text3 }}>{num(c.orderNeed)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text2, fontWeight: 600 }}>{num(c.suggested)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text2 }}>{num(it.on_hand)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text3 }}>{num(it.committed)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text2 }}>{num(c.available)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text3 }}>{num(it.on_order)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text }}>{num(it.sales_qty)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text3 }}>{num(Math.round(c.monthlyAvg * 10) / 10)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text3 }}>{num(c.monthlyRound)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text3 }}>{num(c.withGrowth)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text3 }}>{num(c.projected)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: c.orderNeed > 0 ? A.warn : T.text3 }}>{num(c.orderNeed)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: T.text2, fontWeight: 600 }}>{num(c.suggested)}</div>
                     <div><input defaultValue={it.moq ?? ''} inputMode="numeric" onBlur={e => { const v = e.target.value.trim(); if (v !== String(it.moq ?? '')) patchItem(it.id, { moq: v }) }} style={cellInp} /></div>
-                    <div><input defaultValue={it.morgans_judgment ?? ''} inputMode="numeric" placeholder="—" onBlur={e => { const v = e.target.value.trim(); if (v !== String(it.morgans_judgment ?? '')) patchItem(it.id, { morgans_judgment: v }) }} style={{ ...cellInp, borderColor: it.morgans_judgment != null ? T.amber : T.border }} /></div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.green, fontWeight: 700 }}>{num(c.finalOrder)}</div>
+                    <div><input defaultValue={it.morgans_judgment ?? ''} inputMode="numeric" placeholder="—" onBlur={e => { const v = e.target.value.trim(); if (v !== String(it.morgans_judgment ?? '')) patchItem(it.id, { morgans_judgment: v }) }} style={{ ...cellInp, border: `1px solid ${it.morgans_judgment != null ? A.warn : 'transparent'}` }} /></div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: A.good, fontWeight: 700 }}>{num(c.finalOrder)}</div>
                     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                       <input defaultValue={it.notes ?? ''} onBlur={e => { const v = e.target.value; if (v !== (it.notes ?? '')) patchItem(it.id, { notes: v }) }} style={{ ...cellInp, textAlign: 'left' }} />
-                      <button onClick={() => removeItem(it.id)} title="Remove" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 14 }}>×</button>
+                      <button onClick={() => removeItem(it.id)} title="Remove" className="al-press" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 14, fontFamily: 'inherit', lineHeight: 1, padding: '2px 3px' }}>×</button>
                     </div>
                   </div>
                 )
               })}
             </div>
           </div>
-          <div style={{ fontSize: 11, color: T.text3, marginTop: 10 }}>
+          <div style={{ fontSize: 12.5, color: T.text3, marginTop: 10, lineHeight: 1.5 }}>
             On hand / Committed / On order + sales come from MYOB (JAWS) on Sync. Projected = monthly avg × (1+growth) × cover months. Order keeps a cover-months buffer: Order = max(0, 2×Projected − (available + on order)). Suggested rounds that to MOQ (or 5/15). Final = Morgan’s judgment if set, otherwise Suggested.
           </div>
         </main>

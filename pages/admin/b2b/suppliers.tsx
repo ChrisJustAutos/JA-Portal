@@ -11,21 +11,17 @@ import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import { roleHasPermission } from '../../../lib/permissions'
 import { useToast, useConfirm } from '../../../components/ui/Feedback'
+import { T } from '../../../lib/ui/theme'
+import { A, Btn, btnStyle, cardStyle, inputStyle, PageTitle, StatusPill, EmptyState } from '../../../components/b2b/ui'
 
-const T = {
-  bg: 'var(--t-bg)', bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)', bg4: 'var(--t-bg4)',
-  border: 'var(--t-border)', border2: 'var(--t-border2)',
-  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)',
-  blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
 interface Supplier { id: string; name: string; myob_supplier_uids: string[]; is_active: boolean; notes: string | null; active_user_count: number; product_count: number }
 interface SupUser { id: string; email: string; full_name: string | null; is_active: boolean; invited_at: string | null; last_login_at: string | null }
 interface CatSupplier { uid: string; name: string; items: number }
 interface Props { user: { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs: string[] | null } }
 
-const inp: React.CSSProperties = { width: '100%', padding: '8px 10px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 7, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
-const btn = (c: string, solid?: boolean): React.CSSProperties => ({ padding: '7px 13px', borderRadius: 7, fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: solid ? c : 'transparent', color: solid ? '#fff' : c, border: `1px solid ${solid ? c : c + '55'}` })
-const lbl: React.CSSProperties = { fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '14px 0 6px' }
+// Kit input look at staff-tool density
+const inp: React.CSSProperties = { ...inputStyle(), fontSize: 13, padding: '9px 11px', minHeight: 38 }
+const lbl: React.CSSProperties = { fontSize: 12, color: T.text2, fontWeight: 650, margin: '14px 0 6px' }
 
 export default function B2BSuppliers({ user }: Props) {
   const canEdit = roleHasPermission(user.role, 'edit:b2b_distributors')
@@ -108,48 +104,47 @@ export default function B2BSuppliers({ user }: Props) {
         <main className="b2b-admin-main" style={{ flex: 1, padding: '28px 32px', width: '100%', boxSizing: 'border-box' }}>
           <B2BAdminTabs active="suppliers" />
 
-          <header style={{ marginBottom: 18, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <div>
-              <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Suppliers</h1>
-              <div style={{ fontSize: 12.5, color: T.text3, marginTop: 4 }}>Give a supplier a login to watch on-hand stock of the products they make for you. They sign in at <a href="/b2b/login" style={{ color: T.blue, textDecoration: 'none' }}>/b2b/login</a> and see only their Stock Wall.</div>
-            </div>
-          </header>
+          <PageTitle sub={<>Give a supplier a login to watch on-hand stock of the products they make for you. They sign in at <a href="/b2b/login" style={{ color: A.accent, textDecoration: 'none' }}>/b2b/login</a> and see only their Stock Wall.</>}>
+            Suppliers
+          </PageTitle>
 
           <div className="b2b-col2" style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 18, alignItems: 'start' }}>
             {/* List */}
-            <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={cardStyle(false)}>
               <div style={{ display: 'flex', alignItems: 'center', padding: '10px 12px', borderBottom: `1px solid ${T.border}` }}>
-                <span style={{ fontSize: 12, fontWeight: 600 }}>{list.length} supplier{list.length === 1 ? '' : 's'}</span>
+                <span style={{ fontSize: 12.5, fontWeight: 600 }}>{list.length} supplier{list.length === 1 ? '' : 's'}</span>
                 <span style={{ flex: 1 }} />
-                {canEdit && <button onClick={() => setCreating(v => !v)} style={btn(T.blue, creating)}>{creating ? 'Cancel' : '+ New'}</button>}
+                {canEdit && <Btn variant={creating ? 'primary' : 'ghost'} size="sm" onClick={() => setCreating(v => !v)}>{creating ? 'Cancel' : 'New supplier'}</Btn>}
               </div>
               {creating && (
                 <div style={{ padding: 12, borderBottom: `1px solid ${T.border}`, background: T.bg3 }}>
-                  <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Supplier name" style={inp} onKeyDown={e => { if (e.key === 'Enter') createSupplier() }} />
-                  <button onClick={createSupplier} disabled={!newName.trim()} style={{ ...btn(T.blue, true), marginTop: 8, width: '100%', opacity: newName.trim() ? 1 : 0.6 }}>Create</button>
+                  <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Supplier name" style={{ ...inp, background: T.bg4 }} onKeyDown={e => { if (e.key === 'Enter') createSupplier() }} />
+                  <div style={{ marginTop: 8 }}>
+                    <Btn size="sm" full disabled={!newName.trim()} onClick={createSupplier}>Create</Btn>
+                  </div>
                 </div>
               )}
               {loading ? <div style={{ padding: 16, color: T.text3, fontSize: 12.5 }}>Loading…</div>
                 : list.length === 0 ? <div style={{ padding: 16, color: T.text3, fontSize: 12.5 }}>No suppliers yet.</div>
                 : list.map(s => (
-                  <button key={s.id} onClick={() => selectSupplier(s.id)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', border: 'none', borderBottom: `1px solid ${T.border}`, cursor: 'pointer', background: selId === s.id ? T.bg4 : 'transparent', color: T.text, fontFamily: 'inherit' }}>
+                  <button key={s.id} className="al-press" onClick={() => selectSupplier(s.id)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', border: 'none', borderBottom: `1px solid ${T.border}`, cursor: 'pointer', background: selId === s.id ? T.bg4 : 'transparent', color: T.text, fontFamily: 'inherit' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: 13.5, fontWeight: 600, flex: 1 }}>{s.name}</span>
-                      {!s.is_active && <span style={{ fontSize: 10, color: T.red }}>off</span>}
+                      {!s.is_active && <StatusPill color={T.text3}>Off</StatusPill>}
                     </div>
-                    <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>{s.product_count} product{s.product_count === 1 ? '' : 's'} · {s.active_user_count} login{s.active_user_count === 1 ? '' : 's'}</div>
+                    <div style={{ fontSize: 12, color: T.text3, marginTop: 2 }}>{s.product_count} product{s.product_count === 1 ? '' : 's'} · {s.active_user_count} login{s.active_user_count === 1 ? '' : 's'}</div>
                   </button>
                 ))}
             </div>
 
             {/* Detail */}
             {!selected ? (
-              <div style={{ background: T.bg2, border: `1px dashed ${T.border2}`, borderRadius: 12, padding: 40, textAlign: 'center', color: T.text3, fontSize: 13 }}>Select a supplier, or create one.</div>
+              <EmptyState title="Select a supplier" sub="Pick one from the list, or create a new supplier." />
             ) : (
-              <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
+              <div style={cardStyle(18)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <h2 style={{ fontSize: 17, fontWeight: 600, margin: 0, flex: 1 }}>{selected.name}</h2>
-                  {!active && <span style={{ fontSize: 11, color: T.red, fontWeight: 600 }}>Deactivated</span>}
+                  <h2 style={{ fontSize: 17, fontWeight: 650, margin: 0, flex: 1 }}>{selected.name}</h2>
+                  {!active && <StatusPill color={A.bad}>Deactivated</StatusPill>}
                 </div>
 
                 <fieldset disabled={!canEdit} style={{ border: 'none', padding: 0, margin: 0 }}>
@@ -157,13 +152,13 @@ export default function B2BSuppliers({ user }: Props) {
                   <input value={name} onChange={e => setName(e.target.value)} style={inp} />
 
                   <div style={lbl}>MYOB supplier cards ({uids.length} selected)</div>
-                  <div style={{ fontSize: 11.5, color: T.text3, marginBottom: 8 }}>The products on these cards are what this supplier will see.</div>
-                  <div style={{ maxHeight: 220, overflowY: 'auto', border: `1px solid ${T.border}`, borderRadius: 8 }}>
+                  <div style={{ fontSize: 12, color: T.text3, marginBottom: 8 }}>The products on these cards are what this supplier will see.</div>
+                  <div style={{ maxHeight: 220, overflowY: 'auto', border: `1px solid ${T.border}`, borderRadius: 10 }}>
                     {catSuppliers.map(cs => (
                       <label key={cs.uid} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px', borderBottom: `1px solid ${T.border}`, cursor: canEdit ? 'pointer' : 'default', fontSize: 12.5 }}>
                         <input type="checkbox" checked={uids.includes(cs.uid)} onChange={() => toggleUid(cs.uid)} />
                         <span style={{ flex: 1 }}>{cs.name}</span>
-                        <span style={{ fontSize: 11, color: T.text3, fontFamily: 'monospace' }}>{cs.items}</span>
+                        <span style={{ fontSize: 12, color: T.text3, fontVariantNumeric: 'tabular-nums' }}>{cs.items}</span>
                       </label>
                     ))}
                     {/* Any saved uid not present in the catalogue list anymore */}
@@ -180,36 +175,40 @@ export default function B2BSuppliers({ user }: Props) {
 
                   {canEdit && (
                     <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>
-                      <button onClick={saveDetail} style={btn(T.blue, true)}>Save</button>
+                      <Btn size="sm" onClick={saveDetail}>Save</Btn>
                       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: T.text2, cursor: 'pointer' }}>
                         <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} /> Active
                       </label>
                       <span style={{ flex: 1 }} />
-                      <button onClick={deactivateSupplier} style={btn(T.red)}>Deactivate</button>
+                      <button className="al-press al-focus al-ghost" onClick={deactivateSupplier} style={{ ...btnStyle('ghost', 'sm'), color: A.bad }}>Deactivate</button>
                     </div>
                   )}
                 </fieldset>
 
                 {/* Logins */}
                 <div style={{ marginTop: 22, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Logins</div>
+                  <div style={{ fontSize: 13, fontWeight: 650, color: T.text2, marginBottom: 10 }}>Logins</div>
                   {users.length === 0 && <div style={{ fontSize: 12.5, color: T.text3, marginBottom: 10 }}>No logins yet — invite one below.</div>}
                   {users.map(u => (
                     <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: `1px solid ${T.border}`, fontSize: 12.5 }}>
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ fontWeight: 500 }}>{u.full_name || u.email}</span>
                         {u.full_name && <span style={{ color: T.text3 }}> · {u.email}</span>}
-                        <span style={{ color: T.text3, fontSize: 11 }}>{u.last_login_at ? ` · last in ${rel(u.last_login_at)}` : u.invited_at ? ' · invited, not signed in' : ''}</span>
+                        <span style={{ color: T.text3, fontSize: 12 }}>{u.last_login_at ? ` · last in ${rel(u.last_login_at)}` : u.invited_at ? ' · invited, not signed in' : ''}</span>
                       </span>
-                      {!u.is_active && <span style={{ fontSize: 10, color: T.red }}>disabled</span>}
-                      {canEdit && <button onClick={() => toggleUser(u)} style={btn(u.is_active ? T.text2 : T.green)}>{u.is_active ? 'Disable' : 'Enable'}</button>}
+                      {!u.is_active && <StatusPill color={T.text3}>Disabled</StatusPill>}
+                      {canEdit && (
+                        u.is_active
+                          ? <Btn variant="ghost" size="sm" onClick={() => toggleUser(u)}>Disable</Btn>
+                          : <button className="al-press al-focus al-ghost" onClick={() => toggleUser(u)} style={{ ...btnStyle('ghost', 'sm'), color: A.good }}>Enable</button>
+                      )}
                     </div>
                   ))}
                   {canEdit && (
                     <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
                       <input value={inviteName} onChange={e => setInviteName(e.target.value)} placeholder="Name (optional)" style={{ ...inp, flex: '1 1 130px', width: 'auto' }} />
                       <input value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="email@supplier.com" style={{ ...inp, flex: '2 1 200px', width: 'auto' }} />
-                      <button onClick={invite} disabled={!inviteEmail.trim()} style={{ ...btn(T.blue, true), opacity: inviteEmail.trim() ? 1 : 0.6 }}>Send invite</button>
+                      <Btn size="sm" disabled={!inviteEmail.trim()} onClick={invite}>Send invite</Btn>
                     </div>
                   )}
                 </div>

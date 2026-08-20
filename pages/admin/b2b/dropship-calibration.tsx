@@ -9,6 +9,7 @@ import DropshipCalibrationPanel from '../../../components/b2b/DropshipCalibratio
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import { T } from '../../../lib/ui/theme'
+import { PageTitle } from '../../../components/b2b/ui'
 
 interface Props { user: { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs: string[] | null } }
 
@@ -22,7 +23,9 @@ export default function DropshipCalibrationPage({ user }: Props) {
         <div style={{ flex: 1, padding: 20 }}>
           <div style={{ margin: '0 auto' }}>
             <B2BAdminTabs active="orders" />
-            <h1 style={{ fontSize: 20, fontWeight: 600, margin: '18px 0 6px' }}>Drop-ship freight calibration</h1>
+            <div style={{ marginTop: 18 }}>
+              <PageTitle>Drop-ship freight calibration</PageTitle>
+            </div>
             <DropshipCalibrationPanel />
           </div>
         </div>

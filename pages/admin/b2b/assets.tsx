@@ -10,7 +10,8 @@ import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
-import { T } from '../../../lib/ui/theme'
+import { T, alpha } from '../../../lib/ui/theme'
+import { A, Btn, btnStyle, Banner, cardStyle, inputStyle, PageTitle } from '../../../components/b2b/ui'
 import { useConfirm } from '../../../components/ui/Feedback'
 import { B2B_ASSET_SECTIONS, fmtBytes, type B2BAssetRow } from '../../../lib/b2b-assets'
 
@@ -80,7 +81,8 @@ export default function B2BAssetsAdmin({ user }: { user: any }) {
     if (r.error) setNote(`Delete failed: ${r.error}`); else load()
   }
 
-  const input: React.CSSProperties = { fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text, fontFamily: 'inherit' }
+  // Kit input look at staff-tool density
+  const input: React.CSSProperties = { ...inputStyle(), width: 'auto', fontSize: 13, padding: '8px 11px', minHeight: 36 }
 
   return (
     <>
@@ -90,10 +92,12 @@ export default function B2BAssetsAdmin({ user }: { user: any }) {
         <B2BAdminTabs active="assets" />
         <div style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1000 }}>
 
+          <PageTitle sub="Documents distributors see under Resources — publish, replace or retire files by section.">Resource library</PageTitle>
+
           {/* Publish / replace panel */}
-          <div style={{ background: T.bg2, border: `1px solid ${replaceTarget ? T.amber : T.border}`, borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>
-              {replaceTarget ? <>Replace file on “{replaceTarget.title}” <button onClick={() => setReplaceTarget(null)} style={{ ...input, cursor: 'pointer', marginLeft: 8, padding: '2px 8px' }}>cancel</button></> : 'Publish a document'}
+          <div style={{ ...cardStyle(16), border: `1px solid ${replaceTarget ? alpha(A.warn, '66') : T.border}`, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 650, display: 'flex', alignItems: 'center', gap: 10 }}>
+              {replaceTarget ? <>Replace file on “{replaceTarget.title}” <Btn variant="ghost" size="sm" onClick={() => setReplaceTarget(null)}>Cancel</Btn></> : 'Publish a document'}
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               {!replaceTarget && <>
@@ -104,44 +108,43 @@ export default function B2BAssetsAdmin({ user }: { user: any }) {
                 <input value={upDesc} onChange={e => setUpDesc(e.target.value)} placeholder="Description (optional)" style={{ ...input, minWidth: 260, flex: 1 }} />
               </>}
               <input ref={fileRef} type="file" style={{ ...input, padding: 5 }} onChange={e => { if (replaceTarget && !upTitle) setUpTitle(replaceTarget.title) }} />
-              <label style={{ fontSize: 12, color: T.text2, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <label style={{ fontSize: 12.5, color: T.text2, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                 <input type="checkbox" checked={upNotify} onChange={e => setUpNotify(e.target.checked)} /> notify distributors
               </label>
-              <button disabled={uploading} onClick={submitUpload}
-                style={{ fontSize: 12, fontWeight: 700, padding: '8px 18px', borderRadius: 8, border: `1px solid ${T.blue}`, background: T.blue, color: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}>
-                {uploading ? 'Uploading…' : replaceTarget ? 'Upload replacement' : '⬆ Publish'}
-              </button>
+              <Btn size="sm" disabled={uploading} onClick={submitUpload}>
+                {uploading ? 'Uploading…' : replaceTarget ? 'Upload replacement' : 'Publish'}
+              </Btn>
             </div>
-            {note && <div style={{ fontSize: 12, color: /fail/i.test(note) ? T.red : T.green }}>{note}</div>}
+            {note && <div style={{ fontSize: 12.5, color: /fail/i.test(note) ? A.bad : A.good }}>{note}</div>}
           </div>
 
-          {error && <div style={{ background: 'rgba(240,78,78,0.1)', border: `1px solid ${T.red}40`, borderRadius: 8, padding: 12, color: T.red, fontSize: 13 }}>{error}</div>}
-          {loading && <div style={{ color: T.text3, textAlign: 'center', padding: 30 }}>Loading…</div>}
+          {error && <Banner tone="error">{error}</Banner>}
+          {loading && <div style={{ color: T.text3, textAlign: 'center', padding: 30, fontSize: 13 }}>Loading…</div>}
 
           {/* Sections */}
           {!loading && B2B_ASSET_SECTIONS.map(sec => {
             const rows = assets.filter(a => a.section === sec)
             return (
-              <div key={sec} style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, overflow: 'hidden' }}>
-                <div style={{ padding: '10px 14px', borderBottom: `1px solid ${T.border}`, fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: T.text2 }}>
-                  {sec} <span style={{ color: T.text3, fontWeight: 400 }}>({rows.length})</span>
+              <div key={sec} style={cardStyle(false)}>
+                <div style={{ padding: '11px 16px', borderBottom: `1px solid ${T.border}`, fontSize: 13, fontWeight: 650, color: T.text2 }}>
+                  {sec} <span style={{ color: T.text3, fontWeight: 400, fontSize: 12.5 }}>({rows.length})</span>
                 </div>
-                {rows.length === 0 && <div style={{ padding: '10px 14px', fontSize: 12, color: T.text3, fontStyle: 'italic' }}>Empty</div>}
+                {rows.length === 0 && <div style={{ padding: '11px 16px', fontSize: 12.5, color: T.text3, fontStyle: 'italic' }}>Empty</div>}
                 {rows.map((a, i) => (
-                  <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderTop: i === 0 ? 'none' : `1px solid ${T.border}`, opacity: a.is_active ? 1 : 0.5 }}>
+                  <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', borderTop: i === 0 ? 'none' : `1px solid ${T.border}`, opacity: a.is_active ? 1 : 0.5 }}>
                     <input defaultValue={a.title} onBlur={e => { if (e.target.value.trim() && e.target.value !== a.title) patch(a.id, { title: e.target.value }) }}
                       style={{ ...input, minWidth: 220, fontWeight: 600 }} />
                     <select value={a.section} onChange={e => patch(a.id, { section: e.target.value })} style={input}>
                       {B2B_ASSET_SECTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
-                    <span style={{ fontSize: 11, color: T.text3, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: 12, color: T.text3, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {a.file_name}{a.size_bytes ? ` · ${fmtBytes(a.size_bytes)}` : ''} · {new Date(a.updated_at).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })}
                     </span>
-                    <button onClick={() => { setReplaceTarget(a); setNote('') }} style={{ ...input, cursor: 'pointer' }}>Replace file</button>
-                    <button onClick={() => patch(a.id, { is_active: !a.is_active })} title={a.is_active ? 'Hide from distributors' : 'Show to distributors'} style={{ ...input, cursor: 'pointer' }}>
+                    <Btn variant="ghost" size="sm" onClick={() => { setReplaceTarget(a); setNote('') }}>Replace file</Btn>
+                    <Btn variant="ghost" size="sm" title={a.is_active ? 'Hide from distributors' : 'Show to distributors'} onClick={() => patch(a.id, { is_active: !a.is_active })}>
                       {a.is_active ? 'Hide' : 'Unhide'}
-                    </button>
-                    <button onClick={() => removeAsset(a)} style={{ ...input, cursor: 'pointer', color: T.red, borderColor: `${T.red}60` }}>✕</button>
+                    </Btn>
+                    <button className="al-press al-focus al-ghost" onClick={() => removeAsset(a)} style={{ ...btnStyle('ghost', 'sm'), color: A.bad }}>Delete</button>
                   </div>
                 ))}
               </div>

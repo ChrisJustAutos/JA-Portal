@@ -9,6 +9,7 @@
 // generated courses the slides ARE the document.
 // The interactive "preview as distributor" player lives one level up at
 // /admin/b2b/training/<slug>.
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
@@ -18,6 +19,7 @@ import B2BAdminTabs from '../../../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../../../lib/authServer'
 import { T, alpha } from '../../../../../lib/ui/theme'
 import { useToast } from '../../../../../components/ui/Feedback'
+import { A, Btn, cardStyle, Banner, inputStyle, RADIUS, SHADOW } from '../../../../../components/b2b/ui'
 
 interface PreviewSection { title: string; intro?: string; slides: number[] }
 interface PreviewQuestion { q: string; options: string[]; correct: number; explain?: string; slide?: number }
@@ -137,13 +139,13 @@ export default function TrainingPreview({ user }: { user: any }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1100 }}>
 
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-            <a href="/admin/b2b/training" style={{ fontSize: 12, color: T.text3, textDecoration: 'none', whiteSpace: 'nowrap' }}>← Training assignments</a>
+            <a href="/admin/b2b/training" style={{ fontSize: 12.5, color: T.text3, textDecoration: 'none', whiteSpace: 'nowrap' }}>← Training assignments</a>
             {mod && (
               <>
-                <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>{mod.title}</h1>
-                <span style={{ fontSize: 12, color: T.text3 }}>
-                  <span style={{ fontFamily: 'monospace' }}>{mod.slug}</span> · pass mark {mod.pass_pct}% · {questions.length} questions
-                  {!mod.enabled && <span style={{ color: T.amber }}> · module disabled</span>}
+                <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15 }}>{mod.title}</h1>
+                <span style={{ fontSize: 12.5, color: T.text3 }}>
+                  <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{mod.slug}</span> · pass mark {mod.pass_pct}% · {questions.length} questions
+                  {!mod.enabled && <span style={{ color: A.warn }}> · module disabled</span>}
                 </span>
               </>
             )}
@@ -151,30 +153,32 @@ export default function TrainingPreview({ user }: { user: any }) {
           {mod?.description && <div style={{ fontSize: 13, color: T.text2, marginTop: -8 }}>{mod.description}</div>}
 
           {showDraftBanner && (
-            <div style={{
-              background: alpha(T.amber, '14'), border: `1px solid ${alpha(T.amber, '45')}`, borderRadius: 8,
-              padding: '10px 14px', fontSize: 12.5, color: T.amber, fontWeight: 600, marginTop: -6,
-            }}>
-              Draft course — review the suggested questions, then enable it on the Training page and assign it.
+            <div style={{ marginTop: -6 }}>
+              <Banner tone="warn">
+                <span style={{ color: A.warn, fontWeight: 600 }}>
+                  Draft course — review the suggested questions, then enable it on the Training page and assign it.
+                </span>
+              </Banner>
             </div>
           )}
 
-          {error && <div style={{ background: alpha(T.red, '1a'), border: `1px solid ${alpha(T.red, '40')}`, borderRadius: 8, padding: 12, color: T.red, fontSize: 13 }}>{error}</div>}
+          {error && <Banner tone="error">{error}</Banner>}
           {!mod && !error && <div style={{ color: T.text3, textAlign: 'center', padding: 30 }}>Loading…</div>}
 
           {/* ── Course slides, section by section ─────────────────────── */}
           {mod && mod.sections.map((s, si) => (
-            <section key={si} style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: '14px 18px' }}>
+            <section key={si} style={{ ...cardStyle(false), padding: '14px 18px' }}>
               <div style={{ fontSize: 14, fontWeight: 700 }}>{si + 1}. {s.title}</div>
               {s.intro && <div style={{ fontSize: 12.5, color: T.text2, marginTop: 4 }}>{s.intro}</div>}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10, marginTop: 12 }}>
                 {(s.slides || []).map(n => (
                   <button key={n} onClick={() => setLightbox(n)}
-                    style={{ background: 'none', border: `1px solid ${T.border}`, borderRadius: 8, padding: 0, cursor: 'zoom-in', overflow: 'hidden' }}>
+                    className="al-raise al-focus"
+                    style={{ background: 'none', border: `1px solid ${T.border}`, borderRadius: RADIUS.sm, padding: 0, cursor: 'zoom-in', overflow: 'hidden' }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={slideSrc(mod, n)} alt={`Slide ${n}`} loading="lazy"
                       style={{ display: 'block', width: '100%', height: 'auto' }} />
-                    <div style={{ fontSize: 10.5, color: T.text3, padding: '3px 0 5px' }}>Slide {n}</div>
+                    <div style={{ fontSize: 12, color: T.text3, padding: '3px 0 5px' }}>Slide {n}</div>
                   </button>
                 ))}
               </div>
@@ -183,16 +187,15 @@ export default function TrainingPreview({ user }: { user: any }) {
 
           {/* ── Quiz with answers — editable ──────────────────────────── */}
           {mod && (
-            <section style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: '14px 18px' }}>
+            <section style={{ ...cardStyle(false), padding: '14px 18px' }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 240 }}>
                   <div style={{ fontSize: 14, fontWeight: 700 }}>Quiz — {questions.length} questions, correct answers highlighted</div>
-                  <div style={{ fontSize: 12, color: T.text3, marginTop: 3 }}>Distributors see the questions in random order and never see answers before submitting. Edit freely — nothing changes for distributors until you save.</div>
+                  <div style={{ fontSize: 12.5, color: T.text3, marginTop: 3 }}>Distributors see the questions in random order and never see answers before submitting. Edit freely — nothing changes for distributors until you save.</div>
                 </div>
-                <button onClick={addQ}
-                  style={{ fontSize: 12, fontWeight: 700, color: T.blue, background: 'none', border: `1px solid ${alpha(T.blue, '55')}`, borderRadius: 7, padding: '6px 14px', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                  ＋ Add question
-                </button>
+                <Btn variant="secondary" size="sm" onClick={addQ}>
+                  Add question
+                </Btn>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14 }}>
                 {questions.map((q, qi) => editing.has(qi) ? (
@@ -202,23 +205,26 @@ export default function TrainingPreview({ user }: { user: any }) {
                     onDone={() => toggleEdit(qi)}
                     onDelete={() => deleteQ(qi)} />
                 ) : (
-                  <div key={qi} style={{ background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 9, padding: '11px 14px' }}>
+                  <div key={qi} style={{ background: T.bg3, borderRadius: RADIUS.sm, padding: '11px 14px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                       <div style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>
                         {qi + 1}. {q.q || <span style={{ color: T.text3, fontStyle: 'italic' }}>(empty question)</span>}
                         {q.slide != null && (
                           <button onClick={() => setLightbox(q.slide!)}
-                            style={{ marginLeft: 8, fontSize: 10.5, color: T.blue, background: 'none', border: `1px solid ${alpha(T.blue, '45')}`, borderRadius: 6, padding: '1px 7px', cursor: 'pointer' }}>
+                            className="al-press al-focus"
+                            style={{ marginLeft: 8, fontSize: 12, fontWeight: 600, color: A.accent, background: 'none', border: `1px solid ${alpha(A.accent, '45')}`, borderRadius: RADIUS.pill, padding: '1px 9px', cursor: 'pointer', fontFamily: 'inherit' }}>
                             slide {q.slide}
                           </button>
                         )}
                       </div>
                       <button onClick={() => toggleEdit(qi)}
-                        style={{ fontSize: 11, fontWeight: 700, color: T.blue, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                        className="al-press al-focus"
+                        style={{ fontSize: 12.5, fontWeight: 700, color: A.accent, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                         Edit
                       </button>
                       <button onClick={() => deleteQ(qi)}
-                        style={{ fontSize: 11, fontWeight: 700, color: T.red, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                        className="al-press al-focus"
+                        style={{ fontSize: 12.5, fontWeight: 700, color: A.bad, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                         Delete
                       </button>
                     </div>
@@ -227,19 +233,19 @@ export default function TrainingPreview({ user }: { user: any }) {
                         const isCorrect = oi === q.correct
                         return (
                           <div key={oi} style={{
-                            display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12.5, borderRadius: 7, padding: '5px 9px',
-                            background: isCorrect ? alpha(T.green, '16') : 'transparent',
-                            border: `1px solid ${isCorrect ? alpha(T.green, '50') : 'transparent'}`,
-                            color: isCorrect ? T.green : T.text2, fontWeight: isCorrect ? 600 : 400,
+                            display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12.5, borderRadius: RADIUS.sm - 3, padding: '5px 9px',
+                            background: isCorrect ? alpha(A.good, '16') : 'transparent',
+                            border: `1px solid ${isCorrect ? alpha(A.good, '50') : 'transparent'}`,
+                            color: isCorrect ? A.good : T.text2, fontWeight: isCorrect ? 600 : 400,
                           }}>
-                            <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{String.fromCharCode(65 + oi)}.</span>
+                            <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{String.fromCharCode(65 + oi)}.</span>
                             <span style={{ flex: 1 }}>{opt}</span>
-                            {isCorrect && <span style={{ fontSize: 11, whiteSpace: 'nowrap' }}>✓ correct</span>}
+                            {isCorrect && <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>✓ correct</span>}
                           </div>
                         )
                       })}
                     </div>
-                    {q.explain && <div style={{ fontSize: 12, color: T.text3, fontStyle: 'italic', marginTop: 7 }}>{q.explain}</div>}
+                    {q.explain && <div style={{ fontSize: 12.5, color: T.text3, fontStyle: 'italic', marginTop: 7 }}>{q.explain}</div>}
                   </div>
                 ))}
                 {questions.length === 0 && (
@@ -254,20 +260,18 @@ export default function TrainingPreview({ user }: { user: any }) {
             <div style={{
               position: 'sticky', bottom: 12, zIndex: 50,
               display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-              background: T.bg2, border: `1px solid ${alpha(T.blue, '55')}`, borderRadius: 10,
-              padding: '10px 14px', boxShadow: '0 6px 24px rgba(0,0,0,0.25)',
+              background: T.bg2, border: `1px solid ${alpha(A.accent, '55')}`, borderRadius: RADIUS.md,
+              padding: '10px 14px', boxShadow: SHADOW.md,
             }}>
               <span style={{ flex: 1, minWidth: 200, fontSize: 12.5, color: T.text2 }}>
                 Unsaved quiz changes — {questions.length} question{questions.length === 1 ? '' : 's'}.
               </span>
-              <button onClick={discard} disabled={saving}
-                style={{ fontSize: 12.5, fontWeight: 600, padding: '9px 14px', borderRadius: 8, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2, cursor: saving ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+              <Btn variant="ghost" size="sm" onClick={discard} disabled={saving}>
                 Discard
-              </button>
-              <button onClick={save} disabled={saving}
-                style={{ fontSize: 12.5, fontWeight: 700, padding: '9px 20px', borderRadius: 8, border: `1px solid ${T.blue}`, background: T.blue, color: '#fff', cursor: saving ? 'default' : 'pointer', fontFamily: 'inherit', opacity: saving ? 0.6 : 1 }}>
+              </Btn>
+              <Btn size="sm" onClick={save} disabled={saving}>
                 {saving ? 'Saving…' : 'Save changes'}
-              </button>
+              </Btn>
             </div>
           )}
 
@@ -280,7 +284,7 @@ export default function TrainingPreview({ user }: { user: any }) {
             style={{ position: 'fixed', inset: 0, background: alpha('#000000', 'cc'), display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, cursor: 'zoom-out', padding: 24 }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={slideSrc(mod, lightbox)} alt={`Slide ${lightbox}`}
-              style={{ maxWidth: '92vw', maxHeight: '90vh', borderRadius: 10, boxShadow: '0 12px 48px rgba(0,0,0,0.5)' }} />
+              style={{ maxWidth: '92vw', maxHeight: '90vh', borderRadius: RADIUS.sm, boxShadow: SHADOW.md }} />
           </div>
         )}
       </div>
@@ -298,22 +302,24 @@ function QuestionEditor({ q, qi, maxSlide, onChange, onOption, onDone, onDelete 
   onDone: () => void
   onDelete: () => void
 }) {
-  const inputStyle: React.CSSProperties = {
-    background: T.bg2, color: T.text, border: `1px solid ${T.border2}`, borderRadius: 7,
-    padding: '8px 10px', fontSize: 12.5, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box',
+  // Dense editor inputs — kit look, editor-scale type (floor is 12px).
+  const editorInput: React.CSSProperties = {
+    ...inputStyle(), background: T.bg2, padding: '8px 10px', fontSize: 13, minHeight: 36,
   }
-  const labelStyle: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4, display: 'block' }
+  const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 650, color: T.text2, marginBottom: 4, display: 'block' }
 
   return (
-    <div style={{ background: T.bg3, border: `1px solid ${alpha(T.blue, '45')}`, borderRadius: 9, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ background: T.bg3, border: `1px solid ${alpha(A.accent, '45')}`, borderRadius: RADIUS.sm, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ flex: 1, fontSize: 12, fontWeight: 700, color: T.blue }}>Editing question {qi + 1}</span>
+        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 700, color: A.accent }}>Editing question {qi + 1}</span>
         <button onClick={onDelete}
-          style={{ fontSize: 11, fontWeight: 700, color: T.red, background: 'none', border: `1px solid ${alpha(T.red, '45')}`, borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>
+          className="al-press al-focus"
+          style={{ fontSize: 12, fontWeight: 700, color: A.bad, background: 'none', border: `1px solid ${alpha(A.bad, '45')}`, borderRadius: RADIUS.pill, padding: '3px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
           Delete
         </button>
         <button onClick={onDone}
-          style={{ fontSize: 11, fontWeight: 700, color: T.text, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>
+          className="al-press al-focus"
+          style={{ fontSize: 12, fontWeight: 700, color: T.text, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: RADIUS.pill, padding: '3px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
           Done
         </button>
       </div>
@@ -321,7 +327,7 @@ function QuestionEditor({ q, qi, maxSlide, onChange, onOption, onDone, onDelete 
       <div>
         <label style={labelStyle}>Question</label>
         <textarea value={q.q} rows={2} onChange={e => onChange({ q: e.target.value })}
-          style={{ ...inputStyle, resize: 'vertical' }} />
+          style={{ ...editorInput, resize: 'vertical' }} />
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -330,8 +336,8 @@ function QuestionEditor({ q, qi, maxSlide, onChange, onOption, onDone, onDelete 
           <div key={oi} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <input type="radio" name={`correct-${qi}`} checked={q.correct === oi}
               onChange={() => onChange({ correct: oi })} style={{ flexShrink: 0, cursor: 'pointer' }} />
-            <span style={{ fontFamily: 'monospace', fontSize: 11, color: T.text3, flexShrink: 0 }}>{String.fromCharCode(65 + oi)}.</span>
-            <input value={opt} onChange={e => onOption(oi, e.target.value)} style={inputStyle} />
+            <span style={{ fontFamily: 'monospace', fontSize: 12, color: T.text3, flexShrink: 0 }}>{String.fromCharCode(65 + oi)}.</span>
+            <input value={opt} onChange={e => onOption(oi, e.target.value)} style={editorInput} />
           </div>
         ))}
       </div>
@@ -340,13 +346,13 @@ function QuestionEditor({ q, qi, maxSlide, onChange, onOption, onDone, onDelete 
         <div style={{ flex: 1, minWidth: 240 }}>
           <label style={labelStyle}>Explanation (shown after submit)</label>
           <textarea value={q.explain || ''} rows={2} onChange={e => onChange({ explain: e.target.value })}
-            style={{ ...inputStyle, resize: 'vertical' }} />
+            style={{ ...editorInput, resize: 'vertical' }} />
         </div>
         <div style={{ width: 130 }}>
           <label style={labelStyle}>Slide{maxSlide > 0 ? ` (1–${maxSlide})` : ''}</label>
           <input type="number" min={1} max={maxSlide || undefined} value={q.slide ?? ''}
             onChange={e => onChange({ slide: e.target.value === '' ? undefined : Number(e.target.value) })}
-            placeholder="—" style={inputStyle} />
+            placeholder="—" style={editorInput} />
         </div>
       </div>
     </div>

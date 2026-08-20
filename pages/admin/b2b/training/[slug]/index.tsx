@@ -13,7 +13,8 @@ import PortalTopBar from '../../../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../../../components/b2b/B2BAdminTabs'
 import TrainingPlayer from '../../../../../components/b2b/TrainingPlayer'
 import { requirePageAuth } from '../../../../../lib/authServer'
-import { T, alpha } from '../../../../../lib/ui/theme'
+import { T } from '../../../../../lib/ui/theme'
+import { A, Banner } from '../../../../../components/b2b/ui'
 
 export default function AdminTrainingPreview({ user }: { user: any }) {
   const router = useRouter()
@@ -33,19 +34,17 @@ export default function AdminTrainingPreview({ user }: { user: any }) {
             storagePrefix="admin-preview"
             titleSuffix=" — preview · Just Autos"
             banner={
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-                background: alpha(T.amber, '14'), border: `1px solid ${alpha(T.amber, '45')}`,
-                borderRadius: 8, padding: '8px 12px', fontSize: 12,
-              }}>
-                <span style={{ flex: 1, minWidth: 240, color: T.amber, fontWeight: 600 }}>
-                  Admin preview — exactly what an assigned distributor sees. Quiz attempts here are not recorded.
-                </span>
-                <a href={`/admin/b2b/training/${encodeURIComponent(slug)}/answers`}
-                  style={{ color: T.blue, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                  Answer sheet →
-                </a>
-              </div>
+              <Banner tone="warn">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <span style={{ flex: 1, minWidth: 240, color: A.warn, fontWeight: 600 }}>
+                    Admin preview — exactly what an assigned distributor sees. Quiz attempts here are not recorded.
+                  </span>
+                  <a href={`/admin/b2b/training/${encodeURIComponent(slug)}/answers`}
+                    style={{ color: A.accent, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                    Answer sheet →
+                  </a>
+                </div>
+              </Banner>
             }
           />
         )}

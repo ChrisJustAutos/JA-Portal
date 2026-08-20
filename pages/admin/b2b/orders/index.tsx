@@ -15,14 +15,9 @@ import { useIsMobile } from '../../../../lib/useIsMobile'
 import { requirePageAuth } from '../../../../lib/authServer'
 import type { UserRole } from '../../../../lib/permissions'
 import { SkeletonRows } from '../../../../components/ui'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
+import { useToast, useConfirm } from '../../../../components/ui/Feedback'
+import { T, alpha } from '../../../../lib/ui/theme'
+import { A, RADIUS, btnStyle, cardStyle, Banner, PageTitle, StatusPill as Pill, orderStatusColor, orderStatusLabel } from '../../../../components/b2b/ui'
 
 interface Props {
   user: {
@@ -53,6 +48,9 @@ interface OrderRow {
   myob_invoice_number: string | null
   myob_write_error: string | null
   is_test: boolean | null
+  machship_consignment_id: string | null
+  machship_manifest_id: string | null
+  freight_status: string | null
   distributor: { id: string; display_name: string } | null
 }
 
@@ -65,9 +63,20 @@ interface ListResponse {
   distributors: { id: string; display_name: string }[]
 }
 
+// Booked but not yet manifested = sitting on the bench waiting for "Ship now".
+// Mirrors isManifested() in lib/b2b-ship-now.ts — keep the two in step.
+function awaitingDespatch(o: OrderRow): boolean {
+  if (!o.machship_consignment_id) return false
+  if (o.machship_manifest_id) return false
+  const fs = (o.freight_status || '').toLowerCase()
+  return fs !== 'manifested' && fs !== 'consignment_missing'
+}
+
 const STATUS_ORDER = ['pending_payment', 'paid', 'picking', 'packed', 'shipped', 'delivered', 'cancelled', 'refunded'] as const
+// Tile labels stay per-status (Picking vs Packed are separate filter buckets);
+// row pills use the kit's orderStatusLabel vocabulary.
 const STATUS_LABEL: Record<string, string> = {
-  pending_payment: 'Pending payment',
+  pending_payment: 'Awaiting payment',
   paid: 'Paid',
   picking: 'Picking',
   packed: 'Packed',
@@ -75,16 +84,6 @@ const STATUS_LABEL: Record<string, string> = {
   delivered: 'Delivered',
   cancelled: 'Cancelled',
   refunded: 'Refunded',
-}
-const STATUS_COLOR: Record<string, string> = {
-  pending_payment: T.text3,
-  paid: T.blue,
-  picking: T.amber,
-  packed: T.amber,
-  shipped: T.teal,
-  delivered: T.green,
-  cancelled: T.red,
-  refunded: T.purple,
 }
 const STATUS_ICON: Record<string, string> = {
   pending_payment: 'pending',
@@ -176,6 +175,68 @@ export default function AdminOrdersListPage({ user }: Props) {
     updateFilter({ q: trimmed || null })
   }
 
+  const toast         = useToast()
+  const confirmDialog = useConfirm()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [shipBusy, setShipBusy] = useState(false)
+
+  const despatchable = useMemo(() => (data?.orders || []).filter(awaitingDespatch), [data])
+  // Drop selections whose rows have gone (filter change, page change, shipped).
+  useEffect(() => {
+    setSelected(prev => {
+      const live = new Set(despatchable.map(o => o.id))
+      const next = new Set(Array.from(prev).filter(id => live.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [despatchable])
+
+  const toggle = useCallback((id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+
+  // Bulk "Ship now": ONE MachShip manifest for the whole run (and so one carrier
+  // pickup) — the endpoint batches server-side. See lib/b2b-ship-now.ts.
+  async function shipSelected() {
+    const ids = Array.from(selected)
+    if (!ids.length) return
+    const ok = await confirmDialog({
+      title: `Ship ${ids.length} order${ids.length === 1 ? '' : 's'} now?`,
+      message: 'Manifests these consignments with the carrier as one despatch run (booking a single pickup), raises the MYOB tax invoices and emails each distributor. This cannot be undone from here.',
+      confirmLabel: 'Ship now',
+    })
+    if (!ok) return
+    setShipBusy(true)
+    try {
+      const r = await fetch('/api/b2b/admin/orders/ship-now', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      const bits: string[] = []
+      if (j.shipped_count) bits.push(`${j.shipped_count} shipped`)
+      if (j.already_count) bits.push(`${j.already_count} already manifested`)
+      if (j.failed_count)  bits.push(`${j.failed_count} failed`)
+      toast(bits.join(' · ') || 'Nothing to do', j.failed_count ? 'error' : 'success')
+      // Surface per-order detail — a partial failure is the case that matters.
+      const bad = (j.results || []).filter((x: any) => !x.ok)
+      for (const b of bad) toast(`${b.order_number || b.order_id}: ${b.error}`, 'error')
+      const warned = (j.results || []).filter((x: any) => x.ok && x.warning)
+      for (const w of warned) toast(`${w.order_number || w.order_id}: ${w.warning}`, 'error')
+      setSelected(new Set())
+      load()
+    } catch (e: any) {
+      toast(e?.message || String(e), 'error')
+    } finally {
+      setShipBusy(false)
+    }
+  }
+
   const totalPages = data ? Math.ceil(data.total_count / LIMIT) : 0
   const currentPage = Math.floor(offset / LIMIT) + 1
 
@@ -186,11 +247,11 @@ export default function AdminOrdersListPage({ user }: Props) {
   const tiles: StatusTile[] = useMemo(() => {
     const groupTiles: StatusTile[] = groups.map(g => ({
       id: g.id, label: g.name, statuses: g.statuses, isGroup: true,
-      color: STATUS_COLOR[g.statuses[0]] || T.blue, icon: 'all',
+      color: orderStatusColor(g.statuses[0]), icon: 'all',
     }))
     const singleTiles: StatusTile[] = STATUS_ORDER.filter(s => !groupedStatuses.has(s)).map(s => ({
       id: s, label: STATUS_LABEL[s], statuses: [s], isGroup: false,
-      color: STATUS_COLOR[s], icon: STATUS_ICON[s] || 'all',
+      color: orderStatusColor(s), icon: STATUS_ICON[s] || 'all',
     }))
     return [...groupTiles, ...singleTiles]
   }, [prefs.order_status_groups, data?.status_counts])
@@ -238,45 +299,45 @@ export default function AdminOrdersListPage({ user }: Props) {
           <B2BAdminTabs active="orders"/>
 
           {/* Header */}
-          <header style={{marginBottom:18,display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
-            <div>
-              <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
-                <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
-                {' / '}
-                <span style={{color:T.text2}}>Orders</span>
-              </div>
-              <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Orders</h1>
-              <button onClick={()=>router.push('/admin/b2b/test-order')}
-                style={{marginTop:8,padding:'6px 12px',borderRadius:6,border:`1px solid ${T.amber}55`,background:`${T.amber}18`,color:T.amber,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
-                + Place test order
-              </button>
-            </div>
-            {data && (
+          <PageTitle
+            sub={
+              <span style={{display:'inline-flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                <span><a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a> / Orders</span>
+                <button onClick={()=>router.push('/admin/b2b/test-order')}
+                  className="al-press al-focus"
+                  style={{...btnStyle('ghost','sm'),color:A.warn,background:alpha(A.warn,'14')}}>
+                  Place test order
+                </button>
+              </span>
+            }
+            action={data && (
               <div style={{display:'flex',gap:24,alignItems:'baseline'}}>
                 <Stat n={data.total_count}                 label="orders"/>
                 <Stat n={`$${money(data.totals.total_inc_sum)}`} label="filtered total" raw/>
-                <Stat n={`$${money(data.totals.paid_sum)}`}      label="paid"           raw color={T.green}/>
+                <Stat n={`$${money(data.totals.paid_sum)}`}      label="paid"           raw color={A.good}/>
               </div>
-            )}
-          </header>
+            )}>
+            Orders
+          </PageTitle>
 
           {/* Status tiles — click to filter, drag one onto another to combine */}
           {data && (
             <div style={{marginBottom:14}}>
               <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
-                <span style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.06em',fontWeight:600}}>Filter by status</span>
+                <span style={{fontSize:13,fontWeight:650,color:T.text2}}>Filter by status</span>
                 <button onClick={() => setTileEdit(e => !e)}
-                  style={{background: tileEdit ? T.accent : 'transparent',border:`1px solid ${tileEdit ? T.accent : T.border2}`,color: tileEdit ? '#fff' : T.text3,borderRadius:6,padding:'3px 9px',fontSize:11,fontFamily:'inherit',cursor:'pointer'}}>
-                  {tileEdit ? 'Done' : '✎ Edit buckets'}
+                  className="al-press al-focus"
+                  style={btnStyle(tileEdit ? 'primary' : 'ghost','sm')}>
+                  {tileEdit ? 'Done' : 'Edit buckets'}
                 </button>
                 {tileEdit
-                  ? <span style={{fontSize:11,color:T.text3}}>Rename or ungroup combined buckets. Drag is paused.</span>
-                  : <span style={{fontSize:11,color:T.text3}}>Drag one tile onto another to combine.</span>}
+                  ? <span style={{fontSize:12,color:T.text3}}>Rename or ungroup combined buckets. Drag is paused.</span>
+                  : <span style={{fontSize:12,color:T.text3}}>Drag one tile onto another to combine.</span>}
               </div>
               <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))',gap:10}}>
                 {/* All */}
                 <StatusCard
-                  label="All orders" icon="all" color={T.blue}
+                  label="All orders" icon="all" color={A.accent}
                   count={data.status_counts['_all'] ?? null}
                   active={activeSet.size === 0}
                   onClick={() => updateFilter({ status: null })}
@@ -311,9 +372,9 @@ export default function AdminOrdersListPage({ user }: Props) {
           {/* Secondary filters */}
           {data && (
             <div style={{
+              ...cardStyle(false),
               display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',
-              padding:'10px 12px',background:T.bg2,border:`1px solid ${T.border}`,
-              borderRadius:8,marginBottom:14,
+              padding:'10px 12px',marginBottom:14,overflow:'visible',
             }}>
               <input
                 type="text"
@@ -321,21 +382,19 @@ export default function AdminOrdersListPage({ user }: Props) {
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') applySearch() }}
-                style={{
-                  flex:1,minWidth:220,
-                  background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-                  borderRadius:5,padding:'7px 11px',fontSize:13,outline:'none',
-                  fontFamily:'inherit',boxSizing:'border-box',
-                }}/>
+                className="al-focus"
+                style={{...filterInput(),flex:1,minWidth:220}}/>
               <button onClick={applySearch}
-                style={iconBtn(true)}>
+                className="al-press al-focus al-primary"
+                style={btnStyle('primary','sm')}>
                 Search
               </button>
 
               <select
                 value={distributorFilter}
                 onChange={e => updateFilter({ distributor: e.target.value || null })}
-                style={selectStyle()}>
+                className="al-focus"
+                style={{...filterInput(),width:'auto',cursor:'pointer'}}>
                 <option value="">All distributors</option>
                 {data.distributors.map(d => (
                   <option key={d.id} value={d.id}>{d.display_name}</option>
@@ -346,18 +405,21 @@ export default function AdminOrdersListPage({ user }: Props) {
                 type="date"
                 value={dateFromFilter}
                 onChange={e => updateFilter({ from: e.target.value || null })}
-                style={dateStyle()}/>
+                className="al-focus"
+                style={{...filterInput(),width:'auto',colorScheme:'dark'}}/>
               <span style={{color:T.text3,fontSize:12}}>→</span>
               <input
                 type="date"
                 value={dateToFilter}
                 onChange={e => updateFilter({ to: e.target.value || null })}
-                style={dateStyle()}/>
+                className="al-focus"
+                style={{...filterInput(),width:'auto',colorScheme:'dark'}}/>
 
               {(statusFilter || distributorFilter || dateFromFilter || dateToFilter || searchQuery) && (
                 <button
                   onClick={() => router.push({ pathname: router.pathname }, undefined, { shallow: false })}
-                  style={{...iconBtn(false), color:T.amber, borderColor:`${T.amber}40`}}>
+                  className="al-press al-focus"
+                  style={{...btnStyle('ghost','sm'), color:A.warn}}>
                   Clear filters
                 </button>
               )}
@@ -366,23 +428,60 @@ export default function AdminOrdersListPage({ user }: Props) {
 
           {/* Errors */}
           {error && (
-            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:10}}>
-              Couldn't load orders: {error}
+            <div style={{marginBottom:10}}>
+              <Banner tone="error">Couldn't load orders: {error}</Banner>
+            </div>
+          )}
+
+          {/* Bulk despatch bar — only when something is booked-but-not-manifested */}
+          {despatchable.length > 0 && (
+            <div style={{
+              ...cardStyle(false), padding:'10px 14px', marginBottom:10,
+              display:'flex', alignItems:'center', gap:12, flexWrap:'wrap',
+              background: alpha(A.warn,'0d'), border:`1px solid ${alpha(A.warn,'33')}`,
+            }}>
+              <span style={{fontSize:12.5,color:T.text2}}>
+                <b style={{color:A.warn}}>{despatchable.length}</b> booked, awaiting despatch
+              </span>
+              <button
+                onClick={() => setSelected(new Set(despatchable.map(o => o.id)))}
+                className="al-press al-focus al-ghost"
+                style={{...btnStyle('ghost','sm'), background:'transparent', color:A.accent}}>
+                Select all
+              </button>
+              {selected.size > 0 && (
+                <button onClick={() => setSelected(new Set())}
+                  className="al-press al-focus al-ghost"
+                  style={{...btnStyle('ghost','sm'), background:'transparent', color:T.text3}}>
+                  Clear
+                </button>
+              )}
+              <span style={{flex:1}}/>
+              <button onClick={shipSelected} disabled={shipBusy || selected.size === 0}
+                title="Manifests the selected consignments as ONE despatch run (one carrier pickup), raises the MYOB tax invoices and emails each distributor"
+                className="al-press al-focus"
+                style={{
+                  ...btnStyle('primary','sm'),
+                  background: selected.size ? A.accent : alpha(A.accent,'33'),
+                  color:'#fff',
+                  cursor: shipBusy ? 'wait' : selected.size ? 'pointer' : 'not-allowed',
+                }}>
+                {shipBusy ? 'Shipping…' : `Ship now${selected.size ? ` (${selected.size})` : ''}`}
+              </button>
             </div>
           )}
 
           {/* Table */}
-          <div style={{
-            background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',
-          }}>
+          <div style={cardStyle(false)}>
             <div style={{overflowX:'auto'}}>
               <table className="b2b-cards" style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
                   <tr style={{borderBottom:`1px solid ${T.border2}`}}>
+                    <th style={th(34)}></th>
                     <th style={th(140)}>Order</th>
                     <th style={th()}>Distributor</th>
                     <th style={th(110)}>Placed</th>
-                    <th style={th(110)}>Status</th>
+                    <th style={th(130)}>Status</th>
                     <th style={{...th(110),textAlign:'right'}}>Total (inc)</th>
                     <th style={th(120)}>MYOB #</th>
                     <th style={th(60)}></th>
@@ -390,15 +489,16 @@ export default function AdminOrdersListPage({ user }: Props) {
                 </thead>
                 <tbody>
                   {data && data.orders.length === 0 && !loading && (
-                    <tr><td colSpan={7} style={{padding:30,textAlign:'center',color:T.text3,fontSize:13}}>
+                    <tr><td colSpan={8} style={{padding:30,textAlign:'center',color:T.text3,fontSize:13}}>
                       No orders match these filters.
                     </td></tr>
                   )}
                   {data?.orders.map((o, i) => (
-                    <OrderRowDisplay key={o.id} order={o} isFirst={i === 0}/>
+                    <OrderRowDisplay key={o.id} order={o} isFirst={i === 0}
+                      selectable={awaitingDespatch(o)} checked={selected.has(o.id)} onToggle={toggle}/>
                   ))}
                   {loading && (
-                    <tr><td colSpan={7} style={{padding:0}}><SkeletonRows rows={8}/></td></tr>
+                    <tr><td colSpan={8} style={{padding:0}}><SkeletonRows rows={8}/></td></tr>
                   )}
                 </tbody>
               </table>
@@ -409,16 +509,17 @@ export default function AdminOrdersListPage({ user }: Props) {
               <div style={{
                 padding:'10px 16px',borderTop:`1px solid ${T.border2}`,
                 display:'flex',justifyContent:'space-between',alignItems:'center',gap:14,
-                fontSize:12,color:T.text3,
+                fontSize:12.5,color:T.text3,
               }}>
                 <span>
                   Showing {offset + 1}–{Math.min(offset + LIMIT, data.total_count)} of {data.total_count}
                 </span>
-                <div style={{display:'flex',gap:6}}>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
                   <button
                     disabled={offset === 0}
                     onClick={() => updateFilter({ offset: String(Math.max(0, offset - LIMIT)) })}
-                    style={iconBtn(offset > 0)}>
+                    className="al-press al-focus al-ghost"
+                    style={btnStyle('ghost','sm',offset === 0)}>
                     ← Prev
                   </button>
                   <span style={{padding:'6px 10px'}}>
@@ -427,7 +528,8 @@ export default function AdminOrdersListPage({ user }: Props) {
                   <button
                     disabled={offset + LIMIT >= data.total_count}
                     onClick={() => updateFilter({ offset: String(offset + LIMIT) })}
-                    style={iconBtn(offset + LIMIT < data.total_count)}>
+                    className="al-press al-focus al-ghost"
+                    style={btnStyle('ghost','sm',offset + LIMIT >= data.total_count)}>
                     Next →
                   </button>
                 </div>
@@ -442,7 +544,10 @@ export default function AdminOrdersListPage({ user }: Props) {
 }
 
 // ─── Row component ─────────────────────────────────────────────────────
-function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean }) {
+function OrderRowDisplay({ order, isFirst, selectable, checked, onToggle }: {
+  order: OrderRow; isFirst: boolean
+  selectable: boolean; checked: boolean; onToggle: (id: string) => void
+}) {
   const dist = order.distributor?.display_name || '—'
   const placedDate = new Date(order.created_at).toLocaleDateString('en-AU', { day:'2-digit', month:'short', year:'numeric' })
   const placedTime = new Date(order.created_at).toLocaleTimeString('en-AU', { hour:'2-digit', minute:'2-digit' })
@@ -454,10 +559,20 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
     }}
       onClick={() => { window.location.href = `/admin/b2b/orders/${order.id}` }}>
 
+      {/* Select — only booked-but-unmanifested rows can join a despatch run.
+          stopPropagation so ticking doesn't navigate into the order. */}
+      <td data-label="" style={{...td(), width:34}} onClick={e => e.stopPropagation()}>
+        {selectable ? (
+          <input type="checkbox" checked={checked} onChange={() => onToggle(order.id)}
+            title="Include in the next despatch run"
+            style={{width:16,height:16,accentColor:A.accent,cursor:'pointer'}}/>
+        ) : null}
+      </td>
+
       <td className="b2b-card-title" style={td()}>
-        <div style={{fontFamily:'monospace',fontSize:13,color:T.text}}>{order.order_number}{order.is_test && <span style={{marginLeft:6,fontFamily:'inherit',fontSize:9,padding:'1px 6px',borderRadius:8,background:`${T.amber}22`,color:T.amber,border:`1px solid ${T.amber}55`,verticalAlign:'middle'}}>TEST</span>}</div>
+        <div style={{fontFamily:'monospace',fontSize:13,color:T.text}}>{order.order_number}{order.is_test && <span style={{marginLeft:6,fontFamily:'system-ui,-apple-system,sans-serif',fontSize:12,fontWeight:600,padding:'2px 9px',borderRadius:RADIUS.pill,background:alpha(A.warn,'1f'),color:A.warn,verticalAlign:'middle'}}>Test</span>}</div>
         {order.customer_po && (
-          <div style={{fontSize:10,color:T.text3,marginTop:2}}>PO: {order.customer_po}</div>
+          <div style={{fontSize:12,color:T.text3,marginTop:2}}>PO: {order.customer_po}</div>
         )}
       </td>
 
@@ -465,15 +580,15 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
         <div style={{fontSize:13,color:T.text}}>{dist}</div>
       </td>
 
-      <td data-label="Placed" style={{...td(),fontSize:12,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>
+      <td data-label="Placed" style={{...td(),fontSize:12.5,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>
         {placedDate}
-        <div style={{fontSize:10,color:T.text3,opacity:0.7}}>{placedTime}</div>
+        <div style={{fontSize:12,color:T.text3,opacity:0.7}}>{placedTime}</div>
       </td>
 
       <td data-label="Status" style={td()}>
-        <StatusPill status={order.status}/>
+        <Pill color={orderStatusColor(order.status)}>{orderStatusLabel(order.status)}</Pill>
         {Number(order.refunded_total) > 0 && (
-          <div style={{fontSize:10,color:T.purple,marginTop:3}}>
+          <div style={{fontSize:12,color:A.bad,marginTop:3}}>
             -${money(Number(order.refunded_total))} refunded
           </div>
         )}
@@ -483,15 +598,15 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
         ${money(Number(order.total_inc))}
       </td>
 
-      <td data-label="MYOB #" style={{...td(),fontSize:12}}>
+      <td data-label="MYOB #" style={{...td(),fontSize:12.5}}>
         {order.myob_invoice_number ? (
           <span style={{fontFamily:'monospace',color:T.text2}}>{order.myob_invoice_number}</span>
         ) : order.myob_write_error ? (
-          <span style={{color:T.red}}>⚠ failed</span>
+          <span style={{color:A.bad}}>failed</span>
         ) : order.status === 'pending_payment' ? (
           <span style={{color:T.text3}}>—</span>
         ) : (
-          <span style={{color:T.amber}}>pending</span>
+          <span style={{color:A.warn}}>pending</span>
         )}
       </td>
 
@@ -500,23 +615,6 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
       </td>
 
     </tr>
-  )
-}
-
-function StatusPill({ status }: { status: string }) {
-  const color = STATUS_COLOR[status] || T.text3
-  const label = STATUS_LABEL[status] || status
-  return (
-    <span style={{
-      display:'inline-flex',alignItems:'center',gap:5,
-      padding:'2px 8px',borderRadius:4,
-      background:`${color}15`,border:`1px solid ${color}40`,color,
-      fontSize:10,fontWeight:600,
-      textTransform:'uppercase',letterSpacing:'0.04em',whiteSpace:'nowrap',
-    }}>
-      <span style={{display:'inline-block',width:6,height:6,borderRadius:'50%',background:color}}/>
-      {label}
-    </span>
   )
 }
 
@@ -550,17 +648,19 @@ function StatusCard({
       onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       onDrop={onDrop}
+      className={editMode ? undefined : 'al-press'}
       style={{
+        ...cardStyle(false),
         position:'relative',display:'flex',alignItems:'center',gap:10,padding:'11px 13px',
-        background: active ? `${color}18` : T.bg2,
-        border:`1px solid ${isDropTarget ? color : active ? `${color}66` : T.border}`,
-        borderRadius:10,cursor: editMode ? 'default' : 'pointer',
+        background: active ? alpha(color,'18') : T.bg2,
+        border:`1px solid ${isDropTarget ? color : active ? alpha(color,'66') : T.border}`,
+        cursor: editMode ? 'default' : 'pointer',
         opacity: isDragging ? 0.4 : 1,
-        boxShadow: isDropTarget ? `0 0 0 2px ${color}55` : 'none',
+        boxShadow: isDropTarget ? `0 0 0 2px ${alpha(color,'55')}` : undefined,
         transition:'border-color 0.12s, box-shadow 0.12s',
         userSelect:'none',
       }}>
-      <span style={{width:34,height:34,borderRadius:9,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:`${color}1f`,color,border:`1px solid ${color}33`,pointerEvents:'none'}}>
+      <span style={{width:34,height:34,borderRadius:10,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:alpha(color,'1f'),color,pointerEvents:'none'}}>
         <AppIcon name={icon} size={18}/>
       </span>
       <div style={{flex:1,minWidth:0}}>
@@ -570,15 +670,19 @@ function StatusCard({
             onClick={e => e.stopPropagation()}
             onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             onBlur={e => onRename?.(e.target.value)}
-            style={{width:'100%',boxSizing:'border-box',background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'3px 6px',fontSize:12,fontFamily:'inherit',outline:'none'}}
+            className="al-focus"
+            style={{width:'100%',boxSizing:'border-box',background:T.bg3,border:'1px solid transparent',color:T.text,borderRadius:RADIUS.sm,padding:'3px 7px',fontSize:12.5,fontFamily:'inherit',outline:'none'}}
           />
         ) : (
           <div style={{fontSize:13,fontWeight:600,color:T.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',pointerEvents:'none'}}>{label}</div>
         )}
-        {count != null && <div style={{fontSize:11,color:T.text3,pointerEvents:'none'}}>{count} order{count === 1 ? '' : 's'}</div>}
+        {count != null && <div style={{fontSize:12,color:T.text3,pointerEvents:'none'}}>{count} order{count === 1 ? '' : 's'}</div>}
       </div>
       {editMode && isGroup && (
-        <button onClick={e => { e.stopPropagation(); onUngroup?.() }} title="Ungroup" style={{background:'none',border:'none',color:T.text3,fontSize:15,cursor:'pointer',lineHeight:1,padding:'0 2px'}}>⊟</button>
+        <button onClick={e => { e.stopPropagation(); onUngroup?.() }} title="Ungroup" className="al-press"
+          style={{background:'none',border:'none',color:T.text3,fontSize:12,fontWeight:600,fontFamily:'inherit',cursor:'pointer',lineHeight:1,padding:'2px 4px'}}>
+          Ungroup
+        </button>
       )}
     </div>
   )
@@ -587,10 +691,10 @@ function StatusCard({
 function Stat({ n, label, color, raw }: { n: number | string; label: string; color?: string; raw?: boolean }) {
   return (
     <div style={{display:'flex',alignItems:'baseline',gap:6}}>
-      <span style={{fontSize:18,fontWeight:600,color: color || T.text,fontVariantNumeric:'tabular-nums'}}>
+      <span style={{fontSize:18,fontWeight:650,color: color || T.text,fontVariantNumeric:'tabular-nums'}}>
         {raw ? n : (typeof n === 'number' ? n.toLocaleString('en-AU') : n)}
       </span>
-      <span style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>{label}</span>
+      <span style={{fontSize:12,color:T.text3}}>{label}</span>
     </div>
   )
 }
@@ -601,39 +705,22 @@ function money(n: number): string {
 
 function th(width?: number): React.CSSProperties {
   return {
-    fontSize:10,color:T.text3,padding:'10px 12px',
-    textAlign:'left',fontWeight:500,
-    textTransform:'uppercase',letterSpacing:'0.05em',
+    fontSize:12,color:T.text3,padding:'10px 12px',
+    textAlign:'left',fontWeight:600,
     width,whiteSpace:'nowrap',background:T.bg2,
   }
 }
 function td(): React.CSSProperties {
   return { padding:'10px 12px',verticalAlign:'middle' }
 }
-function iconBtn(enabled: boolean): React.CSSProperties {
+// Dense filter-bar take on the kit's inputStyle — same surfaces, staff-tool
+// height (the 16px/44px rule is for mobile checkout, not desktop admin).
+function filterInput(): React.CSSProperties {
   return {
-    padding:'6px 10px',borderRadius:5,
-    border:`1px solid ${T.border2}`,
-    background:'transparent',
-    color: enabled ? T.text2 : T.text3,
-    fontSize:12,fontFamily:'inherit',
-    cursor: enabled ? 'pointer' : 'not-allowed',
-  }
-}
-function selectStyle(): React.CSSProperties {
-  return {
-    padding:'7px 10px',borderRadius:5,
-    background:T.bg3,border:`1px solid ${T.border2}`,
-    color:T.text,fontSize:13,fontFamily:'inherit',
-    outline:'none',cursor:'pointer',
-  }
-}
-function dateStyle(): React.CSSProperties {
-  return {
-    padding:'6px 10px',borderRadius:5,
-    background:T.bg3,border:`1px solid ${T.border2}`,
-    color:T.text,fontSize:12,fontFamily:'inherit',
-    outline:'none',colorScheme:'dark',
+    boxSizing:'border-box',
+    background:T.bg3,border:'1px solid transparent',color:T.text,
+    borderRadius:RADIUS.sm,padding:'8px 12px',fontSize:13.5,outline:'none',
+    fontFamily:'inherit',minHeight:36,
   }
 }
 

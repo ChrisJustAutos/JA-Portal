@@ -2,11 +2,13 @@
 // Editor for the B2B transactional email templates (supplier / distributor /
 // internal). Loads from /api/b2b/admin/email-templates; per template: on/off
 // toggle, subject, body (with {{placeholders}}), Save (PUT) + Reset (DELETE).
+// Restyled onto the shared Alloy kit (components/b2b/ui) 2026-08-12.
 
 import { useEffect, useState } from 'react'
 import { T } from '../../lib/ui/theme'
 import { SkeletonRows } from '../ui'
 import { useConfirm } from '../ui/Feedback'
+import { A, Btn, SectionLabel, inputStyle, RADIUS } from './ui'
 
 interface Tpl {
   key: string; label: string; direction: string; description: string
@@ -58,53 +60,52 @@ export default function EmailTemplatesManager() {
   if (loading) return <SkeletonRows rows={8} />
 
   const groups = ['Supplier', 'Distributor', 'Internal']
-  const inp: React.CSSProperties = { width: '100%', padding: '8px 11px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 7, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
+  // Editor-density input — kit look at 13px (dense staff editor, floor is 12).
+  const inp: React.CSSProperties = { ...inputStyle(), padding: '9px 12px', fontSize: 13, minHeight: 38 }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {flash && <div style={{ fontSize: 12, color: flash.startsWith('Save') || flash.startsWith('Reset') ? T.green : T.amber }}>{flash}</div>}
+      {flash && <div style={{ fontSize: 12.5, color: flash.startsWith('Save') || flash.startsWith('Reset') ? A.good : A.warn }}>{flash}</div>}
       {groups.map(group => {
         const inGroup = templates.filter(t => t.direction === group)
         if (inGroup.length === 0) return null
         return (
           <div key={group}>
-            <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>{group} emails</div>
+            <SectionLabel>{group} emails</SectionLabel>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {inGroup.map(t => {
                 const e = edits[t.key] || { enabled: t.enabled, subject: t.subject, body: t.body }
                 const dirty = e.enabled !== t.enabled || e.subject !== t.subject || e.body !== t.body
                 return (
-                  <div key={t.key} style={{ background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16, opacity: e.enabled ? 1 : 0.7 }}>
+                  <div key={t.key} style={{ background: T.bg3, borderRadius: RADIUS.md, padding: 16, opacity: e.enabled ? 1 : 0.7 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{t.label}{t.isOverridden && <span style={{ fontSize: 10, color: T.amber, marginLeft: 8 }}>customised</span>}</div>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.text2, cursor: 'pointer' }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{t.label}{t.isOverridden && <span style={{ fontSize: 12, color: A.warn, marginLeft: 8 }}>customised</span>}</div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: T.text2, cursor: 'pointer' }}>
                         <input type="checkbox" checked={e.enabled} onChange={ev => setField(t.key, 'enabled', ev.target.checked)} /> Enabled
                       </label>
                     </div>
-                    <div style={{ fontSize: 11, color: T.text3, marginBottom: 12 }}>{t.description}</div>
+                    <div style={{ fontSize: 12.5, color: T.text3, marginBottom: 12 }}>{t.description}</div>
 
-                    <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Subject</div>
+                    <div style={{ fontSize: 12, color: T.text2, fontWeight: 650, marginBottom: 5 }}>Subject</div>
                     <input style={{ ...inp, marginBottom: 10 }} value={e.subject} onChange={ev => setField(t.key, 'subject', ev.target.value)} />
 
-                    <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Message body</div>
+                    <div style={{ fontSize: 12, color: T.text2, fontWeight: 650, marginBottom: 5 }}>Message body</div>
                     <textarea style={{ ...inp, minHeight: 150, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }} value={e.body} onChange={ev => setField(t.key, 'body', ev.target.value)} />
 
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '10px 0' }}>
                       {t.variables.map(varr => (
-                        <span key={varr.token} title={varr.desc} style={{ fontSize: 10, fontFamily: 'monospace', background: T.bg4, border: `1px solid ${T.border}`, borderRadius: 5, padding: '2px 7px', color: T.text2 }}>{`{{${varr.token}}}`}</span>
+                        <span key={varr.token} title={varr.desc} style={{ fontSize: 12, fontFamily: 'monospace', background: T.bg4, borderRadius: RADIUS.pill, padding: '3px 10px', color: T.text2 }}>{`{{${varr.token}}}`}</span>
                       ))}
                     </div>
 
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button onClick={() => save(t.key)} disabled={!dirty || savingKey === t.key}
-                        style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: dirty ? T.blue : T.bg4, color: dirty ? '#fff' : T.text3, fontSize: 12, fontWeight: 600, cursor: dirty ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+                      <Btn size="sm" onClick={() => save(t.key)} disabled={!dirty || savingKey === t.key}>
                         {savingKey === t.key ? 'Saving…' : 'Save'}
-                      </button>
+                      </Btn>
                       {t.isOverridden && (
-                        <button onClick={() => reset(t.key)} disabled={savingKey === t.key}
-                          style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                        <Btn variant="ghost" size="sm" onClick={() => reset(t.key)} disabled={savingKey === t.key}>
                           Reset to default
-                        </button>
+                        </Btn>
                       )}
                     </div>
                   </div>
@@ -114,8 +115,8 @@ export default function EmailTemplatesManager() {
           </div>
         )
       })}
-      <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.6 }}>
-        Use the <code style={{ fontFamily: 'monospace' }}>{'{{tokens}}'}</code> above to drop in order data. Block tokens (line tables, addresses, buttons) insert formatted HTML; the rest are plain values. Disabling an email stops it sending — the underlying action (PO, freight, payment) still runs. Recipients: supplier = MYOB card; admin = the field above; distributor = their contact emails on the distributor page.
+      <div style={{ fontSize: 12, color: T.text3, lineHeight: 1.6 }}>
+        Use the <code style={{ fontFamily: 'monospace', fontSize: 12 }}>{'{{tokens}}'}</code> above to drop in order data. Block tokens (line tables, addresses, buttons) insert formatted HTML; the rest are plain values. Disabling an email stops it sending — the underlying action (PO, freight, payment) still runs. Recipients: supplier = MYOB card; admin = the field above; distributor = their contact emails on the distributor page.
       </div>
     </div>
   )

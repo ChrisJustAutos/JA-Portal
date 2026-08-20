@@ -14,14 +14,8 @@ import { AppIcon } from '../../../lib/AppIcons'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import { SkeletonRows } from '../../../components/ui'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-}
+import { T, alpha } from '../../../lib/ui/theme'
+import { A, RADIUS, cardStyle, Banner, PageTitle, SectionLabel, StatusPill, orderStatusColor, orderStatusLabel } from '../../../components/b2b/ui'
 
 interface Props {
   user: {
@@ -72,15 +66,6 @@ interface OrdersSummary {
   }>
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  pending_payment: T.text3, paid: T.blue, picking: T.amber, packed: T.amber,
-  shipped: T.teal, delivered: T.green, cancelled: T.red, refunded: T.purple,
-}
-const STATUS_LABEL: Record<string, string> = {
-  pending_payment: 'Pending', paid: 'Paid', picking: 'Picking', packed: 'Packed',
-  shipped: 'Shipped', delivered: 'Delivered', cancelled: 'Cancelled', refunded: 'Refunded',
-}
-
 export default function B2BHubPage({ user }: Props) {
   const [settings, setSettings] = useState<SettingsSummary | null>(null)
   const [orders, setOrders] = useState<OrdersSummary | null>(null)
@@ -119,29 +104,23 @@ export default function B2BHubPage({ user }: Props) {
         <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="dashboard"/>
 
-          <header style={{marginBottom:24,display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
-            <div>
-              <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
-                <span style={{color:T.text2}}>B2B Portal</span>
-              </div>
-              <h1 style={{fontSize:24,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>B2B distributor portal</h1>
-              <div style={{fontSize:13,color:T.text3,marginTop:6}}>
-                JAWS-side wholesale ordering. Distributors sign in at <a href="/b2b/login" style={{color:T.blue,textDecoration:'none'}}>/b2b/login</a> with magic links.
-              </div>
-            </div>
-            <a href="/admin/b2b/catalogue" style={{fontSize:12,color:T.text3,textDecoration:'none',whiteSpace:'nowrap'}}>
-              Catalogue sync moved to the Catalogue page →
-            </a>
-          </header>
+          <PageTitle
+            sub={<>JAWS-side wholesale ordering. Distributors sign in at <a href="/b2b/login" style={{color:A.accent,textDecoration:'none'}}>/b2b/login</a> with magic links.</>}
+            action={
+              <a href="/admin/b2b/catalogue" style={{fontSize:12.5,color:T.text3,textDecoration:'none',whiteSpace:'nowrap'}}>
+                Catalogue sync moved to the Catalogue page →
+              </a>
+            }>
+            B2B distributor portal
+          </PageTitle>
 
           {/* Configuration health banner */}
           {settings && !cfgComplete && (
-            <div style={{
-              padding:'12px 16px',background:`${T.amber}15`,border:`1px solid ${T.amber}40`,
-              borderRadius:8,marginBottom:18,fontSize:13,color:T.text2,
-            }}>
-              ⚠ Checkout is currently disabled — some configuration is missing.{' '}
-              <a href="/admin/b2b/settings" style={{color:T.amber,fontWeight:500,textDecoration:'none'}}>Open Settings →</a>
+            <div style={{marginBottom:18}}>
+              <Banner tone="warn">
+                Checkout is currently disabled — some configuration is missing.{' '}
+                <a href="/admin/b2b/settings" style={{color:A.warn,fontWeight:600,textDecoration:'none'}}>Open Settings →</a>
+              </Banner>
             </div>
           )}
 
@@ -154,22 +133,22 @@ export default function B2BHubPage({ user }: Props) {
             const delivered = sc.delivered || 0
             return (
               <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(168px, 1fr))',gap:14,marginBottom:18}}>
-                <StatTile icon="pending"      color={T.amber} label="Pending payment"     value={pending}   href="/admin/b2b/orders?status=pending_payment"/>
-                <StatTile icon="orders"       color={T.blue}  label="Awaiting fulfilment" value={awaiting}  href="/admin/b2b/orders?status=paid,picking,packed"/>
-                <StatTile icon="truck"        color={T.teal}  label="In transit"          value={inTransit} href="/admin/b2b/orders?status=shipped"/>
-                <StatTile icon="check-circle" color={T.green} label="Delivered"           value={delivered} href="/admin/b2b/orders?status=delivered"/>
-                <StatTile icon="payables"     color={T.green} label="Paid revenue"        value={orders ? `$${money(orders.totals.paid_sum)}` : '—'} href="/admin/b2b/orders"/>
+                <StatTile icon="pending"      color={A.warn}   label="Pending payment"     value={pending}   href="/admin/b2b/orders?status=pending_payment"/>
+                <StatTile icon="orders"       color={A.accent} label="Awaiting fulfilment" value={awaiting}  href="/admin/b2b/orders?status=paid,picking,packed"/>
+                <StatTile icon="truck"        color={A.accent} label="In transit"          value={inTransit} href="/admin/b2b/orders?status=shipped"/>
+                <StatTile icon="check-circle" color={A.good}   label="Delivered"           value={delivered} href="/admin/b2b/orders?status=delivered"/>
+                <StatTile icon="payables"     color={A.good}   label="Paid revenue"        value={orders ? `$${money(orders.totals.paid_sum)}` : '—'} href="/admin/b2b/orders"/>
               </div>
             )
           })()}
 
           {/* Recent orders */}
-          <section style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,overflow:'hidden',marginBottom:18}}>
+          <section style={{...cardStyle(false),marginBottom:18}}>
             <div style={{display:'flex',alignItems:'center',padding:'14px 18px',borderBottom:`1px solid ${T.border}`}}>
-              <div style={{fontSize:13,fontWeight:600}}>Recent orders</div>
+              <div style={{fontSize:13,fontWeight:650,color:T.text2}}>Recent orders</div>
               {orders && <span style={{fontSize:12,color:T.text3,marginLeft:10}}>{orders.total_count} total</span>}
               <span style={{flex:1}}/>
-              <a href="/admin/b2b/orders" style={{fontSize:12,color:T.blue,textDecoration:'none'}}>View all →</a>
+              <a href="/admin/b2b/orders" style={{fontSize:12.5,color:A.accent,textDecoration:'none'}}>View all →</a>
             </div>
             {!orders ? (
               <SkeletonRows rows={8}/>
@@ -181,23 +160,18 @@ export default function B2BHubPage({ user }: Props) {
                   style={{display:'flex',alignItems:'center',gap:10,padding:'12px 16px',borderTop:i>0?`1px solid ${T.border}`:'none',textDecoration:'none',color:T.text}}>
                   <span style={{fontFamily:'monospace',fontSize:12.5,minWidth:0,flexShrink:0}}>{o.order_number}</span>
                   <span style={{flex:1,minWidth:40,fontSize:13,color:T.text2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{o.distributor?.display_name || '—'}</span>
-                  {o.myob_write_error && <span title={o.myob_write_error} style={{fontSize:11,color:T.red,flexShrink:0}}>⚠</span>}
-                  <StatusChip status={o.status}/>
+                  {o.myob_write_error && <span title={o.myob_write_error} style={{fontSize:12,color:A.bad,flexShrink:0}}>MYOB failed</span>}
+                  <StatusPill color={orderStatusColor(o.status)}>{orderStatusLabel(o.status)}</StatusPill>
                   <span style={{fontFamily:'monospace',fontSize:12.5,textAlign:'right',flexShrink:0}}>${money(Number(o.total_inc))}</span>
-                  <span style={{fontSize:11,color:T.text3,textAlign:'right',flexShrink:0,whiteSpace:'nowrap'}}>{formatRel(o.created_at)}</span>
+                  <span style={{fontSize:12,color:T.text3,textAlign:'right',flexShrink:0,whiteSpace:'nowrap'}}>{formatRel(o.created_at)}</span>
                 </a>
               ))
             )}
           </section>
 
           {/* Quick links */}
-          <section style={{
-            marginTop:48,padding:'22px 26px',
-            background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
-          }}>
-            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10,fontWeight:500}}>
-              Distributor portal links
-            </div>
+          <section style={{...cardStyle(true),marginTop:48,padding:'22px 26px'}}>
+            <SectionLabel>Distributor portal links</SectionLabel>
             <div style={{display:'flex',gap:14,flexWrap:'wrap'}}>
               <ExternalLink href="/b2b/login"     label="Sign-in page"/>
               <ExternalLink href="/b2b/catalogue" label="Catalogue (as a distributor)"/>
@@ -215,33 +189,26 @@ function StatTile({ icon, color, label, value, href }: {
   icon: string; color: string; label: string; value: number | string; href: string
 }) {
   return (
-    <a href={href} style={{display:'flex',alignItems:'center',gap:12,padding:'16px 16px',background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,textDecoration:'none',color:T.text}}>
-      <span style={{width:42,height:42,borderRadius:11,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:`${color}1f`,color,border:`1px solid ${color}33`}}>
+    <a href={href} className="al-raise" style={{...cardStyle(false),display:'flex',alignItems:'center',gap:12,padding:'16px 16px',textDecoration:'none',color:T.text}}>
+      <span style={{width:42,height:42,borderRadius:11,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:alpha(color,'1f'),color}}>
         <AppIcon name={icon} size={22}/>
       </span>
       <div style={{minWidth:0}}>
-        <div style={{fontSize:20,fontWeight:600,lineHeight:1.1,fontVariantNumeric:'tabular-nums'}}>{value}</div>
-        <div style={{fontSize:11,color:T.text3,marginTop:2}}>{label}</div>
+        <div style={{fontSize:20,fontWeight:650,lineHeight:1.1,fontVariantNumeric:'tabular-nums'}}>{value}</div>
+        <div style={{fontSize:12,color:T.text3,marginTop:2}}>{label}</div>
       </div>
     </a>
-  )
-}
-
-function StatusChip({ status }: { status: string }) {
-  const color = STATUS_COLOR[status] || T.text3
-  return (
-    <span style={{fontSize:10,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.04em',color,background:`${color}15`,border:`1px solid ${color}40`,padding:'2px 8px',borderRadius:4,whiteSpace:'nowrap'}}>
-      {STATUS_LABEL[status] || status}
-    </span>
   )
 }
 
 function ExternalLink({ href, label }: { href: string; label: string }) {
   return (
     <a href={href} target="_blank" rel="noopener noreferrer"
+      className="al-press al-focus"
       style={{
-        fontSize:13,color:T.text2,textDecoration:'none',
-        padding:'6px 10px',borderRadius:5,border:`1px solid ${T.border2}`,
+        fontSize:13,fontWeight:600,color:T.text2,textDecoration:'none',
+        padding:'8px 14px',borderRadius:RADIUS.pill,background:T.bg3,
+        display:'inline-flex',alignItems:'center',gap:6,
       }}>
       {label} ↗
     </a>
