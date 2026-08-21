@@ -12,17 +12,24 @@
 
 import React, { useEffect, useState } from 'react'
 import { T } from '../../lib/ui/theme'
-import { KPI, Chip, Skeleton } from '../ui'
+import { KPI, Chip, Skeleton, inp } from '../ui'
 
 interface DayRow { date: string; ordersValue: number; ordersCount: number; distValue: number; distCount: number; total: number }
 interface MonthRow { month: string; ordersValue: number; ordersCount: number; distValue: number; distCount: number; total: number }
 interface ProcessRow { process: string; count: number; value: number }
+interface PersonRow {
+  person: string
+  ordersCount: number; ordersValue: number
+  distCount: number; distValue: number
+  total: number; sharePct: number
+}
 interface ApiResp {
-  period: { since: string; until: string; months: number }
+  period: { since: string; until: string; days: number; person: string | null }
   daily: DayRow[]
   dailyWindowDays: number
   monthly: MonthRow[]
   byProcess: ProcessRow[]
+  people: PersonRow[]
   totals: {
     ordersCount: number; ordersValue: number
     distCount: number; distValue: number
@@ -171,19 +178,39 @@ function Legend() {
   )
 }
 
+const ymd = (d: Date) => d.toISOString().slice(0, 10)
+
+/** Preset ranges. `months` back from today; 0 = calendar year to date. */
+function presetRange(months: number): { start: string; end: string } {
+  const now = new Date()
+  const end = ymd(now)
+  if (months === 0) return { start: `${now.getFullYear()}-01-01`, end }
+  const s = new Date(now)
+  s.setMonth(s.getMonth() - months)
+  return { start: ymd(s), end }
+}
+
+const PRESETS: Array<{ label: string; months: number }> = [
+  { label: '30d', months: 1 }, { label: '3m', months: 3 }, { label: '6m', months: 6 },
+  { label: 'YTD', months: 0 }, { label: '12m', months: 12 }, { label: '24m', months: 24 },
+]
+
 const card: React.CSSProperties = { background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16 }
 
 export default function SalesFiguresView() {
   const [data, setData] = useState<ApiResp | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  const [months, setMonths] = useState(12)
+  const [range, setRange] = useState(() => presetRange(12))
   const [days, setDays] = useState(60)
+  const [person, setPerson] = useState('')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let live = true
     setLoading(true); setErr(null)
-    fetch(`/api/reports/sales-figures?months=${months}&days=${days}`)
+    const qs = new URLSearchParams({ start: range.start, end: range.end, days: String(days) })
+    if (person) qs.set('person', person)
+    fetch(`/api/reports/sales-figures?${qs}`)
       .then(async r => {
         const j = await r.json()
         if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`)
@@ -192,7 +219,7 @@ export default function SalesFiguresView() {
       .then(j => { if (live) { setData(j); setLoading(false) } })
       .catch(e => { if (live) { setErr(e.message || String(e)); setLoading(false) } })
     return () => { live = false }
-  }, [months, days])
+  }, [range.start, range.end, days, person])
 
   if (err) return <div style={{ padding: 24, color: T.red, fontSize: 13 }}>Sales figures unavailable — {err}</div>
 
@@ -209,9 +236,40 @@ export default function SalesFiguresView() {
           <div style={{ fontSize: 15, fontWeight: 600, color: T.text }}>Sales taken</div>
           <div style={{ fontSize: 11.5, color: T.text3 }}>orders and bookings placed — not invoiced turnover</div>
           <div style={{ flex: 1 }} />
-          {[3, 6, 12, 24].map(m => (
-            <Chip key={m} label={`${m}m`} active={months === m} onClick={() => setMonths(m)} />
-          ))}
+          {PRESETS.map(pr => {
+            const r = presetRange(pr.months)
+            return (
+              <Chip key={pr.label} label={pr.label}
+                    active={range.start === r.start && range.end === r.end}
+                    onClick={() => setRange(r)} />
+            )
+          })}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11.5, color: T.text3 }}>From</span>
+          <input type="date" value={range.start} max={range.end} style={inp}
+                 onChange={e => setRange(r => ({ ...r, start: e.target.value || r.start }))} />
+          <span style={{ fontSize: 11.5, color: T.text3 }}>to</span>
+          <input type="date" value={range.end} min={range.start} style={inp}
+                 onChange={e => setRange(r => ({ ...r, end: e.target.value || r.end }))} />
+          <div style={{ width: 12 }} />
+          <span style={{ fontSize: 11.5, color: T.text3 }}>Salesperson</span>
+          <select value={person} onChange={e => setPerson(e.target.value)} style={{ ...inp, minWidth: 150 }}>
+            <option value="">Everyone</option>
+            {(data?.people || []).map(pp => <option key={pp.person} value={pp.person}>{pp.person}</option>)}
+          </select>
+          {person && (
+            <button onClick={() => setPerson('')} style={{
+              background: 'none', border: `1px solid ${T.border2}`, borderRadius: 5, cursor: 'pointer',
+              color: T.text2, fontSize: 11.5, fontFamily: 'inherit', padding: '5px 9px',
+            }}>Clear</button>
+          )}
+          {data && (
+            <span style={{ fontSize: 11.5, color: T.text3, marginLeft: 'auto' }}>
+              {data.period.days} days{person ? ` · ${person} only` : ''}
+            </span>
+          )}
         </div>
 
         {loading || !data ? (
@@ -221,7 +279,7 @@ export default function SalesFiguresView() {
         ) : (
           <>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: 12 }}>
-              <KPI label={`Total · last ${data.period.months}m`} value={fmtMoney(data.totals.total)} accent={T.blue}
+              <KPI label={person ? `${person} · total` : 'Total for range'} value={fmtMoney(data.totals.total)} accent={T.blue}
                    sub={`${fmtInt(data.totals.ordersCount + data.totals.distCount)} orders & bookings`} />
               <KPI label="This month to date" value={fmtMoney(data.totals.monthToDate)} />
               <KPI label="This year to date" value={fmtMoney(data.totals.yearToDate)} />
@@ -255,6 +313,47 @@ export default function SalesFiguresView() {
                 <Legend />
               </div>
               <MonthlyStack monthly={data.monthly} />
+            </div>
+
+            <div style={{ ...card, padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', fontSize: 13, fontWeight: 600, color: T.text, borderBottom: `1px solid ${T.border}`, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                By salesperson
+                <span style={{ fontWeight: 400, color: T.text3, fontSize: 11.5 }}>
+                  whole range, whoever is selected above · click a row to filter
+                </span>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ background: T.bg3 }}>
+                      <th style={th}>Salesperson</th>
+                      <th style={thR}>Orders</th>
+                      <th style={thR}>Order value</th>
+                      <th style={thR}>Bookings</th>
+                      <th style={thR}>Booking value</th>
+                      <th style={thR}>Total</th>
+                      <th style={thR}>Share</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.people.map(pp => {
+                      const on = person === pp.person
+                      return (
+                        <tr key={pp.person} onClick={() => setPerson(on ? '' : pp.person)}
+                            style={{ borderTop: `1px solid ${T.border}`, cursor: 'pointer', background: on ? T.bg3 : undefined }}>
+                          <td style={{ ...td, fontWeight: on ? 600 : 400 }}>{pp.person}</td>
+                          <td style={tdN}>{fmtInt(pp.ordersCount)}</td>
+                          <td style={tdN}>{fmtMoney(pp.ordersValue)}</td>
+                          <td style={tdN}>{fmtInt(pp.distCount)}</td>
+                          <td style={tdN}>{fmtMoney(pp.distValue)}</td>
+                          <td style={{ ...tdN, fontWeight: 600 }}>{fmtMoney(pp.total)}</td>
+                          <td style={tdN}>{pp.sharePct.toFixed(1)}%</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
@@ -304,8 +403,9 @@ export default function SalesFiguresView() {
             <div style={{ fontSize: 11.5, color: T.text3, lineHeight: 1.5 }}>
               Source: the Monday Orders board and Distributor - Booking board, live on load, using the same definition of a
               sale as the Weekly Sales Recap — cancelled and deleted orders are excluded, as are the Distributor bookings
-              still sitting in pending or postponed groups. <strong>These are orders and bookings taken, not invoiced
-              turnover</strong>; invoiced turnover is on Reports → Forecast, and the two will not agree.
+              still sitting in pending or postponed groups. Where a row names more than one person it counts against the
+              first, so the per-salesperson rows still add up to the total. <strong>These are orders and bookings taken,
+              not invoiced turnover</strong>; invoiced turnover is on Reports → Forecast, and the two will not agree.
             </div>
           </>
         )}
@@ -314,5 +414,7 @@ export default function SalesFiguresView() {
   )
 }
 
+const th: React.CSSProperties = { padding: '8px 12px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: T.text2, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }
+const thR: React.CSSProperties = { ...th, textAlign: 'right' }
 const td: React.CSSProperties = { padding: '8px 12px', color: T.text, whiteSpace: 'nowrap' }
 const tdN: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }

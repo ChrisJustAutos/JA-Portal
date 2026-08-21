@@ -264,12 +264,18 @@ Click-to-dial is available where enabled.
 
 **Reports → Sales Dashboard.** Two views, switched at the top of the page.
 
-**Figures** (opens here) — the sales money: **daily, monthly, and totals** for the window you pick (3, 6, 12 or 24 months). Tiles show the period total, this month to date, this year to date, your average trading day, and the best single day and month. Underneath: a bar per day for the last 30/60/90 days, then a monthly chart split into workshop orders and distributor bookings, and a breakdown of workshop orders by sale type (Normal Booking, Upsell, Additional Maintenance).
+**Figures** (opens here) — the sales money: **daily, monthly, per salesperson, and totals**.
+
+Pick the period with the **From / To** date boxes, or use a preset (30d, 3m, 6m, YTD, 12m, 24m). Pick a **Salesperson** to narrow everything to one person — or just click their row in the By-salesperson table, and click again to clear it.
+
+Tiles show the total for the range, this month to date, this year to date, the average trading day, and the best single day and month. Underneath: a bar per day for the last 30/60/90 days, a monthly chart split into workshop orders and distributor bookings, a **By salesperson** table with each person's share, and workshop orders broken down by sale type (Normal Booking, Upsell, Additional Maintenance).
 
 Two things to read correctly:
 
 - **Every calendar day is plotted**, so weekends and quiet days appear as gaps. That is deliberate — closing them up would make the week look busier than it was.
 - **The average is per trading day**, counting only days that actually had a sale. Dividing by every calendar day would roughly halve it and flatter nothing.
+- **Where an order names two people it counts to the first one.** That keeps each person's numbers adding up to the total. Orders with nobody set show as **Unassigned** — they are never dropped, so if that row is large it means the people column isn't being filled in.
+- **The By-salesperson table always shows everyone**, even when you have filtered to one person, so you can compare without clearing the filter.
 
 **Pipeline** — the quote pipeline across the five rep quote channels: what is open, at what stage, with whom, and what converted.
 

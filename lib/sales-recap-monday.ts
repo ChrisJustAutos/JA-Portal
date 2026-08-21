@@ -19,12 +19,12 @@ export const ORDERS_BOARD = '1838428097'
 export const DIST_BOOKING_BOARD = '1923220718'
 
 // Orders board columns
-const ORD = { date: 'date', value: 'numbers', process: 'color_mks9wfk9', status: 'status' }
+const ORD = { date: 'date', value: 'numbers', process: 'color_mks9wfk9', status: 'status', owner: 'person' }
 // Distributor-Booking columns. `distributor` (status_1, the board's
 // "Distributor" label) must be in this map or pullBoard won't request it —
 // the distributor-map report groups bookings by it (everything showed as
 // "Unassigned" while it was missing, 2026-07-29).
-const DB = { date: 'date4', value: 'numbers', status: 'status', distributor: 'status_1' }
+const DB = { date: 'date4', value: 'numbers', status: 'status', distributor: 'status_1', owner: 'person' }
 
 // Statuses that mean "this didn't happen" — excluded from all totals.
 const ORDERS_DEAD = new Set(['Deleted', 'Canceled', 'Cancelled'])
@@ -43,8 +43,12 @@ const DIST_DEAD_GROUPS = new Set(
 
 export type SaleProcess = 'Normal Booking' | 'Upsell' | 'Additional Maintenance' | 'Unclassified'
 
-export interface OrderRow { date: string | null; value: number; process: SaleProcess; status: string | null }
-export interface DistRow { date: string | null; value: number; status: string | null; distributor: string | null }
+// `owner` is the board's people column — "Created By" on Orders, "Person" on
+// Distributor - Booking (both id `person`). Added 2026-08-21 for the Sales
+// Dashboard's per-salesperson breakdown. May hold several comma-separated
+// names, or be null on older rows.
+export interface OrderRow { date: string | null; value: number; process: SaleProcess; status: string | null; owner: string | null }
+export interface DistRow { date: string | null; value: number; status: string | null; distributor: string | null; owner: string | null }
 
 async function mondayQuery(token: string, query: string): Promise<any> {
   const r = await fetch(MONDAY_API, {
@@ -94,7 +98,7 @@ export async function fetchOrders(token: string, since: string, until: string): 
     const status = colText(it, ORD.status)
     const p = colText(it, ORD.process)
     const process: SaleProcess = (p === 'Normal Booking' || p === 'Upsell' || p === 'Additional Maintenance') ? p : 'Unclassified'
-    return { date: colText(it, ORD.date), value: num(colText(it, ORD.value)), process, status }
+    return { date: colText(it, ORD.date), value: num(colText(it, ORD.value)), process, status, owner: colText(it, ORD.owner) }
   }).filter(r => !ORDERS_DEAD.has(String(r.status || '')))
 }
 
@@ -241,6 +245,7 @@ export async function fetchDistBookings(token: string, since: string, until: str
     .map(it => ({
       date: colText(it, DB.date), value: num(colText(it, DB.value)),
       status: colText(it, DB.status), distributor: colText(it, 'status_1'),
+      owner: colText(it, DB.owner),
     })).filter(r => !DIST_DEAD.has(String(r.status || '')))
 }
 
