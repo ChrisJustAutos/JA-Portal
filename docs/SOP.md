@@ -337,7 +337,26 @@ The change percentages are worked out from the turnover figures themselves, not 
 
 Quotes near each distributor against bookings they actually confirmed — the "are they converting the leads we send them" view.
 
-### 8.7 Build a PDF report
+### 8.7 Distributors report — grouping
+
+**Distributors** (top bar). Under the tab strip there are two controls, and they now apply to **every tab**, not just the Summary:
+
+- **Group by** — `type` (Distributors / Sundry) or `region` (National / International).
+- **Showing** — `All`, or one section of whichever dimension you picked.
+
+**⚠ This changed on 21 August 2026, and some numbers will look different from what you remember.** Each tab used to have its own idea of what was included: Distributor Sales and Detailed Sales quietly counted Sundry customers, Parts : Tunes left them out, and the tab labelled "National Total" actually showed everything — International and Sundry as well. Now every tab shows exactly what the Group by / Showing controls say, so the tabs agree with each other and with the Summary.
+
+Reading it:
+
+- On **All**, every tab includes everything and the Summary breaks it into its sections — that is the honest overall picture.
+- Pick a section and the whole report narrows to it, headings included. The old "National ..." headings now name what you are actually looking at.
+- **Sundry is always its own section**, under either grouping. A Sundry customer is never counted inside National or International, so the sections always add up.
+- Switching Group by resets Showing to All, because a "Distributors" filter means nothing once you are grouping by region.
+- **Parts : Tunes still leaves Sundry out on All**, as agreed in July — but if you explicitly pick Sundry it will show it, rather than looking empty.
+
+If a customer is landing in the wrong section, fix their membership at **Admin → Groups**; the report follows it immediately.
+
+### 8.8 Build a PDF report
 
 **Reports → Builder.** Choose from six report types — Distributor Performance, Stock Health, Call Analytics, CRM Pipeline, Campaign Performance, B2B Sales — then the period, which entities (JAWS, VPS or both) and which sections. Add AI commentary if you want the numbers narrated. Generate, then download the PDF.
 

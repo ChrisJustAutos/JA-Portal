@@ -168,6 +168,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const [refreshing,setRefreshing]=useState(false)
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
   const [primaryDimension, setPrimaryDimension] = useState<'type'|'region'|string>('type')
+  // Which section of the active dimension every tab is scoped to. 'ALL' shows
+  // the lot (and the Summary still breaks it into its sections).
+  const [sectionFilter, setSectionFilter] = useState<string>('ALL')
 
   const [summarySort, setSummarySort] = useState<SortState>({ col: null, dir: null })
   const [modelSort, setModelSort]     = useState<SortState>({ col: null, dir: null })
@@ -365,6 +368,10 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return null
   }, [grouping])
 
+  // Changing dimension invalidates the section (a 'Distributors' filter means
+  // nothing under 'region'), so drop back to All.
+  const changeDimension = (d: string) => { setPrimaryDimension(d); setSectionFilter('ALL') }
+
   const groupColorFor = useCallback((dimension: string, name: string): string => {
     if (!grouping) return T.text3
     const g = grouping.groups.find(gr => gr.dimension === dimension && gr.name === name)
@@ -374,7 +381,52 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   // Apply 'type'/'Excluded' filtering even though backend already drops them
   // (defence in depth — handles cached payloads from before the API change).
   const allLines = data?.lineItems || []
-  const visibleLines = allLines.filter(l => groupNameFor(l.CustomerName, 'type') !== 'Excluded')
+  const excludedFiltered = allLines.filter(l => groupNameFor(l.CustomerName, 'type') !== 'Excluded')
+
+  // ── ONE grouping rule, honoured by EVERY tab (Chris 2026-08-21) ─────────
+  //
+  // Before this, each tab had its own idea of what was in scope: the Summary
+  // sectioned by dimension with Sundry separate, Parts:Tunes dropped Sundry via
+  // its own check, Distributor Sales and Detailed Sales silently INCLUDED
+  // Sundry, National P/M was genuinely National-only (filtered server-side),
+  // and National Total was titled "National" while containing everything —
+  // International and Sundry included. Four different rules behind one report.
+  //
+  // Now: `sectionOfLine` is the single definition, and the Group-by dimension
+  // plus section selector in the toolbar drive every tab through
+  // `visibleLines`.
+  //
+  // Sundry is its own section in BOTH dimensions, matching how the Summary has
+  // always rendered it — otherwise a Sundry customer would be counted inside
+  // National or International and the sections would stop reconciling.
+  const sectionOfLine = useCallback((l: LineItem): string => {
+    if (l.isSundry) return 'Sundry'
+    const g = groupNameFor(l.CustomerName, primaryDimension)
+    if (!g || g === 'Sundry') return g === 'Sundry' ? 'Sundry' : 'Unclassified'
+    return g
+  }, [groupNameFor, primaryDimension])
+
+  const visibleLines = sectionFilter === 'ALL'
+    ? excludedFiltered
+    : excludedFiltered.filter(l => sectionOfLine(l) === sectionFilter)
+
+  // Sections present in the data, in the dimension's own sort order, with
+  // Sundry then Unclassified last. Drives the toolbar chips.
+  const availableSections: string[] = (() => {
+    const present = new Set(excludedFiltered.map(sectionOfLine))
+    const ordered = (grouping?.groups || [])
+      .filter(g => g.dimension === primaryDimension && g.name !== 'Excluded' && g.name !== 'Sundry')
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map(g => g.name)
+      .filter(n => present.has(n))
+    if (present.has('Sundry')) ordered.push('Sundry')
+    if (present.has('Unclassified')) ordered.push('Unclassified')
+    return ordered
+  })()
+
+  /** What the active grouping covers, for tab headings that used to say "National". */
+  const scopeLabel = sectionFilter === 'ALL' ? 'All distributors' : sectionFilter
+
   const allDists=Array.from(new Set(visibleLines.map(l=>l.CustomerName))).filter(Boolean).sort()
   const filtered=selectedDist==='ALL'?visibleLines:visibleLines.filter(l=>l.CustomerName===selectedDist)
 
@@ -403,7 +455,16 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   // Parts:Tunes visibility — same classification as the Summary (dist_groups
   // 'type' dimension, Groups Admin → Membership): Distributors + unclassified
   // count; Sundry and Excluded are out (Chris 2026-07-22).
-  const typeOk = (name: string) => { const g = groupNameFor(name, 'type'); return !g || g === 'Distributors' }
+  // Parts:Tunes has excluded Sundry since 2026-07-22 (Chris). That decision
+  // stands while the section selector is on 'All' — but if someone explicitly
+  // picks a section, honour it, otherwise choosing 'Sundry' would empty the tab
+  // and look broken. visibleLines is already section-filtered, so this only has
+  // to add the default Sundry exclusion.
+  const typeOk = (name: string) => {
+    if (sectionFilter !== 'ALL') return true
+    const g = groupNameFor(name, 'type')
+    return !g || g === 'Distributors'
+  }
 
   // Categories beyond the original trio (Revenue Categories screen) render as
   // dynamic columns/tiles/datasets — e.g. the Freight category added 2026-07-23.
@@ -470,8 +531,13 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   })
   const detailedRows=Object.entries(detailedByDesc).sort((a,b)=>b[1].total-a[1].total)
 
-  const trendLabels=data?.trendLabels||[]
-  const monthlyTotals=data?.monthlyTotals||{}
+  // NOTE: the payload still carries `trendLabels` / `monthlyTotals` from the
+  // server's `monthlyNational` aggregate, which is hardcoded to
+  // region == 'National' and so could never follow the grouping — the tab said
+  // "National" while the tables beside it showed International and Sundry too.
+  // Both are now derived client-side from the same `filtered` lines as every
+  // other tab (see below), so the trend and the tables always agree. The server
+  // fields are deliberately unused.
 
   // Charts
   const barRef=useRef<HTMLCanvasElement>(null),barInst=useRef<any>(null)
@@ -506,6 +572,17 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
   // Monthly trend: months present in the CURRENT selection's lines.
   const monthKeysOf=(lines:LineItem[])=>Array.from(new Set(lines.map(l=>(l.Date||'').slice(0,7)).filter(Boolean))).sort()
+
+  // Trend for the National P/M tab, from the grouped lines.
+  const trendLabels = monthKeysOf(filtered)
+  const monthlyTotals: Record<string, number> = (() => {
+    const out: Record<string, number> = {}
+    for (const l of filtered) {
+      const ym = (l.Date || '').slice(0, 7)
+      if (ym) out[ym] = (out[ym] || 0) + l.Total
+    }
+    return out
+  })()
   const monthlySeries=(lines:LineItem[],months:string[])=>{
     const m=new Map<string,number>()
     lines.forEach(l=>{const ym=(l.Date||'').slice(0,7);if(ym)m.set(ym,(m.get(ym)||0)+l.Total)})
@@ -665,16 +742,33 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
     const summaryKind = chartKinds['summary'] || 'table'
     const summaryChart = summaryKind !== 'table' && (() => {
-      const sorted = [...distSummaries].sort((a, b) => b.total - a.total)
+      // The bar and pie were a flat list of every customer, so Distributors and
+      // Sundry sat side by side with nothing to tell them apart while the table
+      // right beneath them was carefully sectioned. Order by section (in the
+      // dimension's own order) and prefix the label, so the chart reads the same
+      // way as the table. With a single section selected there is nothing to
+      // disambiguate, so labels stay clean.
+      const sectionRank = (d: DS) => {
+        const sec = d.isSundry ? 'Sundry' : (primaryDimension === 'type' ? d.typeGroup : d.regionGroup) || 'Unclassified'
+        const i = availableSections.indexOf(sec)
+        return { sec, rank: i === -1 ? availableSections.length : i }
+      }
+      const showSection = sectionFilter === 'ALL' && availableSections.length > 1
+      const sorted = [...distSummaries]
+        .sort((a, b) => {
+          const ra = sectionRank(a), rb = sectionRank(b)
+          return ra.rank !== rb.rank ? ra.rank - rb.rank : b.total - a.total
+        })
+        .map(d => ({ ...d, chartLabel: showSection ? `${sectionRank(d).sec} · ${d.name}` : d.name })) as Array<DS & { chartLabel: string }>
       if (summaryKind === 'pie') return <ChartBox ckey="summary" height={420} config={{
         type: 'pie',
-        data: { labels: sorted.map(d => d.name), datasets: [{ data: sorted.map(d => Math.round(d.total)), backgroundColor: CHART_COLORS, borderWidth: 0 }] },
+        data: { labels: sorted.map(d => d.chartLabel), datasets: [{ data: sorted.map(d => Math.round(d.total)), backgroundColor: CHART_COLORS, borderWidth: 0 }] },
         options: { ...baseOpts, plugins: { ...baseOpts.plugins, legend: { position: 'right', labels: { color: T.text2, font: { size: 11 } } }, tooltip: { callbacks: { label: (ctx: any) => `$${Number(ctx.raw).toLocaleString()}` } } } },
       }}/>
       // Stacked horizontal bar: tuning / parts / oil per distributor.
       return <ChartBox ckey="summary" height={Math.max(300, sorted.length * 30 + 80)} config={{
         type: 'bar',
-        data: { labels: sorted.map(d => d.name), datasets: [
+        data: { labels: sorted.map(d => d.chartLabel), datasets: [
           { label: 'Tuning', data: sorted.map(d => Math.round(d.tuning)), backgroundColor: '#34c77b', borderRadius: 2 },
           { label: 'Parts',  data: sorted.map(d => Math.round(d.parts)),  backgroundColor: '#4f8ef7', borderRadius: 2 },
           { label: 'Oil',    data: sorted.map(d => Math.round(d.oil)),    backgroundColor: '#e9932b', borderRadius: 2 },
@@ -690,14 +784,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         tr.dist-row:hover { background: rgba(79,142,247,0.08) !important; }
         tr.dist-row:hover td { color: var(--t-text); }
       `}</style>
+      {/* Group by / section chips live in the report toolbar now, because they
+          drive every tab rather than just this one. */}
       <div style={{display:'flex',alignItems:'center',gap:10}}>
-        <span style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>Group by:</span>
-        {allDimensions.map(d => (
-          <button key={d} onClick={()=>setPrimaryDimension(d)}
-            style={{padding:'4px 12px',borderRadius:5,border:`1px solid ${primaryDimension===d?T.accent:T.border}`,background:primaryDimension===d?T.accent:'transparent',color:primaryDimension===d?'#fff':T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit',textTransform:'capitalize'}}>
-            {d}
-          </button>
-        ))}
         {kindPicker('summary',['table','bar','pie'])}
         <div style={{flex:1}}/>
       </div>
@@ -1513,7 +1602,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       return <div style={{padding:24,overflowY:'auto'}}>
       <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20,flexWrap:'wrap'}}>
         <div style={{fontSize:16,fontWeight:500,color:T.text}}>
-          {selectedDist==='ALL'?'National Distributor Revenue ex GST by Month':`${selectedDist} — Revenue ex GST by Month`}
+          {selectedDist==='ALL'?`${scopeLabel} — Revenue ex GST by Month`:`${selectedDist} — Revenue ex GST by Month`}
         </div>
         <div style={{flex:1}}/>
         {selectedDist==='ALL'&&kindPicker('trend-mode',['total','split'])}
@@ -1534,7 +1623,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
     if(tab==='national-total')return <div style={{padding:24,overflowY:'auto'}}>
       <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
-        <div style={{fontSize:16,fontWeight:500,color:T.text}}>National Distributor Revenue ex GST by Customer</div>
+        <div style={{fontSize:16,fontWeight:500,color:T.text}}>{scopeLabel} — Revenue ex GST by Customer</div>
         <div style={{flex:1}}/>
         {kindPicker('byCustomer',['bar','pie','doughnut'])}
       </div>
@@ -1796,6 +1885,33 @@ img{max-width:100%}
         <div style={{background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'flex-end',padding:'0 20px',gap:2,flexShrink:0}}>
           {tabs.map(([id,label])=><button key={id} onClick={()=>setTab(id)} style={{fontSize:12,padding:'10px 16px',border:'none',borderBottom:tab===id?`2px solid ${T.blue}`:'2px solid transparent',background:'transparent',color:tab===id?T.blue:T.text2,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>{label}</button>)}
         </div>
+
+        {/* Grouping bar — applies to EVERY tab, which is the point: before this
+            each tab had its own scope. Sits under the tab strip so it reads as
+            a property of the whole report, not of one tab. */}
+        {!loading&&!error&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 16px',borderBottom:`1px solid ${T.border}`,background:T.bg2,flexWrap:'wrap'}}>
+          <span style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>Group by</span>
+          {(grouping ? Array.from(new Set(grouping.groups.map(g=>g.dimension))) : ['type']).map(d => (
+            <button key={d} onClick={()=>changeDimension(d)}
+              style={{padding:'3px 10px',borderRadius:5,border:`1px solid ${primaryDimension===d?T.accent:T.border}`,background:primaryDimension===d?T.accent:'transparent',color:primaryDimension===d?'#fff':T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit',textTransform:'capitalize'}}>
+              {d}
+            </button>
+          ))}
+          <span style={{width:1,height:18,background:T.border,margin:'0 4px'}}/>
+          <span style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>Showing</span>
+          {['ALL', ...availableSections].map(sec => (
+            <button key={sec} onClick={()=>setSectionFilter(sec)}
+              style={{padding:'3px 10px',borderRadius:5,border:`1px solid ${sectionFilter===sec?T.blue:T.border}`,background:sectionFilter===sec?'rgba(79,142,247,0.15)':'transparent',color:sectionFilter===sec?T.blue:T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+              {sec === 'ALL' ? 'All' : sec}
+            </button>
+          ))}
+          <div style={{flex:1}}/>
+          <span style={{fontSize:11,color:T.text3}}>
+            {sectionFilter==='ALL'
+              ? 'Every tab includes all sections — the Summary breaks them out'
+              : `Every tab scoped to ${sectionFilter}`}
+          </span>
+        </div>}
 
         {showSelector&&!loading&&!error&&<DistSelector/>}
 

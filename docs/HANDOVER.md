@@ -533,6 +533,26 @@ Lists Stripe invoices per account label and pushes them to MYOB as Professional 
 
 `/distributors` (group-aware revenue reporting; groups managed at `/admin/groups`), `/sales`, `/stock` (⚠ no SSR gate), `/forecasting` (MD job report forecast; `/jobs` redirects here), `/vehicle-sales` (platform classification cache from VPS invoices), `/job-reports` (MD job report ingest for PO→job matching).
 
+**`/distributors` grouping — one rule for every tab (2026-08-21).** Groups live in `dist_groups` / `dist_group_members` (`/admin/groups`) across two dimensions: **type** = Distributors / Sundry / Excluded, **region** = National / International.
+
+Until this change each tab had its own idea of scope, which is why the numbers never tied up:
+
+| Tab | Was |
+|---|---|
+| Summary | Sectioned by dimension, Sundry separate — correct |
+| National P/M | Genuinely National-only, filtered **server-side** (`monthlyNational` in `pages/api/distributors.ts` keys off `location === 'National'`, excluding International *and* Sundry) |
+| National Total | Titled "National" but contained **everything**, International and Sundry included |
+| Distributor Sales · Detailed Sales | Silently **included** Sundry |
+| Parts : Tunes | Excluded Sundry via its own `typeOk` check |
+
+Now `sectionOfLine` in `pages/distributors.tsx` is the single definition, and a **Group by / Showing** bar under the tab strip drives every tab through `visibleLines`. Notes that matter:
+
+- **Sundry is its own section in BOTH dimensions**, matching how the Summary has always rendered it. Otherwise a Sundry customer would be counted inside National or International and the sections would stop reconciling. Membership bears this out: all 23 Distributors carry a region, and the 15 customers with no region are all Sundry — so under region grouping there is no "Unclassified" section to explain away.
+- **The monthly trend is now derived client-side** from the same `filtered` lines as everything else. The server's `monthlyNational` aggregate is hardcoded to National and could never follow the selection; it is still in the payload but deliberately unused. Fix the server aggregate too if anything else ever needs it.
+- **Changing dimension resets the section to All** — a "Distributors" filter means nothing under `region`, and leaving it set would empty every tab.
+- **Parts : Tunes keeps its Sundry exclusion while Showing is "All"** (Chris 2026-07-22), but honours an explicit section choice — otherwise picking Sundry would blank the tab and look broken.
+- **The Summary's bar and pie were a flat list of every customer**, so Distributors and Sundry sat side by side with nothing distinguishing them while the table beneath was carefully sectioned. They now order by section and prefix the label; with one section selected the labels stay clean.
+
 ### 7.15 Settings (`/settings`)
 
 Tile launcher: General · Connections (Integrations / Health / MYOB) · Distributor Report config · VIN Codes · Users · Audit log · Profile · Claude connector (MCP tokens) · Service tokens · **Library**.
