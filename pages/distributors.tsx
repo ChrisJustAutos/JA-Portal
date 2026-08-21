@@ -563,7 +563,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   // at the bottom of each section and a grand total at the end. Totals are
   // flagged so charts that can't carry them (a pie — a total slice would
   // double-count and break the percentages) can drop them.
-  interface ChartRow { chartLabel: string; tuning: number; oil: number; parts: number; total: number; isTotal: boolean; [k: string]: any }
+  interface ChartRow { chartLabel: string; section: string; tuning: number; oil: number; parts: number; total: number; isTotal: boolean; [k: string]: any }
   const chartRows: ChartRow[] = (() => {
     const out: ChartRow[] = []
     const zero = () => { const z: any = { tuning: 0, oil: 0, parts: 0, total: 0 }; for (const c of extraCats) z[c] = 0; return z }
@@ -577,12 +577,12 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       const members = distSummaries
         .filter(d => sectionOfSummary(d) === sec.name)
         .sort((a, b) => b.total - a.total)
-      for (const m of members) out.push({ ...(m as any), chartLabel: m.name, isTotal: false })
-      out.push({ ...(sec as any), chartLabel: `${sec.name} — TOTAL`, isTotal: true })
+      for (const m of members) out.push({ ...(m as any), chartLabel: m.name, section: sec.name, isTotal: false })
+      out.push({ ...(sec as any), chartLabel: `${sec.name} — TOTAL`, section: sec.name, isTotal: true })
       add(grand, sec)
     }
     // Only worth a grand total when there is more than one section to combine.
-    if (sectionSummaries.length > 1) out.push({ ...grand, chartLabel: 'ALL COMBINED — TOTAL', isTotal: true })
+    if (sectionSummaries.length > 1) out.push({ ...grand, chartLabel: 'ALL COMBINED — TOTAL', section: 'All', isTotal: true })
     return out
   })()
 
@@ -713,7 +713,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     hBarInst.current=new(window as any).Chart(hBarRef.current,
       kind==='pie'||kind==='doughnut'
         ? {type:kind,data:{labels,datasets:[{data:vals,backgroundColor:colors,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:T.text2,font:{size:11}}},tooltip}}}
-        : {type:'bar',data:{labels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:colors,borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
+        : {type:'bar',plugins:[groupSeparatorPlugin(sorted)],data:{labels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:colors,borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
     return()=>{if(hBarInst.current)hBarInst.current.destroy()}
   },[tab,chartRows,chartKinds])
 
@@ -808,6 +808,45 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     )
   }
 
+  // Divider between one group's bars and the next (Chris 2026-08-21). A
+  // hand-rolled Chart.js inline plugin because the annotation plugin isn't
+  // loaded — Chart.js comes from the CDN script, so config-level `plugins: []`
+  // is the only hook available. Canvas can't resolve CSS vars, hence a literal
+  // colour rather than a T token.
+  function groupSeparatorPlugin(rows: Array<{ section: string }>) {
+    const boundaries: number[] = []
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i].section !== rows[i - 1].section) boundaries.push(i)
+    }
+    return {
+      id: 'groupSeparators',
+      afterDatasetsDraw(chart: any) {
+        if (!boundaries.length) return
+        const horizontal = chart.options?.indexAxis === 'y'
+        const scale = horizontal ? chart.scales?.y : chart.scales?.x
+        const area = chart.chartArea
+        if (!scale || !area) return
+        const ctx = chart.ctx
+        ctx.save()
+        ctx.strokeStyle = 'rgba(150,155,170,0.65)'
+        ctx.lineWidth = 1
+        ctx.setLineDash([5, 3])
+        for (const i of boundaries) {
+          // Midway between the last bar of one group and the first of the next.
+          const a = scale.getPixelForValue(i - 1)
+          const b = scale.getPixelForValue(i)
+          if (!isFinite(a) || !isFinite(b)) continue
+          const at = (a + b) / 2
+          ctx.beginPath()
+          if (horizontal) { ctx.moveTo(area.left, at); ctx.lineTo(area.right, at) }
+          else { ctx.moveTo(at, area.top); ctx.lineTo(at, area.bottom) }
+          ctx.stroke()
+        }
+        ctx.restore()
+      },
+    }
+  }
+
   // Group totals + grand total as plain NUMBERS under a chart (Chris
   // 2026-08-21: "just a number total is fine rather than a large bar"). Total
   // bars distorted the axis — a group total dwarfs its own members, squashing
@@ -865,6 +904,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       // Stacked horizontal bar: tuning / parts / oil per distributor.
       return <><ChartBox ckey="summary" height={Math.max(300, sorted.length * 30 + 90)} config={{
         type: 'bar',
+        plugins: [groupSeparatorPlugin(sorted)],
         data: { labels: sorted.map(d => d.chartLabel), datasets: [
           { label: 'Tuning', data: sorted.map(d => Math.round(d.tuning)), backgroundColor: '#34c77b', borderRadius: 2 },
           { label: 'Parts',  data: sorted.map(d => Math.round(d.parts)),  backgroundColor: '#4f8ef7', borderRadius: 2 },
