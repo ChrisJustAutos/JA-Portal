@@ -262,11 +262,20 @@ Click-to-dial is available where enabled.
 
 ### 8.3 Sales Dashboard
 
-**Reports → Sales Dashboard.** The quote pipeline across the five rep quote channels — what is open, at what stage, with whom, and what converted.
+**Reports → Sales Dashboard.** Two views, switched at the top of the page.
 
-**⚠ This is not the same as the Sales Report.** The Sales Report counts **orders taken**. This one counts **quotes**. The two will never agree, and are not meant to.
+**Figures** (opens here) — the sales money: **daily, monthly, and totals** for the window you pick (3, 6, 12 or 24 months). Tiles show the period total, this month to date, this year to date, your average trading day, and the best single day and month. Underneath: a bar per day for the last 30/60/90 days, then a monthly chart split into workshop orders and distributor bookings, and a breakdown of workshop orders by sale type (Normal Booking, Upsell, Additional Maintenance).
 
-What is on it:
+Two things to read correctly:
+
+- **Every calendar day is plotted**, so weekends and quiet days appear as gaps. That is deliberate — closing them up would make the week look busier than it was.
+- **The average is per trading day**, counting only days that actually had a sale. Dividing by every calendar day would roughly halve it and flatter nothing.
+
+**Pipeline** — the quote pipeline across the five rep quote channels: what is open, at what stage, with whom, and what converted.
+
+**⚠ Neither view is turnover.** Both count orders and bookings **taken**. Invoiced turnover is on Reports → Forecast, and the two will never agree — that is expected, not a fault. Cancelled and deleted orders are left out, as are distributor bookings still sitting in pending or postponed.
+
+What is on the Pipeline view:
 
 - **Open pipeline by stage** — Lead, Lead RLMNA, Follow Up, Follow up RLMNA, Pending, On Hold. Always current, whatever the window is set to.
 - **Won vs lost by month**, over the window you pick (3, 6, 12 or 24 months).
