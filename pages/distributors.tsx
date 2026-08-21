@@ -703,17 +703,16 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     if(tab!=='national-total'||!hBarRef.current||!(window as any).Chart||!chartRows.length)return
     if(hBarInst.current)hBarInst.current.destroy()
     const kind=chartKinds['byCustomer']||'bar'
-    // Every customer, plus a combined total per group and a grand total. The
-    // pie/doughnut drop the totals — a total slice would double-count.
-    const sorted=(kind==='pie'||kind==='doughnut')?chartRows.filter(r=>!r.isTotal):chartRows
+    // Every customer. Group totals and the grand total are numbers under the
+    // chart (<ChartTotals/>), not bars — a total bar dwarfs its own members and
+    // squashes the axis.
+    const sorted=chartRows.filter(r=>!r.isTotal)
     const labels=sorted.map(d=>d.chartLabel), vals=sorted.map(d=>Math.round(d.total))
-    // Total bars are drawn in the accent so they read as a rule-off, not as
-    // another customer.
-    const colors=sorted.map((d,i)=>d.isTotal?'#a78bfa':(kind==='pie'||kind==='doughnut'?CHART_COLORS[i%CHART_COLORS.length]:'#4f8ef7'))
+    const colors=(kind==='pie'||kind==='doughnut')?CHART_COLORS:'#4f8ef7'
     const tooltip={callbacks:{label:(ctx:any)=>`$${Number(ctx.raw).toLocaleString()}`}}
     hBarInst.current=new(window as any).Chart(hBarRef.current,
       kind==='pie'||kind==='doughnut'
-        ? {type:kind,data:{labels,datasets:[{data:vals,backgroundColor:CHART_COLORS,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:T.text2,font:{size:11}}},tooltip}}}
+        ? {type:kind,data:{labels,datasets:[{data:vals,backgroundColor:colors,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:T.text2,font:{size:11}}},tooltip}}}
         : {type:'bar',data:{labels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:colors,borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
     return()=>{if(hBarInst.current)hBarInst.current.destroy()}
   },[tab,chartRows,chartKinds])
@@ -809,6 +808,34 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     )
   }
 
+  // Group totals + grand total as plain NUMBERS under a chart (Chris
+  // 2026-08-21: "just a number total is fine rather than a large bar"). Total
+  // bars distorted the axis — a group total dwarfs its own members, squashing
+  // every customer bar next to it — and a total slice broke the pie's
+  // percentages outright. Numbers carry the same information without either
+  // problem.
+  function ChartTotals() {
+    if (!sectionSummaries.length) return null
+    const grand = sectionSummaries.reduce((a, r) => a + r.total, 0)
+    return (
+      <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'baseline',padding:'10px 2px 0',borderTop:`1px solid ${T.border}`,marginTop:10}}>
+        {sectionSummaries.map(r => (
+          <span key={r.name} style={{fontSize:12,color:T.text2}}>
+            {r.name}
+            <span style={{fontSize:10.5,color:T.text3,marginLeft:4}}>({r.count})</span>
+            <span style={{fontFamily:'monospace',color:T.text,marginLeft:6}}>{fmtFull(r.total)}</span>
+          </span>
+        ))}
+        {sectionSummaries.length > 1 && (
+          <span style={{fontSize:12,fontWeight:600,color:T.text,marginLeft:'auto'}}>
+            All combined
+            <span style={{fontFamily:'monospace',color:T.blue,marginLeft:6}}>{fmtFull(grand)}</span>
+          </span>
+        )}
+      </div>
+    )
+  }
+
   // Apply current sort to a list of DS rows, preserving natural order if no sort.
   function applySummarySort(rows: DS[]): DS[] {
     if (!summarySort.col || !summarySort.dir) return rows
@@ -827,17 +854,16 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
     const summaryKind = chartKinds['summary'] || 'table'
     const summaryChart = summaryKind !== 'table' && (() => {
-      // Every customer, grouped, with section subtotals and a grand total — see
-      // chartRows. The pie drops the total rows: a total slice would be counted
-      // twice and the percentages would stop meaning anything.
-      const sorted = summaryKind === 'pie' ? chartRows.filter(r => !r.isTotal) : chartRows
-      if (summaryKind === 'pie') return <ChartBox ckey="summary" height={420} config={{
+      // Every customer, grouped. Totals are rendered as numbers by
+      // <ChartTotals/> beneath the chart rather than as bars/slices.
+      const sorted = chartRows.filter(r => !r.isTotal)
+      if (summaryKind === 'pie') return <><ChartBox ckey="summary" height={420} config={{
         type: 'pie',
         data: { labels: sorted.map(d => d.chartLabel), datasets: [{ data: sorted.map(d => Math.round(d.total)), backgroundColor: CHART_COLORS, borderWidth: 0 }] },
         options: { ...baseOpts, plugins: { ...baseOpts.plugins, legend: { position: 'right', labels: { color: T.text2, font: { size: 11 } } }, tooltip: { callbacks: { label: (ctx: any) => `$${Number(ctx.raw).toLocaleString()}` } } } },
-      }}/>
+      }}/><ChartTotals/></>
       // Stacked horizontal bar: tuning / parts / oil per distributor.
-      return <ChartBox ckey="summary" height={Math.max(300, sorted.length * 30 + 90)} config={{
+      return <><ChartBox ckey="summary" height={Math.max(300, sorted.length * 30 + 90)} config={{
         type: 'bar',
         data: { labels: sorted.map(d => d.chartLabel), datasets: [
           { label: 'Tuning', data: sorted.map(d => Math.round(d.tuning)), backgroundColor: '#34c77b', borderRadius: 2 },
@@ -846,7 +872,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           ...extraCats.map((c, i) => ({ label: c, data: sorted.map(d => Math.round(Number((d as any)[c]||0))), backgroundColor: ['#a06ee0','#e05c7a','#5cc8d7','#c7b45c'][i % 4], borderRadius: 2 })),
         ]},
         options: { ...baseOpts, indexAxis: 'y' as const, plugins: { ...baseOpts.plugins, tooltip: { callbacks: { label: (ctx: any) => `${ctx.dataset.label}: $${Number(ctx.raw).toLocaleString()}` } } }, scales: { x: { stacked: true, grid: { color: 'rgba(var(--t-ink),0.05)' }, ticks: { color: T.text3, callback: (v: any) => '$' + Math.round(v / 1000) + 'k' } }, y: { stacked: true, grid: { display: false }, ticks: { color: T.text2, font: { size: 11 } } } } },
-      }}/>
+      }}/><ChartTotals/></>
     })()
 
     return <div style={{padding:24,overflowY:'auto',display:'flex',flexDirection:'column',gap:16}}>
@@ -1732,7 +1758,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         {kindPicker('byCustomer',['bar','pie','doughnut'])}
       </div>
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:20}}>
-        <div style={{position:'relative',height:Math.max(300,chartRows.length*32+70)}}><canvas ref={hBarRef} id="hbar-chart"/></div>
+        <div style={{position:'relative',height:Math.max(300,chartRows.filter(r=>!r.isTotal).length*32+70)}}><canvas ref={hBarRef} id="hbar-chart"/></div>
+        <ChartTotals/>
       </div>
     </div>
 
