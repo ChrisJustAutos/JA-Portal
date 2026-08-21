@@ -554,6 +554,14 @@ Now `sectionOfLine` in `pages/distributors.tsx` is the single definition, and a 
 - **Charts show COMBINED SECTION TOTALS, not one point per customer** (Chris 2026-08-21). `sectionSummaries` rolls `distSummaries` up by section, and the Summary bar/pie, the by-group chart on National Total, and the split mode of the National P/M trend all plot that. Previously they plotted ~47 individual customers with Distributors and Sundry interleaved, and the trend's split mode showed only the **top 8 distributors** — silently dropping everyone else with no combined total to fall back on. Category stacking (Tuning/Parts/Oil + custom) still applies within each section's bar, and labels carry the customer count. Per-customer detail lives in the tables. The vehicle-model chart on Distributor Sales is a different dimension and is unchanged.
 - **Negative categories are real and render as negatives.** CP Performance carries Parts −$3,695.45 against Tuning $9,454.55 (total $5,759.10) from credits — the only negative in the payload as at 2026-08-21. A bar extending the other way there is correct, not a rendering fault (confirmed with Chris). Don't "fix" it by clamping to zero: that would hide a real credit and stop the chart reconciling with the table.
 
+### 7.14a JA Assistant — removed from the UI (2026-08-21)
+
+The floating AI assistant that sat bottom-right on every page is **no longer mounted**. It overlapped figures on the reports, so `<GlobalChatbot />` was taken out of `pages/_app.tsx`. Nothing else changed:
+
+- `components/GlobalChatbot.tsx` still exists and still compiles. `ChatContextProvider` is still wrapped around the app, and the nine pages that call `useChatContext().setContext({...})` (calls, dashboard, distributors, overview, projects, reports, sales, stock, todos) are untouched — they set context that nothing now reads.
+- **To bring it back, put `<GlobalChatbot />` back inside `<FeedbackProvider>` in `_app.tsx`.** That is the only change needed.
+- Its API surface is now **unused but live**: `/api/chat.ts` and `/api/chat-sessions/*` (list, get, delete, send) plus their Supabase session/message tables. Left in place so the feature can be restored, and because the stored history is the user's. If the assistant is ever dropped for good, those routes, the tables and the nine `useChatContext` call sites are the cleanup.
+
 ### 7.15 Settings (`/settings`)
 
 Tile launcher: General · Connections (Integrations / Health / MYOB) · Distributor Report config · VIN Codes · Users · Audit log · Profile · Claude connector (MCP tokens) · Service tokens · **Library**.

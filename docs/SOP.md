@@ -51,11 +51,15 @@ The portal is installable. In Chrome or Edge, use the install icon in the addres
 
 The bell in the top bar shows portal notifications; tabs show unread badges. Push notifications (the ones that arrive when the portal is closed) need to be allowed once per device when prompted.
 
-### 1.5 When a new version ships
+### 1.5 The JA Assistant has been removed
+
+The floating assistant button that used to sit in the bottom-right corner of every page is gone (21 August 2026). It was covering figures on the reports. Nothing else changed, and no data was deleted — if you want it back, ask Chris.
+
+### 1.6 When a new version ships
 
 A "new version — Reload" banner appears when the portal has been updated underneath you. Finish what you are typing, then reload. **⚠** Don't ignore it for days — you can end up submitting a form the server no longer expects.
 
-### 1.6 Getting access to something you can't see
+### 1.7 Getting access to something you can't see
 
 The portal hides what you don't have permission for, so a missing tab is normal, not a fault. Ask Chris; access is per-person, per-tab.
 

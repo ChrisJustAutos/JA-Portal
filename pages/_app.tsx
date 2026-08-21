@@ -1,11 +1,15 @@
 // pages/_app.tsx
-// App-level wrapper — provides user preferences context to every page,
-// sets a global dark background, and mounts the floating AI assistant.
+// App-level wrapper — provides user preferences context to every page and
+// sets a global dark background.
+//
+// The floating JA Assistant is NO LONGER MOUNTED (removed 2026-08-21 — it
+// covered figures on the reports). ChatContextProvider stays so the pages
+// calling useChatContext() keep working. See the note by <FeedbackProvider>.
 //
 // IMPORTANT: If you already have a _app.tsx with other providers or setup,
 // merge the PreferencesProvider + ChatContextProvider wraps + Head global
-// style + <GlobalChatbot /> into your existing return statement rather than
-// replacing the whole file.
+// style into your existing return statement rather than replacing the whole
+// file.
 
 import { useEffect, useRef, useState } from 'react'
 import type { AppProps } from 'next/app'
@@ -13,7 +17,7 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { PreferencesProvider, usePreferences, ACCENT_HEX, THEME_PRESETS } from '../lib/preferences'
 import { LIGHT_PALETTE } from '../lib/ui/theme'
-import GlobalChatbot, { ChatContextProvider } from '../components/GlobalChatbot'
+import { ChatContextProvider } from '../components/GlobalChatbot'
 import DesktopNotifier from '../components/DesktopNotifier'
 import UpdateNotifier from '../components/UpdateNotifier'
 import SessionKeeper from '../components/SessionKeeper'
@@ -274,7 +278,13 @@ export default function App({ Component, pageProps }: AppProps) {
         <UpdateNotifier/>
         <FeedbackProvider>
           <Component {...pageProps} />
-          <GlobalChatbot />
+          {/* JA Assistant (floating chat) removed 2026-08-21 — the panel and its
+              launcher sat over the bottom-right of every page and covered
+              figures on the reports (Chris). The component and its
+              ChatContextProvider are left in place and still compile: the nine
+              pages that call useChatContext().setContext({...}) keep working,
+              they just have nothing reading the context. To bring it back, put
+              <GlobalChatbot /> back here — nothing else needs changing. */}
         </FeedbackProvider>
       </ChatContextProvider>
     </PreferencesProvider>
