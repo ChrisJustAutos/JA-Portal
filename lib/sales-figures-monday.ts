@@ -220,3 +220,116 @@ export async function fetchSalesFigures(token: string, opts: SalesFiguresOpts = 
     generatedAt: new Date().toISOString(),
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Management view extras: sales targets and the exception totals.
+//
+// These mirror the six widgets on the Monday "Management Dashboard" (321206):
+// three target charts (per month / per person / per day) and three headline
+// exception totals (Cancelled Order, Staff Parts Owing, Postponed Orders).
+// ─────────────────────────────────────────────────────────────────────────
+
+import { getIntegrations } from './integration-config'
+import { ORDERS_BOARD } from './sales-recap-monday'
+
+/** Group ids on the Orders board that hold the exception totals. */
+const ORDER_EXCEPTION_GROUPS = {
+  postponed: 'new_group87270',      // "Postponed Orders"
+  cancelled: 'new_group40745',      // "Cancelled Orders"
+  cancelledPrevYears: 'group_mkv0r7ez', // "Cancelled Orders - Previous Years"
+}
+
+export interface SalesTargets {
+  /** Whole-business target for one month. */
+  perMonth: number
+  /** Per-salesperson target for one month. */
+  perPerson: number
+  /** Whole-business target for one day. */
+  perDay: number
+}
+
+/** Defaults read off the Monday dashboard's target lines (2026-08-21). All
+ *  three are overridable per-portal via integration settings / env. */
+const TARGET_DEFAULTS: SalesTargets = { perMonth: 1_000_000, perPerson: 300_000, perDay: 50_000 }
+
+export async function getSalesTargets(): Promise<SalesTargets> {
+  const cfg = await getIntegrations([
+    'SALES_TARGET_PER_MONTH', 'SALES_TARGET_PER_PERSON', 'SALES_TARGET_PER_DAY',
+  ] as const)
+  const n = (raw: string, fallback: number) => {
+    const v = parseFloat(String(raw).replace(/[^0-9.-]/g, ''))
+    return Number.isFinite(v) && v > 0 ? v : fallback
+  }
+  return {
+    perMonth: n(cfg.SALES_TARGET_PER_MONTH, TARGET_DEFAULTS.perMonth),
+    perPerson: n(cfg.SALES_TARGET_PER_PERSON, TARGET_DEFAULTS.perPerson),
+    perDay: n(cfg.SALES_TARGET_PER_DAY, TARGET_DEFAULTS.perDay),
+  }
+}
+
+export interface OrderExceptions {
+  cancelled: { count: number; value: number }
+  postponed: { count: number; value: number }
+  /** Whether the previous-years cancelled group was folded in. */
+  includesPreviousYears: boolean
+}
+
+/**
+ * Cancelled and Postponed order totals.
+ *
+ * These are GROUP totals over the whole board, with no date filter — verified
+ * against the Monday widget on 2026-08-21: the 12 items in "Postponed Orders"
+ * sum to $73,804.45, exactly what the widget shows. Note the group is the
+ * authority, not the status column: that group contains rows whose status is
+ * "Done" or "Not Done", and they still count.
+ *
+ * "Cancelled Orders - Previous Years" is a separate group and is EXCLUDED by
+ * default, matching the widget's apparent scope. Set
+ * SALES_EXCEPTIONS_INCLUDE_PREV_YEARS=1 to fold it in.
+ *
+ * These totals are deliberately NOT part of any sales figure — cancelled and
+ * postponed work is not revenue. They are reported alongside as what was lost
+ * and what is parked.
+ */
+export async function fetchOrderExceptions(token: string, includePrevYears = false): Promise<OrderExceptions> {
+  const groups = [ORDER_EXCEPTION_GROUPS.cancelled, ORDER_EXCEPTION_GROUPS.postponed]
+  if (includePrevYears) groups.push(ORDER_EXCEPTION_GROUPS.cancelledPrevYears)
+
+  const out: OrderExceptions = {
+    cancelled: { count: 0, value: 0 },
+    postponed: { count: 0, value: 0 },
+    includesPreviousYears: includePrevYears,
+  }
+
+  for (const gid of groups) {
+    let cursor: string | null = null
+    for (let page = 0; page < 20; page++) {
+      const cursorArg: string = cursor === null ? '' : `, cursor: ${JSON.stringify(cursor)}`
+      const q: string = `query { boards(ids: [${ORDERS_BOARD}]) { groups(ids: ["${gid}"]) {
+        items_page(limit: 500${cursorArg}) {
+          cursor items { id column_values(ids: ["numbers"]) { id text } }
+        }
+      } } }`
+      const res: Response = await fetch('https://api.monday.com/v2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: token, 'API-Version': '2024-10' },
+        body: JSON.stringify({ query: q }),
+      })
+      const j: any = await res.json()
+      if (j.errors) throw new Error(`Monday: ${JSON.stringify(j.errors).slice(0, 300)}`)
+      const pageData: any = j?.data?.boards?.[0]?.groups?.[0]?.items_page
+      const items: any[] = pageData?.items || []
+      const bucket = gid === ORDER_EXCEPTION_GROUPS.postponed ? out.postponed : out.cancelled
+      for (const it of items) {
+        const raw = (it.column_values || []).find((c: any) => c.id === 'numbers')?.text
+        const v = parseFloat(String(raw ?? '').replace(/[^0-9.-]/g, ''))
+        bucket.count++
+        if (Number.isFinite(v)) bucket.value += v
+      }
+      cursor = (pageData?.cursor as string | null) || null
+      if (!cursor || !items.length) break
+    }
+  }
+
+  return out
+}

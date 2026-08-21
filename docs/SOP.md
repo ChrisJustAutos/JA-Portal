@@ -262,9 +262,18 @@ Click-to-dial is available where enabled.
 
 ### 8.3 Sales Dashboard
 
-**Reports → Sales Dashboard.** Two views, switched at the top of the page.
+**Reports → Sales Dashboard.** Three views, switched at the top of the page.
 
-**Figures** (opens here) — the sales money: **daily, monthly, per salesperson, and totals**.
+**Management** (opens here) — sales orders against target, three ways: **per month** (last 18 months), **per salesperson** (this month), and **per day** (last 30 days). Each chart carries its target as a dashed line, and each bar is labelled with its total, so you never have to judge it by height alone. Underneath sit the **Cancelled orders** and **Postponed orders** totals.
+
+Things worth knowing here:
+
+- **The per-salesperson chart is this month only.** The target is a monthly one per person, so comparing a longer period against it would be meaningless.
+- **Cancelled and postponed are whole-of-board totals**, not filtered to your date range, matching the Monday dashboard. They are **not** part of any sales figure — cancelled and postponed work isn't money in.
+- **Staff parts owing is not built yet** — it shows a dash. There's no board of that name, so we need to know which board and filter it comes from.
+- **Targets can be changed without a code change.** Ask Chris; they are settings, currently $1,000,000 a month, $300,000 per salesperson a month, and $50,000 a day.
+
+**Figures** — the sales money: **daily, monthly, per salesperson, and totals**.
 
 Pick the period with the **From / To** date boxes, or use a preset (30d, 3m, 6m, YTD, 12m, 24m). Pick a **Salesperson** to narrow everything to one person — or just click their row in the By-salesperson table, and click again to clear it.
 
