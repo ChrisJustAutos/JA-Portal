@@ -354,6 +354,10 @@ Reading it:
 - Switching Group by resets Showing to All, because a "Distributors" filter means nothing once you are grouping by region.
 - **Parts : Tunes still leaves Sundry out on All**, as agreed in July — but if you explicitly pick Sundry it will show it, rather than looking empty.
 
+**Charts show group totals, tables show customers.** Every chart on the report now plots the combined total per group — Distributors against Sundry, or National against International — rather than a bar per customer. The label tells you how many customers are in each. If you want the customer-level breakdown, that is what the tables are for.
+
+**A bar can point the wrong way, and that can be correct.** If a category shows as negative it means credits outweighed sales for it in the period — CP Performance's Parts is the current example. The chart is telling you the truth; it isn't a fault.
+
 If a customer is landing in the wrong section, fix their membership at **Admin → Groups**; the report follows it immediately.
 
 ### 8.8 Build a PDF report

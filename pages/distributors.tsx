@@ -515,6 +515,41 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     }
   })
 
+  // ── Chart rollup: one row per SECTION, not one per customer ─────────────
+  //
+  // Chris 2026-08-21: "on all charts totals of all Distributors/Sundry should be
+  // combined". The charts used to plot every customer individually — ~47 bars
+  // with Distributors and Sundry interleaved — which answered no question you'd
+  // actually ask of a chart. Per-customer detail belongs in the tables; the
+  // charts now show the combined total per section so the split reads at a
+  // glance. Categories (Tuning/Parts/Oil + any custom ones) still stack within
+  // each section's bar.
+  //
+  // Sundry is its own section here for the same reason it is everywhere else —
+  // see sectionOfLine.
+  interface SectionSummary { name: string; tuning: number; oil: number; parts: number; total: number; count: number; [k: string]: any }
+  const sectionSummaries: SectionSummary[] = (() => {
+    const acc = new Map<string, SectionSummary>()
+    for (const d of distSummaries) {
+      const sec = d.isSundry
+        ? 'Sundry'
+        : ((primaryDimension === 'type' ? d.typeGroup : primaryDimension === 'region' ? d.regionGroup : groupNameFor(d.name, primaryDimension)) || 'Unclassified')
+      let r = acc.get(sec)
+      if (!r) {
+        r = { name: sec, tuning: 0, oil: 0, parts: 0, total: 0, count: 0 }
+        for (const c of extraCats) r[c] = 0
+        acc.set(sec, r)
+      }
+      r.tuning += d.tuning; r.oil += d.oil; r.parts += d.parts; r.total += d.total; r.count += 1
+      for (const c of extraCats) r[c] = (r[c] || 0) + Number((d as any)[c] || 0)
+    }
+    // Dimension's own order, with Sundry / Unclassified last (availableSections
+    // already encodes that); anything unexpected is appended rather than lost.
+    const ordered = availableSections.filter(sec => acc.has(sec)).map(sec => acc.get(sec)!)
+    acc.forEach((v, k) => { if (!availableSections.includes(k)) ordered.push(v) })
+    return ordered
+  })()
+
   const ss=selectedDist==='ALL'
     ?{tuning:distSummaries.reduce((s,d)=>s+d.tuning,0),oil:distSummaries.reduce((s,d)=>s+d.oil,0),parts:distSummaries.reduce((s,d)=>s+d.parts,0),
       ...Object.fromEntries(extraCats.map(c=>[c,distSummaries.reduce((s,d)=>s+Number((d as any)[c]||0),0)])),
@@ -597,10 +632,19 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     const common={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:split,labels:{color:T.text2,font:{size:11}}},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label?ctx.dataset.label+': ':''}$${Number(ctx.raw).toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}}}}
     let cfg:any
     if(split){
-      // One line per distributor (top 8 by total keeps it readable).
+      // One line per SECTION (Chris 2026-08-21: charts show combined totals).
+      // This used to be one line per distributor capped at the top 8, which
+      // both buried the Distributors-vs-Sundry split and silently dropped
+      // everyone outside the top 8 with no total to fall back on.
       const months=monthKeysOf(visibleLines)
-      const top=[...distSummaries].sort((a,b)=>b.total-a.total).slice(0,8)
-      cfg={type:'line',data:{labels:months,datasets:top.map((d,i)=>({label:d.name,data:monthlySeries(visibleLines.filter(l=>l.CustomerName===d.name),months),borderColor:CHART_COLORS[i%CHART_COLORS.length],backgroundColor:'transparent',tension:0.3,pointRadius:3,pointBackgroundColor:CHART_COLORS[i%CHART_COLORS.length]}))},options:common}
+      const secs=sectionSummaries.map(r=>r.name)
+      cfg={type:'line',data:{labels:months,datasets:secs.map((sec,i)=>({
+        label:sec,
+        data:monthlySeries(visibleLines.filter(l=>sectionOfLine(l)===sec),months),
+        borderColor:CHART_COLORS[i%CHART_COLORS.length],
+        backgroundColor:'transparent',tension:0.3,pointRadius:3,
+        pointBackgroundColor:CHART_COLORS[i%CHART_COLORS.length],
+      }))},options:common}
     }else if(selectedDist!=='ALL'){
       // Individual distributor's own monthly revenue (all their lines).
       const months=monthKeysOf(filtered)
@@ -617,21 +661,25 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     }
     lineInst.current=new(window as any).Chart(lineRef.current,cfg)
     return()=>{if(lineInst.current)lineInst.current.destroy()}
-  },[tab,trendLabels,monthlyTotals,chartKinds,selectedDist,filtered,visibleLines,distSummaries])
+  },[tab,trendLabels,monthlyTotals,chartKinds,selectedDist,filtered,visibleLines,sectionSummaries,sectionOfLine])
 
   useEffect(()=>{
-    if(tab!=='national-total'||!hBarRef.current||!(window as any).Chart||!distSummaries.length)return
+    if(tab!=='national-total'||!hBarRef.current||!(window as any).Chart||!sectionSummaries.length)return
     if(hBarInst.current)hBarInst.current.destroy()
-    const sorted=[...distSummaries].sort((a,b)=>b.total-a.total)
+    // Combined section totals rather than one bar per customer (Chris 2026-08-21).
+    const sorted=sectionSummaries
     const kind=chartKinds['byCustomer']||'bar'
-    const labels=sorted.map(d=>d.name), vals=sorted.map(d=>Math.round(d.total))
-    const tooltip={callbacks:{label:(ctx:any)=>`$${Number(ctx.raw).toLocaleString()}`}}
+    const labels=sorted.map(d=>`${d.name} (${d.count})`), vals=sorted.map(d=>Math.round(d.total))
+    const tooltip={callbacks:{label:(ctx:any)=>{
+      const r=sorted[ctx.dataIndex]
+      return `$${Number(ctx.raw).toLocaleString()} across ${r?.count||0} customer${r?.count===1?'':'s'}`
+    }}}
     hBarInst.current=new(window as any).Chart(hBarRef.current,
       kind==='pie'||kind==='doughnut'
         ? {type:kind,data:{labels,datasets:[{data:vals,backgroundColor:CHART_COLORS,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:T.text2,font:{size:11}}},tooltip}}}
         : {type:'bar',data:{labels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
     return()=>{if(hBarInst.current)hBarInst.current.destroy()}
-  },[tab,distSummaries,chartKinds])
+  },[tab,sectionSummaries,chartKinds])
 
   const tabs:[Tab,string][]=[['summary','Summary'],['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['parts-tunes','Parts : Tunes'],['national-pm','National P/M'],['national-total','National Total']]
 
@@ -742,31 +790,20 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
     const summaryKind = chartKinds['summary'] || 'table'
     const summaryChart = summaryKind !== 'table' && (() => {
-      // The bar and pie were a flat list of every customer, so Distributors and
-      // Sundry sat side by side with nothing to tell them apart while the table
-      // right beneath them was carefully sectioned. Order by section (in the
-      // dimension's own order) and prefix the label, so the chart reads the same
-      // way as the table. With a single section selected there is nothing to
-      // disambiguate, so labels stay clean.
-      const sectionRank = (d: DS) => {
-        const sec = d.isSundry ? 'Sundry' : (primaryDimension === 'type' ? d.typeGroup : d.regionGroup) || 'Unclassified'
-        const i = availableSections.indexOf(sec)
-        return { sec, rank: i === -1 ? availableSections.length : i }
-      }
-      const showSection = sectionFilter === 'ALL' && availableSections.length > 1
-      const sorted = [...distSummaries]
-        .sort((a, b) => {
-          const ra = sectionRank(a), rb = sectionRank(b)
-          return ra.rank !== rb.rank ? ra.rank - rb.rank : b.total - a.total
-        })
-        .map(d => ({ ...d, chartLabel: showSection ? `${sectionRank(d).sec} · ${d.name}` : d.name })) as Array<DS & { chartLabel: string }>
+      // Combined section totals — see sectionSummaries. One bar/slice per
+      // section (Distributors vs Sundry, or National / International / Sundry),
+      // with the customer-level detail left to the table underneath.
+      const sorted = sectionSummaries.map(r => ({
+        ...r,
+        chartLabel: `${r.name} (${r.count} customer${r.count === 1 ? '' : 's'})`,
+      }))
       if (summaryKind === 'pie') return <ChartBox ckey="summary" height={420} config={{
         type: 'pie',
         data: { labels: sorted.map(d => d.chartLabel), datasets: [{ data: sorted.map(d => Math.round(d.total)), backgroundColor: CHART_COLORS, borderWidth: 0 }] },
         options: { ...baseOpts, plugins: { ...baseOpts.plugins, legend: { position: 'right', labels: { color: T.text2, font: { size: 11 } } }, tooltip: { callbacks: { label: (ctx: any) => `$${Number(ctx.raw).toLocaleString()}` } } } },
       }}/>
       // Stacked horizontal bar: tuning / parts / oil per distributor.
-      return <ChartBox ckey="summary" height={Math.max(300, sorted.length * 30 + 80)} config={{
+      return <ChartBox ckey="summary" height={Math.max(220, sorted.length * 54 + 90)} config={{
         type: 'bar',
         data: { labels: sorted.map(d => d.chartLabel), datasets: [
           { label: 'Tuning', data: sorted.map(d => Math.round(d.tuning)), backgroundColor: '#34c77b', borderRadius: 2 },
@@ -1611,7 +1648,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:20}}>
         <div style={{position:'relative',height:380}}><canvas ref={lineRef} id="line-chart"/></div>
       </div>
-      {split&&<div style={{fontSize:11,color:T.text3,marginTop:8}}>Top 8 distributors by total revenue — pick a distributor above for anyone outside the top 8.</div>}
+      {split&&<div style={{fontSize:11,color:T.text3,marginTop:8}}>One line per group — every customer is included in exactly one. Pick a distributor above for an individual trend.</div>}
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginTop:16}}>
         {(selectedDist==='ALL'?trendLabels:indMonths).map((l,i)=><div key={l} style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:8,padding:'10px 14px'}}>
           <div style={{fontSize:11,color:T.text3,marginBottom:4}}>{l}</div>
@@ -1623,12 +1660,12 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
     if(tab==='national-total')return <div style={{padding:24,overflowY:'auto'}}>
       <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
-        <div style={{fontSize:16,fontWeight:500,color:T.text}}>{scopeLabel} — Revenue ex GST by Customer</div>
+        <div style={{fontSize:16,fontWeight:500,color:T.text}}>{scopeLabel} — Revenue ex GST by group</div>
         <div style={{flex:1}}/>
         {kindPicker('byCustomer',['bar','pie','doughnut'])}
       </div>
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:20}}>
-        <div style={{position:'relative',height:Math.max(300,distSummaries.length*36+60)}}><canvas ref={hBarRef} id="hbar-chart"/></div>
+        <div style={{position:'relative',height:Math.max(240,sectionSummaries.length*56+80)}}><canvas ref={hBarRef} id="hbar-chart"/></div>
       </div>
     </div>
 
