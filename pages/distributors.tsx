@@ -527,13 +527,22 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   //
   // Sundry is its own section here for the same reason it is everywhere else —
   // see sectionOfLine.
+  //
+  // CORRECTION 2026-08-21 (Chris): this rollup is for the TOTAL rows only. The
+  // charts must still show every customer individually — "so you can see
+  // accurately what each made" — with a combined total at the bottom of each
+  // section and a grand total at the end. Collapsing to one bar per section
+  // threw away exactly the detail that was wanted. See chartRowsFor().
+  /** Section a summary row belongs to — same rule as sectionOfLine. */
+  const sectionOfSummary = (d: DS): string => d.isSundry
+    ? 'Sundry'
+    : ((primaryDimension === 'type' ? d.typeGroup : primaryDimension === 'region' ? d.regionGroup : groupNameFor(d.name, primaryDimension)) || 'Unclassified')
+
   interface SectionSummary { name: string; tuning: number; oil: number; parts: number; total: number; count: number; [k: string]: any }
   const sectionSummaries: SectionSummary[] = (() => {
     const acc = new Map<string, SectionSummary>()
     for (const d of distSummaries) {
-      const sec = d.isSundry
-        ? 'Sundry'
-        : ((primaryDimension === 'type' ? d.typeGroup : primaryDimension === 'region' ? d.regionGroup : groupNameFor(d.name, primaryDimension)) || 'Unclassified')
+      const sec = sectionOfSummary(d)
       let r = acc.get(sec)
       if (!r) {
         r = { name: sec, tuning: 0, oil: 0, parts: 0, total: 0, count: 0 }
@@ -548,6 +557,33 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     const ordered = availableSections.filter(sec => acc.has(sec)).map(sec => acc.get(sec)!)
     acc.forEach((v, k) => { if (!availableSections.includes(k)) ordered.push(v) })
     return ordered
+  })()
+
+  // Chart rows: every customer, ordered by section, with a combined TOTAL row
+  // at the bottom of each section and a grand total at the end. Totals are
+  // flagged so charts that can't carry them (a pie — a total slice would
+  // double-count and break the percentages) can drop them.
+  interface ChartRow { chartLabel: string; tuning: number; oil: number; parts: number; total: number; isTotal: boolean; [k: string]: any }
+  const chartRows: ChartRow[] = (() => {
+    const out: ChartRow[] = []
+    const zero = () => { const z: any = { tuning: 0, oil: 0, parts: 0, total: 0 }; for (const c of extraCats) z[c] = 0; return z }
+    const add = (acc: any, r: any) => {
+      acc.tuning += r.tuning; acc.oil += r.oil; acc.parts += r.parts; acc.total += r.total
+      for (const c of extraCats) acc[c] = (acc[c] || 0) + Number(r[c] || 0)
+      return acc
+    }
+    const grand = zero()
+    for (const sec of sectionSummaries) {
+      const members = distSummaries
+        .filter(d => sectionOfSummary(d) === sec.name)
+        .sort((a, b) => b.total - a.total)
+      for (const m of members) out.push({ ...(m as any), chartLabel: m.name, isTotal: false })
+      out.push({ ...(sec as any), chartLabel: `${sec.name} — TOTAL`, isTotal: true })
+      add(grand, sec)
+    }
+    // Only worth a grand total when there is more than one section to combine.
+    if (sectionSummaries.length > 1) out.push({ ...grand, chartLabel: 'ALL COMBINED — TOTAL', isTotal: true })
+    return out
   })()
 
   const ss=selectedDist==='ALL'
@@ -664,22 +700,23 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   },[tab,trendLabels,monthlyTotals,chartKinds,selectedDist,filtered,visibleLines,sectionSummaries,sectionOfLine])
 
   useEffect(()=>{
-    if(tab!=='national-total'||!hBarRef.current||!(window as any).Chart||!sectionSummaries.length)return
+    if(tab!=='national-total'||!hBarRef.current||!(window as any).Chart||!chartRows.length)return
     if(hBarInst.current)hBarInst.current.destroy()
-    // Combined section totals rather than one bar per customer (Chris 2026-08-21).
-    const sorted=sectionSummaries
     const kind=chartKinds['byCustomer']||'bar'
-    const labels=sorted.map(d=>`${d.name} (${d.count})`), vals=sorted.map(d=>Math.round(d.total))
-    const tooltip={callbacks:{label:(ctx:any)=>{
-      const r=sorted[ctx.dataIndex]
-      return `$${Number(ctx.raw).toLocaleString()} across ${r?.count||0} customer${r?.count===1?'':'s'}`
-    }}}
+    // Every customer, plus a combined total per group and a grand total. The
+    // pie/doughnut drop the totals — a total slice would double-count.
+    const sorted=(kind==='pie'||kind==='doughnut')?chartRows.filter(r=>!r.isTotal):chartRows
+    const labels=sorted.map(d=>d.chartLabel), vals=sorted.map(d=>Math.round(d.total))
+    // Total bars are drawn in the accent so they read as a rule-off, not as
+    // another customer.
+    const colors=sorted.map((d,i)=>d.isTotal?'#a78bfa':(kind==='pie'||kind==='doughnut'?CHART_COLORS[i%CHART_COLORS.length]:'#4f8ef7'))
+    const tooltip={callbacks:{label:(ctx:any)=>`$${Number(ctx.raw).toLocaleString()}`}}
     hBarInst.current=new(window as any).Chart(hBarRef.current,
       kind==='pie'||kind==='doughnut'
         ? {type:kind,data:{labels,datasets:[{data:vals,backgroundColor:CHART_COLORS,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:T.text2,font:{size:11}}},tooltip}}}
-        : {type:'bar',data:{labels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
+        : {type:'bar',data:{labels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:colors,borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
     return()=>{if(hBarInst.current)hBarInst.current.destroy()}
-  },[tab,sectionSummaries,chartKinds])
+  },[tab,chartRows,chartKinds])
 
   const tabs:[Tab,string][]=[['summary','Summary'],['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['parts-tunes','Parts : Tunes'],['national-pm','National P/M'],['national-total','National Total']]
 
@@ -790,20 +827,17 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
     const summaryKind = chartKinds['summary'] || 'table'
     const summaryChart = summaryKind !== 'table' && (() => {
-      // Combined section totals — see sectionSummaries. One bar/slice per
-      // section (Distributors vs Sundry, or National / International / Sundry),
-      // with the customer-level detail left to the table underneath.
-      const sorted = sectionSummaries.map(r => ({
-        ...r,
-        chartLabel: `${r.name} (${r.count} customer${r.count === 1 ? '' : 's'})`,
-      }))
+      // Every customer, grouped, with section subtotals and a grand total — see
+      // chartRows. The pie drops the total rows: a total slice would be counted
+      // twice and the percentages would stop meaning anything.
+      const sorted = summaryKind === 'pie' ? chartRows.filter(r => !r.isTotal) : chartRows
       if (summaryKind === 'pie') return <ChartBox ckey="summary" height={420} config={{
         type: 'pie',
         data: { labels: sorted.map(d => d.chartLabel), datasets: [{ data: sorted.map(d => Math.round(d.total)), backgroundColor: CHART_COLORS, borderWidth: 0 }] },
         options: { ...baseOpts, plugins: { ...baseOpts.plugins, legend: { position: 'right', labels: { color: T.text2, font: { size: 11 } } }, tooltip: { callbacks: { label: (ctx: any) => `$${Number(ctx.raw).toLocaleString()}` } } } },
       }}/>
       // Stacked horizontal bar: tuning / parts / oil per distributor.
-      return <ChartBox ckey="summary" height={Math.max(220, sorted.length * 54 + 90)} config={{
+      return <ChartBox ckey="summary" height={Math.max(300, sorted.length * 30 + 90)} config={{
         type: 'bar',
         data: { labels: sorted.map(d => d.chartLabel), datasets: [
           { label: 'Tuning', data: sorted.map(d => Math.round(d.tuning)), backgroundColor: '#34c77b', borderRadius: 2 },
@@ -930,6 +964,39 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
                   <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryTuning)}</td>
                   {extraCats.map(c=><td key={c} style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundrySummaries.reduce((s2,r)=>s2+Number((r as any)[c]||0),0))}</td>)}
                   <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryTotal)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )
+      })()}
+
+      {/* Grand total across every section — the table had per-group and Sundry
+          subtotals but nothing combining them, so there was no single figure
+          for the period (Chris 2026-08-21). Built from distSummaries, i.e. the
+          same rows the sections above are built from, so it always reconciles
+          to the sum of the section totals. */}
+      {summaryKind === 'table' && distSummaries.length > 0 && (() => {
+        const gTuning = distSummaries.reduce((a,r)=>a+r.tuning,0)
+        const gOil    = distSummaries.reduce((a,r)=>a+r.oil,0)
+        const gParts  = distSummaries.reduce((a,r)=>a+r.parts,0)
+        const gTotal  = distSummaries.reduce((a,r)=>a+r.total,0)
+        return (
+          <div style={{background:T.bg2,border:`1px solid ${T.accent}`,borderRadius:10,overflowX:'auto'}}>
+            <table style={{width:'100%',borderCollapse:'collapse'}}>
+              <tbody>
+                <tr style={{background:T.bg3}}>
+                  <td style={{fontSize:13,fontWeight:600,color:T.text,padding:'12px'}}>
+                    All combined — TOTAL
+                    <span style={{fontSize:11,fontWeight:400,color:T.text3,fontFamily:'monospace',marginLeft:8}}>
+                      {distSummaries.length} customer{distSummaries.length===1?'':'s'} across {sectionSummaries.length} group{sectionSummaries.length===1?'':'s'}
+                    </span>
+                  </td>
+                  <td style={{fontSize:13,fontFamily:'monospace',fontWeight:600,color:T.text,padding:'12px',textAlign:'right'}}>{fmtFull(gOil)}</td>
+                  <td style={{fontSize:13,fontFamily:'monospace',fontWeight:600,color:T.text,padding:'12px',textAlign:'right'}}>{fmtFull(gParts)}</td>
+                  <td style={{fontSize:13,fontFamily:'monospace',fontWeight:600,color:T.green,padding:'12px',textAlign:'right'}}>{fmtFull(gTuning)}</td>
+                  {extraCats.map(c=><td key={c} style={{fontSize:13,fontFamily:'monospace',fontWeight:600,color:T.text,padding:'12px',textAlign:'right'}}>{fmtFull(distSummaries.reduce((a,r)=>a+Number((r as any)[c]||0),0))}</td>)}
+                  <td style={{fontSize:14,fontFamily:'monospace',fontWeight:700,color:T.blue,padding:'12px',textAlign:'right'}}>{fmtFull(gTotal)}</td>
                 </tr>
               </tbody>
             </table>
@@ -1660,12 +1727,12 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
     if(tab==='national-total')return <div style={{padding:24,overflowY:'auto'}}>
       <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
-        <div style={{fontSize:16,fontWeight:500,color:T.text}}>{scopeLabel} — Revenue ex GST by group</div>
+        <div style={{fontSize:16,fontWeight:500,color:T.text}}>{scopeLabel} — Revenue ex GST by Customer</div>
         <div style={{flex:1}}/>
         {kindPicker('byCustomer',['bar','pie','doughnut'])}
       </div>
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:20}}>
-        <div style={{position:'relative',height:Math.max(240,sectionSummaries.length*56+80)}}><canvas ref={hBarRef} id="hbar-chart"/></div>
+        <div style={{position:'relative',height:Math.max(300,chartRows.length*32+70)}}><canvas ref={hBarRef} id="hbar-chart"/></div>
       </div>
     </div>
 
