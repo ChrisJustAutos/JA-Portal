@@ -205,12 +205,17 @@ export default function LeaveNotificationsTab() {
             <div style={lbl}>Email</div>
             <input value={fEmail} onChange={e => setFEmail(e.target.value)} style={{ ...inp, width: 260 }} placeholder="callan@justautosmechanical.com.au" />
           </div>
-          <div style={{ flex: 1, minWidth: 140 }}>
+          {/* boxSizing is essential: the shared `inp` style carries padding + a
+              border and no box-sizing, so a width:100% input inside a flex:1
+              box renders ~20px wider than its column and rides over the Add
+              button. minWidth:0 lets the column actually shrink. */}
+          <div style={{ flex: '1 1 180px', minWidth: 0 }}>
             <div style={lbl}>Note (optional)</div>
-            <input value={fNote} onChange={e => setFNote(e.target.value)} style={{ ...inp, width: '100%' }} placeholder="workshop" />
+            <input value={fNote} onChange={e => setFNote(e.target.value)}
+              style={{ ...inp, width: '100%', boxSizing: 'border-box' }} placeholder="workshop" />
           </div>
-          <button onClick={saveEntry} disabled={busy === 'entry'} style={pbtn(T.green)}>{editId ? 'Update' : 'Add'}</button>
-          {editId && <button onClick={resetForm} style={pbtn(T.text2)}>Cancel</button>}
+          <button onClick={saveEntry} disabled={busy === 'entry'} style={{ ...pbtn(T.green), flexShrink: 0 }}>{editId ? 'Update' : 'Add'}</button>
+          {editId && <button onClick={resetForm} style={{ ...pbtn(T.text2), flexShrink: 0 }}>Cancel</button>}
         </div>
         <div style={{ maxHeight: 340, overflowY: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
