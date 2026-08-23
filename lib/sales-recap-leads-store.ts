@@ -14,6 +14,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { fetchQuoteLeads, type QuoteLeadRow } from './sales-recap-monday'
+import { selectAllRows } from './supabase-paged'
 
 // Live-pull lookback per snapshot: long enough that a lead can't slip
 // between snapshots (leads sit in Quote - Lead at least overnight; a whole
@@ -57,13 +58,19 @@ export async function captureAndLoadQuoteLeads(token: string, sinceMs: number): 
     console.error('[overnight-leads] snapshot failed:', e?.message || e)
   }
   try {
-    const { data, error } = await sb().from('sales_recap_overnight_leads')
+    // PAGED, not `.limit(3000)`: PostgREST silently caps responses at 1000
+    // rows whatever the limit says. The read has no upper bound, so a custom
+    // range in Reports → Sales Report (up to ~3 months, plus the 5-day lead-in)
+    // pulls everything from that date to now — already ~2.6k rows at the
+    // current ~190 leads/week, and the store only grows. Ordered ascending,
+    // truncation would drop the NEWEST leads, so the selected range could come
+    // back empty exactly the way the quotes map report did. Paging on
+    // monday_item_id (unique index srol_item_uq); assembleRecap re-sorts by
+    // createdAt, so the page order doesn't matter. See lib/supabase-paged.ts.
+    const rows = await selectAllRows<any>(() => sb().from('sales_recap_overnight_leads')
       .select('monday_item_id, board_id, channel, name, phone, lead_created_at')
-      .gte('lead_created_at', new Date(sinceMs).toISOString())
-      .order('lead_created_at', { ascending: true })
-      .limit(3000)
-    if (error) throw new Error(error.message)
-    return (data || []).map(r => ({
+      .gte('lead_created_at', new Date(sinceMs).toISOString()), 'monday_item_id')
+    return rows.map(r => ({
       itemId: String(r.monday_item_id), boardId: r.board_id || '', channel: r.channel,
       name: r.name, phone: r.phone, createdAt: r.lead_created_at,
     }))
