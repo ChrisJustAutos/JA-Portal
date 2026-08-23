@@ -13,7 +13,7 @@ An internal management platform for **Just Autos**, covering two MYOB business e
 - **JAWS** — Just Autos Wholesale (distribution arm, holds stock, ~14 distributors across Australia)
 - **VPS** — Vehicle Performance Solutions (the workshop entity; runs on **Mechanics Desk**, which remains the system of record — see §7.2)
 
-It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (23 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
+It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (24 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
 
 | | |
 |---|---|
@@ -95,7 +95,7 @@ Error fingerprints: generic 500 HTML page = module-load crash (bad import / `.ts
 
 ### Database migrations (SOP)
 
-- Migrations live in `migrations/NNN_description.sql` (196 files, `002`–`195`; note `148` and `153` are each duplicated — sequence is a convention, not a key. Next number: **196**).
+- Migrations live in `migrations/NNN_description.sql` (198 files, `002`–`198`; note `148` and `153` are each duplicated — sequence is a convention, not a key. Next number: **199**).
 - There is **no migration runner**. The procedure is: write the SQL file in `migrations/`, apply it to the live DB via the **Supabase MCP `apply_migration`** tool (project `qtiscbvhlvdvafwtdtcd`) **before** pushing code that depends on it, then commit both.
 - The repo file is the source-of-truth record; the MCP apply is what actually changes the DB.
 
@@ -300,7 +300,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 
 ## 6. Scheduled automation
 
-### 6.1 Vercel crons (23 — `vercel.json`; schedules are UTC; Brisbane = UTC+10)
+### 6.1 Vercel crons (24 — `vercel.json`; schedules are UTC; Brisbane = UTC+10)
 
 | Cron | Brisbane time | Purpose |
 |---|---|---|
@@ -326,6 +326,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 | `/api/cron/tune-jobs` | hourly :20 | Scan inbox for Stripe tune receipts; Monday-morning reminders/escalations |
 | `/api/cron/b2b-dropship-confirm` | every 15 min | Supplier confirmation emails → full drop-ship receiving flow |
 | `/api/cron/mgmt-dashboard-warm` | 05:30 daily | Pre-compute Management Dashboard MYOB bundles |
+| `/api/cron/leave-decisions` | every 15 min | Leave applications decided on the Monday board → email the applicant (approved *and* denied), cc/reply-to HR. Only items on the application path count — see §7.17. `LEAVE_EMAILS_ENABLED=false` switches it off |
 
 ⚠ Two handlers exist but are **not scheduled** (headers claim otherwise): `bank-payments-slack.ts` (7am payment digests) and `slack-cleanup.ts` (parts-bot TTL deletes). Manual-invoke only until added to `vercel.json`.
 
@@ -575,7 +576,7 @@ The floating AI assistant that sat bottom-right on every page is **no longer mou
 
 ### 7.15 Settings (`/settings`)
 
-Tile launcher: General · Connections (Integrations / Health / MYOB) · Distributor Report config · VIN Codes · Users · Audit log · Profile · Claude connector (MCP tokens) · Service tokens · **Library**.
+Tile launcher: General · Connections (Integrations / Health / MYOB) · Distributor Report config · VIN Codes · Users · Audit log · Profile · Claude connector (MCP tokens) · Service tokens · **Leave Notifications** (§7.17) · **Library**.
 
 ### 7.16 Library (`/admin/library`)
 
@@ -589,6 +590,20 @@ This document and the SOP, served inside the portal — readable on screen with 
 - **⚠ The in-app reader does not rewrite relative image paths**, so an illustrated document renders its pictures in the PDF but shows broken images on screen. `docs/library-access-sop.md` (how to find these documents, with screenshots) is therefore **deliberately not registered** in `lib/library-docs.ts` — it is handed out as a PDF. Registering it needs an auth-gated `/api/admin/library/img/[file]` route plus a `renderer.image` rewrite in `pages/admin/library/[slug].tsx`.
 
 **SOP**: see `CLAUDE.md` §1 — every change to the portal updates these documents as part of the same work.
+
+### 7.17 Leave decision emails (Settings → Leave Notifications)
+
+Staff apply for leave through the monday.com **Payroll & Leave Applications** board (`5027074711`) — a WorkForm drops the application into the *Leave Applications* group. When a manager sets the **Leave Approved** column to Approved or Denied, the portal emails the applicant. Built 2026-08-24 (migrations `197`, `198`).
+
+- **Engine** `lib/leave-decision-emails.ts`, driven by `/api/cron/leave-decisions` every 15 minutes. Admin UI + manual run: `components/settings/LeaveNotificationsTab.tsx` → `/api/admin/leave-notifications` (`admin:settings`).
+- **Why not a monday automation.** monday can only send mail through the Gmail/Outlook integration: it sends from one person's connected mailbox, dies quietly when that connection lapses, and does nothing at all when the board's Email Address column is empty — which is most rows, because managers hand-create them. The portal resolves the address itself instead.
+- **⚠ What counts as an application.** That board doubles as a daily attendance log — *"Kaleb Rowe left work at 11am today"*, *"Public Holiday"*, *"Easter Monday - all staff"*, *"TIME OFF/ OVERTIME EXPORT"* all sit on it marked **Approved**. Emailing on "status = Approved" alone would mail people about those. The rule (Chris's call) is *an item that was in **Leave Applications** and had Approved pressed on it*, and the board's own automations make it checkable: pressing Approved moves the item to **Upcoming Leave — Approved**, Denied moves it to **Leave Denied**. So only items in `topics`, `group_mkqz6qh6` or `group_mkqzjmed` (`APPLICATION_GROUPS`) are ever acted on; anything in the payroll groups is ignored outright — no email, no log row, no HR notice.
+- **Address resolution**: the board's Email Address column → `leave_staff_directory` (name-as-typed → email, editable in the portal) → unresolved. A column address whose domain is a near-miss of ours is **rejected** rather than used (a live row reads `jarred@justaustosmechanical.com.au`, which would bounce into a void with everyone believing the applicant was told). Directory matching is tiered: exact, trailing noise words stripped (*"Dom Simpson Sick"*), first + surname initial (*"Chris R"*), then a lone first name only when exactly one person has it — *"Matt"* (Huddy / Smith / Karger) stays unresolved on purpose, and a row naming several people (*"James, Kaleb, Graham, Dom and Tyronne"*) refuses to match rather than mailing the first one. `scripts/check-leave-resolver.ts` exercises all of this against the real board names (`npx tsx`, no network).
+- **Unresolved** items are logged `no_address`, HR is emailed **once**, and every later run retries — so adding the address to the column or the directory is all that's needed; nobody has to re-approve anything.
+- **Dedupe / going live.** `leave_decision_emails` holds one row per (item, decision) and that *is* the dedupe key. On the very first run every already-decided application on the application path is written as `baseline` and **nothing is sent** — 16 rows when this shipped. Flipping an item Approved → Denied is a new decision and does email again.
+- Each send also posts an update on the monday item ("📧 Approval email sent to …"), so the audit trail lives where HR is looking.
+- **Settings** resolve DB-first through `integration_settings`: `LEAVE_EMAILS_ENABLED` (kill switch) and `LEAVE_HR_EMAIL` (copied on every email, the reply-to, and where unresolved notices go — `ryan@justautosmechanical.com.au`).
+- **Known gap**: a separate board automation moves approved items into the payroll groups three days before the leave starts. If an approval were pressed and that mover ran inside the same 15-minute window, the item would leave the application path before the portal saw it and no email would go out. Practically impossible (a daily automation vs a 15-minute cron) but real; the fix if it ever bites is a per-item Send button on the Leave Notifications screen.
 
 ---
 
@@ -614,7 +629,7 @@ This document and the SOP, served inside the portal — readable on screen with 
 
 **Consistency / drift**
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
-- Migrations `148` and `153` are duplicated numbers; latest applied is `196_md_vehicle_trend`, so next is `197`.
+- Migrations `148` and `153` are duplicated numbers; latest applied is `198_leave_directory_board_aliases`, so next is `199`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.

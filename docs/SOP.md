@@ -380,6 +380,35 @@ If a customer is landing in the wrong section, fix their membership at **Admin �
 
 ---
 
+## 9a. Leave applications — the applicant is emailed automatically
+
+Staff apply for leave on the Monday **Payroll & Leave Applications** board (the Leave Request form drops the application into the **Leave Applications** group). Since 24 August 2026, **setting the Leave Approved column to Approved or Denied emails the applicant** — a plain, friendly note with the leave type, dates and total days. Ryan is copied on every one and is the reply-to, so replies land with HR.
+
+**For managers approving leave**
+
+- Approve or decline in the **Leave Applications** group as you always have. The email goes out within 15 minutes. You don't need to send anything yourself, and you don't need to tell the portal.
+- **⚠ Notes you key straight into the payroll groups are never emailed.** *"Kaleb left at 11am"*, *"Public Holiday"*, *"Easter Monday – all staff"* and the export row all sit on this board marked Approved, and none of them mail anybody. Only an item that was in **Leave Applications** and had Approved (or Denied) pressed on it counts. If you want someone told, decide it on their application, not on a note.
+- Changing your mind is fine: flipping an item from Approved to Denied (or back) counts as a new decision and sends the matching email once.
+- **Declines are sent too.** The wording asks the person not to take the leave and to speak with their manager — so if you decline something you've already discussed face-to-face, expect them to receive that note as well.
+
+**When the portal doesn't know someone's email address**
+
+Applications submitted through the form carry an address. Rows a manager types by hand usually don't, so the portal falls back to a staff directory — and if it still can't work out an address, **it emails Ryan once** with the applicant's name and does nothing else.
+
+To fix one (either way works, and the email then goes out at the next 15-minute run — **don't re-approve anything**):
+
+1. fill in the **Email Address** column on the Monday item, or
+2. add the name to **Settings → Leave Notifications → Staff directory**, exactly as it's typed on the board.
+
+**Settings → Leave Notifications** (admins) also holds: the on/off switch, the HR address that's copied and replied to, everything waiting on an address, the last 100 decisions with who was emailed, and two buttons — **Dry run** (works out who *would* be emailed and sends nothing — use this after editing the directory) and **Run now**.
+
+Two deliberate refusals worth knowing about, because they look like faults:
+
+- A **misspelt company address** on the item (there's a live row reading `justaustos…`) is **not** used — that mail would bounce into a void while everyone believed the person had been told. It goes to the unresolved list instead.
+- A name the portal can't pin to one person — a bare *"Matt"* (Huddy, Smith or Karger?), or a row naming several people — is **left unresolved rather than guessed**.
+
+---
+
 ## 10. When something looks wrong
 
 Work down this table before escalating. Most of these are a stalled worker, not lost data.
@@ -397,6 +426,8 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | A distributor says they never got tracking | Ship Now hasn't been pressed | §4.2 |
 | An AP invoice never arrived | Supplier sent a link, not an attachment | §5 — link-only emails are invisible |
 | A weekly email report shows a count that is clearly too low — or zero | A report query that has outgrown the database's 1000-row response cap and is silently dropping the rest | Don't assume the underlying data is missing — check the live screen (Reports → Workshop Map, Reports → Sales Report) for the same period first. If the screen is right and the email is wrong, it's the report, not the workshop. Tell Chris. |
+| Someone approved leave and the person says they got nothing | Either the item wasn't on the application path (a note keyed into a payroll group — §9a), or the portal has no address for them | Settings → Leave Notifications: the item will be under "Waiting on an email address" if it's an address problem. If it isn't listed at all, the decision was made on a note rather than an application. |
+| Ryan gets "no email address for …" notices | The applicant's name isn't in the staff directory and the item has no Email Address | Add either one (§9a) — the email then sends itself; nobody needs to re-approve. You only get that notice once per application. |
 | Someone can't see a tab | Permissions, working as designed | Ask Chris |
 
 **Where to look first, always:** Admin → Connections. It shows every integration and when it last succeeded.
@@ -414,6 +445,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Change an integration's credentials | Admin → Connections / Settings → Integrations — **⚠** always here, never by editing environment variables directly |
 | Check every integration's health | Admin → Connections |
 | Per-person reply-to address on outgoing mail | Settings → Users |
+| Leave approval emails — switch, HR address, staff directory, who was emailed | Settings → Leave Notifications (§9a) |
 
 ---
 
@@ -427,3 +459,4 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 6. **The workshop runs on Mechanics Desk** — the portal handles parts, letters, counting and reporting around it.
 7. **Credentials change in the portal**, not in environment variables.
 8. **Reload when the new-version banner appears.**
+9. **Leave is approved on the application, not on a note.** Pressing Approved on an item in Leave Applications emails the applicant; a line typed into a payroll group emails nobody.

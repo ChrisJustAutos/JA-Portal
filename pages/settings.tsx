@@ -21,11 +21,12 @@ import DistributorTab from '../components/settings/DistributorTab'
 import ConnectionsHubTab from '../components/settings/ConnectionsHubTab'
 import DataImportsTab from '../components/settings/DataImportsTab'
 import CoachingTab from '../components/settings/CoachingTab'
+import LeaveNotificationsTab from '../components/settings/LeaveNotificationsTab'
 import type { PortalUserSSR } from '../lib/authServer'
 import { T } from '../lib/ui/theme'
 import { SkeletonRows } from '../components/ui'
 import { useToast, useConfirm } from '../components/ui/Feedback'
-type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'connections'|'data-imports'|'users'|'audit'|'profile'|'workshop'|'md-imports'|'coaching'
+type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'connections'|'data-imports'|'users'|'audit'|'profile'|'workshop'|'md-imports'|'coaching'|'leave'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
@@ -47,6 +48,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     qTab === 'profile' ? 'profile' :
     qTab === 'workshop' ? 'workshop' :
     qTab === 'coaching' ? 'coaching' :
+    qTab === 'leave' ? 'leave' :
     qTab === 'groups' ? 'dist-report' :
     qTab === 'myob' ? 'connections' :
     'general'
@@ -78,6 +80,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true,  icon: 'vehicle-sales', accent: T.amber,  desc: 'VIN prefix → model code rules' },
     { id: 'backfill',    label: 'Backfill',           adminOnly: true,  icon: 'jobs',          accent: T.teal,   desc: 'Orders ↔ quotes backfill' },
     { id: 'coaching',    label: 'Call Coaching',      adminOnly: true,  icon: 'call-coaching', accent: T.purple, desc: 'Scoring rubrics per call type + advisor roster' },
+    { id: 'leave',       label: 'Leave Notifications',adminOnly: true,  icon: 'team',          accent: T.green,  desc: 'Approval / decline emails to staff + the name→email directory they resolve through' },
     { id: 'users',       label: 'Users & Staff',      adminOnly: true,  icon: 'team',          accent: T.blue,   desc: 'Logins, roles, tabs + workshop diary lanes' },
     { id: 'audit',       label: 'Audit Log',          adminOnly: true,  icon: 'todos',         accent: T.text2,  desc: 'Recent user-management events' },
     { id: 'library',     label: 'Library',            adminOnly: true,  icon: 'reports',       accent: T.purple, desc: 'Portal documentation — SOP and full handover, readable here or downloadable as PDF', href: '/admin/library' },
@@ -86,7 +89,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const visibleSections = SECTIONS.filter(s => !s.adminOnly || isAdmin)
   const active = SECTIONS.find(s => s.id === openId) || null
   // Heavy sections (tables / iframes) get a wider window.
-  const WIDE: SettingsTab[] = ['dist-report','connections','data-imports','vin-codes','backfill','users','workshop','md-imports','coaching']
+  const WIDE: SettingsTab[] = ['dist-report','connections','data-imports','vin-codes','backfill','users','workshop','md-imports','coaching','leave']
 
   function openSection(t: SettingsTab) {
     setOpenId(t)
@@ -199,6 +202,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
                   {active.id === 'md-imports'  && isAdmin && <MdImportsEmbed/>}
                   {active.id === 'backfill'    && isAdmin && <BackfillTab/>}
                   {active.id === 'coaching'    && isAdmin && <CoachingTab/>}
+                  {active.id === 'leave'       && isAdmin && <LeaveNotificationsTab/>}
                   {active.id === 'users'       && isAdmin && <UsersTab currentUser={user}/>}
                   {active.id === 'audit'       && isAdmin && <AuditTab/>}
                   {active.id === 'profile'                && <ProfileTab user={user}/>}
