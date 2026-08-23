@@ -87,10 +87,14 @@ export default function B2BAssetsAdmin({ user }: { user: any }) {
   return (
     <>
       <Head><title>B2B Resources — Just Autos</title><meta name="robots" content="noindex,nofollow" /></Head>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", background: T.bg, color: T.text }}>
+      {/* Normal page scroll (minHeight, NOT height + overflow:hidden) — the
+          flex min-height:auto trap leaves the bottom of the list unreachable.
+          See the Handover's design conventions. */}
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', fontFamily: "'DM Sans',system-ui,sans-serif", background: T.bg, color: T.text }}>
         <PortalTopBar activeId="b2b" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <main className="b2b-admin-main" style={{ flex: 1, padding: '20px 20px 40px', width: '100%', boxSizing: 'border-box' }}>
         <B2BAdminTabs active="assets" />
-        <div style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1000 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1000 }}>
 
           <PageTitle sub="Documents distributors see under Resources — publish, replace or retire files by section.">Resource library</PageTitle>
 
@@ -151,6 +155,7 @@ export default function B2BAssetsAdmin({ user }: { user: any }) {
             )
           })}
         </div>
+        </main>
       </div>
     </>
   )
