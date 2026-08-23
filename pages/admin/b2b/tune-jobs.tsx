@@ -255,10 +255,16 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
   return (
     <>
       <Head><title>Tune Jobs — Just Autos</title><meta name="robots" content="noindex,nofollow" /></Head>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", background: T.bg, color: T.text }}>
+      {/* Normal page scroll (minHeight, NOT height + overflow:hidden) — the
+          flex min-height:auto trap killed scrolling here, exactly as it did on
+          the Training page. b2b-admin-main also brings the shared mobile CSS,
+          so the wide job table scrolls sideways on a phone instead of
+          stretching the page. */}
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', fontFamily: "'DM Sans',system-ui,sans-serif", background: T.bg, color: T.text }}>
         <PortalTopBar activeId="b2b" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <main className="b2b-admin-main" style={{ flex: 1, padding: '20px 20px 40px', width: '100%', boxSizing: 'border-box' }}>
         <B2BAdminTabs active="tune_jobs" />
-        <div style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 1400 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 1400 }}>
 
           {/* Toolbar — test-job create/delete buttons removed 2026-08-11
               (Chris: not needed); the API actions remain for emergencies. */}
@@ -430,6 +436,7 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
             </div>
           )}
         </div>
+        </main>
 
         {/* Staff correction modal — fixes a distributor's submission and
             re-pushes: Monday item now, MechanicDesk via the nightly worker. */}
