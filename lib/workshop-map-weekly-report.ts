@@ -17,6 +17,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { sendMail } from './email'
 import { VEHICLE_CATS } from './workshop-map/vehicle-classification'
+import { selectAllRows } from './supabase-paged'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const MODEL = () => (process.env.WORKSHOP_MAP_REPORT_MODEL || 'claude-sonnet-4-6').trim()
@@ -95,16 +96,20 @@ async function fetchWindow(days: number) {
   const baseFrom = ymd(new Date(now.getTime() - (days + 28) * 86400_000))
   const jobsSince90 = ymd(new Date(now.getTime() - 90 * 86400_000))
 
-  // Weekly quote volume is a few hundred rows; 28-day baseline a couple of
-  // thousand — single selects are fine.
-  const { data: quotes, error: qErr } = await c.from('md_quotes')
-    .select('quote_date, total_amount, vehicle_group, state, locality, suburb, lat, status, customer_name')
-    .gte('quote_date', baseFrom).eq('missing', false).limit(10000)
-  if (qErr) throw qErr
-  const { data: invoices, error: iErr } = await c.from('md_invoices')
-    .select('issue_date, total_amount, vehicle_group, state, locality, suburb, lat, is_noise, customer_name')
-    .gte('issue_date', jobsSince90 < baseFrom ? jobsSince90 : baseFrom).eq('missing', false).limit(20000)
-  if (iErr) throw iErr
+  // Weekly quote volume is a few hundred rows and the 5-week window a
+  // thousand-plus — PAGE these. A plain select silently stops at PostgREST's
+  // 1000-row cap however big the .limit(), and because rows come back in sort
+  // order it's the NEWEST week that falls off: on 2026-08-24 this reported
+  // "0 quotes issued" for a week with 313. See lib/supabase-paged.ts.
+  const invFrom = jobsSince90 < baseFrom ? jobsSince90 : baseFrom
+  const [quotes, invoices] = await Promise.all([
+    selectAllRows<any>(() => c.from('md_quotes')
+      .select('quote_number, quote_date, total_amount, vehicle_group, state, locality, suburb, lat, status, customer_name')
+      .gte('quote_date', baseFrom).eq('missing', false), 'quote_number'),
+    selectAllRows<any>(() => c.from('md_invoices')
+      .select('invoice_number, issue_date, total_amount, vehicle_group, state, locality, suburb, lat, is_noise, customer_name')
+      .gte('issue_date', invFrom).eq('missing', false), 'invoice_number'),
+  ])
 
   const norm = (r: any, dateKey: string) => ({
     date: String(r[dateKey] || ''),

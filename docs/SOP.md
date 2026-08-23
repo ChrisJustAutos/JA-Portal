@@ -396,6 +396,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Workshop map or vehicle trend looks out of date | The nightly MD pull | Reports → Workshop Map shows "synced"; "Pull from MechanicDesk now" forces it (~2–4 min) |
 | A distributor says they never got tracking | Ship Now hasn't been pressed | §4.2 |
 | An AP invoice never arrived | Supplier sent a link, not an attachment | §5 — link-only emails are invisible |
+| A weekly email report shows a count that is clearly too low — or zero | A report query that has outgrown the database's 1000-row response cap and is silently dropping the rest | Don't assume the underlying data is missing — check the live screen (Reports → Workshop Map, Reports → Sales Report) for the same period first. If the screen is right and the email is wrong, it's the report, not the workshop. Tell Chris. |
 | Someone can't see a tab | Permissions, working as designed | Ask Chris |
 
 **Where to look first, always:** Admin → Connections. It shows every integration and when it last succeeded.

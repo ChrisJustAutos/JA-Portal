@@ -75,6 +75,7 @@ External SaaS the Vercel app talks to directly: **MYOB AccountRight** (both enti
 - **Shared UI kit is mandatory**: `lib/ui/theme` tokens (`T` — CSS variables; use `alpha()`, never alpha-suffixed tokens) + `components/ui` + Feedback hooks. No `alert()`/`confirm()` browser dialogs. The B2B portal has its own separate "Alloy" kit at `components/b2b/ui.tsx` (one accent, ≥12px type, 44px touch targets).
 - **Server Supabase clients** are constructed inline per route with the service-role key (module-level memo `_sb`). There is deliberately no shared server client module — follow the local pattern.
 - **Long work (>~30s) never runs on Vercel** — anything browser-based or slow goes to GitHub Actions (dispatch pattern) or is chunked.
+- **PostgREST silently caps every response at 1000 rows** (`db-max-rows`), whatever `.limit()` asks for — no error, no flag, the surplus is just dropped off the end of the sort order. Any select whose result set can exceed 1000 rows must page through `selectAllRows()` (`lib/supabase-paged.ts`), ordering on a **unique** column. This silently broke the Monday Quotes & Jobs Map report (see §7.8).
 - **PostgREST embeds on workshop tables must use the `!customer_id` hint** (e.g. `workshop_customers!customer_id(...)`) or the query 500s on ambiguous relationships.
 - **`b2b_distributor_users` is not unique per email/auth_user_id** (multi-site memberships) — never `maybeSingle()` on it.
 - An **update notifier** compares the client bundle against `/api/version` and shows a "new version — Reload" banner after each deploy.
@@ -306,7 +307,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 | `/api/cron/sync-followups` | every 5 min | Call follow-ups → Claude summary → AC contact + Monday push (`FOLLOWUP_SYNC_ENABLED` kill switch) |
 | `/api/cron/calls-analyse` | every 5 min | Portal-side call coaching sweep — **off by default** (`CALLS_ANALYSIS_ENABLED`); PBX box currently does this |
 | `/api/cron/calls-weekly-report` | Mon 07:00 | Weekly coaching narrative → `#sales-coaching` |
-| `/api/cron/workshop-map-weekly` | Mon 07:10 | Quotes/jobs geography report → email Matt (cc Ryan, Chris) |
+| `/api/cron/workshop-map-weekly` | Mon 07:10 | Quotes/jobs geography report → email Matt (cc Ryan, Chris). Its md_quotes/md_invoices reads are PAGED (`selectAllRows`) — a plain select hits the 1000-row cap and under-reports |
 | `/api/cron/renew-graph-subscriptions` | every 6 h | Extend Graph mailbox subscriptions expiring <24h |
 | `/api/cron/health-check` | every 5 min | The 21 integration health checks → `integration_health` |
 | `/api/cron/b2b-freight-poll` | every 30 min | MachShip status/ETA poll on open consignments |
@@ -458,6 +459,10 @@ CDR list with audio, transcripts, coaching analysis (per-call-type rubrics), Sen
 
 Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it reported over the portal workshop tables, which stay empty while MechanicDesk is the system of record) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings) · **Sales Dashboard** (daily/monthly/total sales taken, plus a quote-pipeline view — see below) · **Forecast** (admin+manager; portal rebuild of the Monday "Forecast Dashboard - Includes JAWS" — see below). Per-user report-tab allowlists control who sees what.
 
+**Weekly Quotes & Jobs Map Report** (`lib/workshop-map-weekly-report.ts`, cron `/api/cron/workshop-map-weekly`, Mon 07:10). Aggregates the previous 7 days of `md_quotes` / `md_invoices` by locality and vehicle group against a prior-4-week baseline, has Claude write the “what it means / where to market” read, and emails Matt (cc Ryan, Chris). `?dry=1` returns the JSON without sending; `?days=N` widens the window.
+
+> **Gotcha, fixed 2026-08-24.** Both fact-table reads used a big `.limit()`, which PostgREST ignores — it caps responses at 1000 rows and drops the rest **silently**, off the end of the sort order. As the 5-week quote window grew past 1000 rows the newest week was the part that got truncated, so the report under-counted for weeks (222 reported vs 290 actual on 16 Aug) and then read a flat **“0 quotes issued” against 313 real quotes** on 24 Aug. Both reads now page via `selectAllRows()` ordered on the tables’ primary keys. The failure mode to remember is that it produces a *plausible smaller number*, not an error.
+
 **Sales Dashboard** (`/reports/sales-dashboard`, added 2026-08-21). The portal rebuild of the Monday **"Sales Dashboard"** (2079976). `view:reports`, same as the Sales Report. **Three** views behind the one tab, each fetching only when first opened — this is also where the Monday **"Management Dashboard"** (321206) was rebuilt, per Chris 2026-08-21:
 
 **1. Management (default)** — the Monday Management Dashboard, widget for widget: sales orders vs target **per month** (last 18), **per salesperson** (current month) and **per day** (last 30), plus the **Cancelled** and **Postponed** order totals.
@@ -598,7 +603,7 @@ This document and the SOP, served inside the portal — readable on screen with 
 
 ---
 
-## 9. Known risks, debt & outstanding items (as of 2026-08-20)
+## 9. Known risks, debt & outstanding items (as of 2026-08-24)
 
 **Security**
 - Supabase `service_role` key was exposed in an April 2026 session and **has never been rotated**. Rotation must update: Vercel env, the FreePBX host workers, the workshop print agent `.env`, and GitHub Actions secrets — all hold it.
@@ -609,6 +614,7 @@ This document and the SOP, served inside the portal — readable on screen with 
 **Consistency / drift**
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
 - Migrations `148` and `153` are duplicated numbers; latest applied is `196_md_vehicle_trend`, so next is `197`.
+- **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Fixed 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating). Not yet paged, and safe only while their tables stay small — re-check before they grow: `lib/sales-recap-leads-store.ts` (1031 rows and climbing — closest to the cliff), `lib/crm-campaigns.ts`, `lib/reports/fetchers.ts` (×2), `pages/api/crm/campaigns/index.ts`, `pages/api/imports/[id]/{run,finalize}.ts`, `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts`, `pages/api/workshop/purchase-orders/generate-low-stock.ts`.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.
 - The Library reader can't display images (no rewrite of relative `img/` paths, no auth-gated image route), so `docs/library-access-sop.md` sits in `docs/` as a PDF-only document rather than on the Library shelf — see §7.16.

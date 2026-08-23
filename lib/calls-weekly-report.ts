@@ -16,6 +16,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { postMessage } from './slack-bot/slack'
 import { sendMail } from './email'
 import { callTypeLabel, dimensionLabel } from './calls-dimensions'
+import { selectAllRows } from './supabase-paged'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const MODEL = () => (process.env.CALLS_WEEKLY_REPORT_MODEL || 'claude-sonnet-4-6').trim()
@@ -98,14 +99,16 @@ async function fetchWeek(days: number): Promise<{ advisors: AdvisorWeek[]; total
   const c = sb()
   const fromIso = new Date(Date.now() - days * 86400_000).toISOString()
 
-  const { data: calls, error } = await c.from('calls')
+  // PAGED: a week is now >1000 calls (1122 in the week to 2026-08-24), and
+  // PostgREST caps responses at 1000 rows however big the .limit() — silently.
+  // The old `.limit(1500)` with a call_date-desc sort kept the newest 1000 and
+  // dropped the START of the week from every Monday report. See
+  // lib/supabase-paged.ts.
+  const calls = await selectAllRows<any>(() => c.from('calls')
     .select('id, call_date, direction, external_number, caller_name, effective_advisor_name, effective_advisor_slack_user_id, agent_name, agent_ext, billsec_seconds, duration_seconds')
-    .gte('call_date', fromIso)
-    .order('call_date', { ascending: false })
-    .limit(1500)
-  if (error) throw error
-  const callById = new Map((calls || []).map(cl => [cl.id, cl]))
-  const ids = (calls || []).map(cl => cl.id)
+    .gte('call_date', fromIso), 'id')
+  const callById = new Map(calls.map(cl => [cl.id, cl]))
+  const ids = calls.map(cl => cl.id)
 
   const analyses: any[] = []
   for (let i = 0; i < ids.length; i += 200) {
