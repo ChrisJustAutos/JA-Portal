@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { useToast } from '../ui/Feedback'
 
 interface MonthCell { quotes: number; quotesValue: number; bookings: number; bookingsValue: number }
 interface Dist {
@@ -43,6 +44,8 @@ export default function DistributorMapDashboard() {
   const [radius, setRadius] = useState(100)
   const [month, setMonth] = useState(-1)          // -1 = whole FY
   const [sel, setSel] = useState<string>('all')   // distributor key or 'all'
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const toast = useToast()
 
   const mapRef = useRef<L.Map | null>(null)
   const layerRef = useRef<L.LayerGroup | null>(null)
@@ -149,6 +152,37 @@ export default function DistributorMapDashboard() {
   const convColor = (p: number) => p >= 30 ? GREEN : p >= 15 ? AMBER : RED
   const conv = (b: number, q: number) => q > 0 ? Math.round((b / q) * 100) : null
 
+  // Export PDF — every month of the FY for every distributor, at the radius
+  // currently selected. Fetched rather than linked so the session cookie rides
+  // along and a failure surfaces as a toast, not a browser error page. The
+  // route recomputes (Monday is live), so this takes a few seconds.
+  const downloadPdf = useCallback(async () => {
+    if (!data?.fy) return
+    setPdfBusy(true)
+    try {
+      const params = new URLSearchParams({ fy: String(data.fy), radius: String(data.radiusKm) })
+      const r = await fetch(`/api/reports/distributor-map-pdf?${params}`, { credentials: 'same-origin' })
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`
+        try { msg = (await r.json()).error || msg } catch { /* not JSON */ }
+        throw new Error(msg)
+      }
+      const blob = await r.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `distributor-map-FY${data.fy}-${data.radiusKm}km.pdf`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Revoke on a later tick — Safari cancels the download if the object URL
+      // disappears while the click is still being handled.
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
+      toast('PDF downloaded', 'success')
+    } catch (e: any) { toast(e?.message || 'PDF export failed', 'error') }
+    finally { setPdfBusy(false) }
+  }, [data?.fy, data?.radiusKm, toast])
+
   const pill = (on: boolean, col?: string): React.CSSProperties => ({
     fontSize: 12, fontWeight: on ? 700 : 500, padding: '5px 12px', borderRadius: 14, whiteSpace: 'nowrap',
     border: `1px solid ${on ? (col || GREEN) : BORDER}`, cursor: 'pointer', fontFamily: 'inherit',
@@ -172,6 +206,15 @@ export default function DistributorMapDashboard() {
           <button key={r} onClick={() => { setRadius(r); load(data.fy!, r) }} style={pill(r === data.radiusKm, AMBER)}>{r} km</button>
         ))}
         <span style={{ flex: 1 }} />
+        <button onClick={downloadPdf} disabled={pdfBusy}
+          title="Download every month of the financial year, per distributor, as a PDF"
+          style={{
+            fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 14, whiteSpace: 'nowrap',
+            border: `1px solid ${BORDER}`, cursor: pdfBusy ? 'default' : 'pointer', fontFamily: 'inherit',
+            background: 'transparent', color: MUTED, opacity: pdfBusy ? 0.5 : 1,
+          }}>
+          {pdfBusy ? 'Preparing…' : 'Export PDF'}
+        </button>
         <span style={{ color: MUTED, fontSize: 11 }}>
           quotes as of {data.quotesSyncedAt ? new Date(data.quotesSyncedAt).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'} · bookings live
         </span>

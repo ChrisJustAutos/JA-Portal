@@ -4,6 +4,11 @@
   "description": "Just Autos Wholesale — browse the catalogue, order, and track shipping.",
   "start_url": "/b2b/catalogue",
   "scope": "/b2b",
+  "id": "/b2b/catalogue",
+  "handle_links": "preferred",
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
   "display": "standalone",
   "orientation": "any",
   "background_color": "#0d0f12",

@@ -47,6 +47,14 @@ Settings → your profile → enable two-factor, scan the QR with your authentic
 
 The portal is installable. In Chrome or Edge, use the install icon in the address bar; on iPhone, Share → Add to Home Screen. You get a normal app icon, full screen, and push notifications.
 
+**Portal links open in the app, not a browser tab** — on Android and on Windows/Mac Chrome or Edge, once the app is installed. Tap a link in an email or Slack and it lands in the installed portal, in the window you already had open rather than a new one.
+
+Three things to know:
+
+- **Android**: the app updates itself in the background after this change shipped. If links still open in the browser after a day or so, remove the app from the home screen and install it again.
+- **Desktop Chrome/Edge**: the first link may ask whether to open it in the app — say yes, and it stops asking. You can also set it directly: ⋮ → Cast, save and share → *(app name)* → **Open supported links in this app**.
+- **iPhone and iPad cannot do this.** iOS always opens links in Safari, even with the portal on your home screen; that is an Apple restriction, not a portal setting. Open the app from the home-screen icon and navigate from there.
+
 ### 1.4 Notifications
 
 The bell in the top bar shows portal notifications; tabs show unread badges. Push notifications (the ones that arrive when the portal is closed) need to be allowed once per device when prompted.

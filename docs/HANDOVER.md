@@ -552,6 +552,10 @@ Tasks: Monday-style board/list + React Flow automations (5-min cron). Projects: 
 
 Portal-native channels/DMs (Slack replacement for internal chat; WhatsApp/Messenger/IG phases not built). Notification bell + badges with 8 emitters; Web Push for staff and distributors (PWA installable).
 
+**PWA link capturing** (2026-08-25). Two manifests are served — `public/manifest.json` for staff (`scope: /`) and `public/manifest-b2b.json` for distributors (`scope: /b2b`), chosen per route in `_document.tsx`. Both now declare `"handle_links": "preferred"` so a Chromium browser opens in-scope URLs in the installed app instead of a tab, and `"launch_handler": { "client_mode": "navigate-existing" }` so a link reuses the open window rather than stacking new ones. Both also pin `"id"` to their existing `start_url` — the implicit id *is* `start_url`, so this changes nothing for an already-installed app while stopping a future `start_url` edit from re-identifying it as a different app.
+
+Limits worth knowing before anyone reports it as broken: **iOS has no link capturing for home-screen web apps at all** — Safari always handles the link, and only a native wrapper would change that. On **Android** the WebAPK has to refresh before capturing starts (Chrome does this in the background, typically within a day; reinstalling forces it). On **desktop** the user may get a one-time "open in app?" prompt, and the behaviour is also togglable per-app in Chrome's app settings. Note the two scopes overlap — staff `/` contains `/b2b` — so on a device with *both* apps installed a `/b2b/...` link has two candidates; that combination shouldn't occur in practice (staff device vs distributor device) but it is the reason to be careful before widening the B2B scope.
+
 ### 7.11 Agents (`/agents`)
 
 Monitoring-agent inbox (`lib/agent-framework` — not `lib/agents`, which is Pipeline A's mailbox map). Agents run every 15 min via cron; findings are triaged Dismiss / Mark done.

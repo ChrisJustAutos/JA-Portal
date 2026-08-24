@@ -4,6 +4,11 @@
   "description": "Just Autos management portal — invoices, calls, distributors, jobs.",
   "start_url": "/home",
   "scope": "/",
+  "id": "/home",
+  "handle_links": "preferred",
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
   "display": "standalone",
   "orientation": "any",
   "background_color": "#0d0f12",

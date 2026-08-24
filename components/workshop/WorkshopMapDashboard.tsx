@@ -12,6 +12,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { useToast } from '../ui/Feedback'
+import { pcState } from '../../lib/workshop-map/postcode-state'
 
 type ViewKey = 'jobs' | 'quotes' | 'conv' | 'state' | 'trend'
 
@@ -42,20 +44,8 @@ const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&l
 const CK = ['70', '200', '300', 'HILUX', 'PRADO']
 const convColor = (p: number) => p >= 12 ? '#47FFCF' : p >= 8 ? '#9be7c4' : p >= 5 ? '#FFB454' : '#e0707a'
 
-// AU postcode → state (standard ranges incl. PO-box blocks; payload points only carry postcode).
-function pcState(pc: string): string {
-  const n = parseInt(pc, 10)
-  if (!Number.isFinite(n)) return '?'
-  if ((n >= 200 && n <= 299) || (n >= 2600 && n <= 2618) || (n >= 2900 && n <= 2920)) return 'ACT'
-  if ((n >= 1000 && n <= 2599) || (n >= 2619 && n <= 2899) || (n >= 2921 && n <= 2999)) return 'NSW'
-  if ((n >= 3000 && n <= 3999) || (n >= 8000 && n <= 8999)) return 'VIC'
-  if ((n >= 4000 && n <= 4999) || (n >= 9000 && n <= 9999)) return 'QLD'
-  if (n >= 5000 && n <= 5999) return 'SA'
-  if (n >= 6000 && n <= 6999) return 'WA'
-  if (n >= 7000 && n <= 7999) return 'TAS'
-  if (n >= 800 && n <= 999) return 'NT'
-  return '?'
-}
+// AU postcode → state lives in lib/workshop-map/postcode-state so the PDF
+// export classifies identically — see that file.
 
 export default function WorkshopMapDashboard() {
   const [data, setData] = useState<ApiResp | null>(null)
@@ -67,6 +57,8 @@ export default function WorkshopMapDashboard() {
   const [st, setSt] = useState('all')             // state pill — jobs/quotes maps + conversion
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const toast = useToast()
 
   const mapRef = useRef<L.Map | null>(null)
   const layerRef = useRef<L.LayerGroup | null>(null)
@@ -84,6 +76,39 @@ export default function WorkshopMapDashboard() {
     finally { setLoading(false) }
   }, [])
   useEffect(() => { load() }, [load])
+
+  // Export PDF — the whole FY month by month, honouring the vehicle and state
+  // filters but NOT the month strip (the year is the point of the export).
+  // Fetched rather than linked so the session cookie rides along and a failure
+  // surfaces as a toast instead of a browser error page.
+  const downloadPdf = useCallback(async () => {
+    if (!data?.fy) return
+    setPdfBusy(true)
+    try {
+      const params = new URLSearchParams({ fy: String(data.fy) })
+      if (cat !== 'all') params.set('cat', cat)
+      if (st !== 'all') params.set('state', st)
+      const r = await fetch(`/api/workshop/map/pdf?${params}`, { credentials: 'same-origin' })
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`
+        try { msg = (await r.json()).error || msg } catch { /* not JSON */ }
+        throw new Error(msg)
+      }
+      const blob = await r.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `workshop-map-FY${data.fy}${cat !== 'all' ? `-${cat.toLowerCase()}` : ''}${st !== 'all' ? `-${st.toLowerCase()}` : ''}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Revoke on a later tick — Safari cancels the download if the object URL
+      // disappears while the click is still being handled.
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
+      toast('PDF downloaded', 'success')
+    } catch (e: any) { toast(e?.message || 'PDF export failed', 'error') }
+    finally { setPdfBusy(false) }
+  }, [data?.fy, cat, st, toast])
 
   const P = data?.payload || null
   const COL = useMemo(() => Object.fromEntries((P?.cats || []).map(c => [c.k, c.col])), [P])
@@ -280,6 +305,10 @@ export default function WorkshopMapDashboard() {
               ))}
             </span>
           )}
+          <button className="pdfbtn" onClick={downloadPdf} disabled={pdfBusy || !data?.fy}
+            title="Download the whole financial year, month by month, as a PDF (keeps the vehicle and state filters)">
+            {pdfBusy ? 'Preparing…' : 'Export PDF'}
+          </button>
           <span className="sync">
             {runActive ? <span style={{ color: 'var(--wm-mint)' }}>syncing…</span> : <>synced {syncedLbl || '—'}</>}
             {!runActive && <button className="syncbtn" title="Pull fresh data from MechanicDesk (takes ~2–4 min)" onClick={triggerRefresh} disabled={refreshing}>⟳</button>}
@@ -852,6 +881,9 @@ const CSS = `
 .wm-dash .sync{font-size:10.5px;color:var(--wm-muted2);display:flex;align-items:center;gap:6px}
 .wm-dash .syncbtn{background:var(--wm-panel2);border:1px solid var(--wm-line);color:var(--wm-muted);border-radius:5px;padding:2px 8px;cursor:pointer;font-size:12px}
 .wm-dash .syncbtn:hover{color:var(--wm-txt)}
+.wm-dash .pdfbtn{background:var(--wm-panel2);border:1px solid var(--wm-line);color:var(--wm-muted);border-radius:6px;padding:5px 11px;margin-right:10px;cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:600;white-space:nowrap}
+.wm-dash .pdfbtn:hover:not(:disabled){color:var(--wm-txt);border-color:var(--wm-muted2)}
+.wm-dash .pdfbtn:disabled{opacity:.5;cursor:default}
 .wm-dash .fysel{display:flex;gap:4px}
 .wm-dash .tabs{display:flex;gap:4px;margin-top:9px}
 .wm-dash .tab{border:1px solid var(--wm-line);border-bottom:none;background:var(--wm-panel2);color:var(--wm-muted);border-radius:8px 8px 0 0;padding:8px 16px;cursor:pointer;font-family:'Barlow Condensed';font-weight:800;font-size:13.5px;letter-spacing:1px;text-transform:uppercase}
