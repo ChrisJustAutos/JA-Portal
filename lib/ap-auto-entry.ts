@@ -50,13 +50,13 @@ import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
 import { proformaOkSupplier } from './ap-proforma-suppliers'
 import { overseasSupplier } from './ap-overseas-suppliers'
-import { reattachStagedPdf, sameInvoiceNumberLoose, findExistingMyobBill } from './ap-myob-bill'
+import { reattachStagedPdf, sameInvoiceNumberLoose, findExistingMyobBill, findMyobBillsByInvoiceNumber, findRecentSupplierBills } from './ap-myob-bill'
 import { postApInvoice } from './accounting/post-ap-invoice'
 import { getConnection } from './myob'
 import { postWebhook, type SlackBlock } from './slack'
 import { postMessage } from './slack-bot/slack'
 import { randomUUID } from 'crypto'
-import { buildAutoEntryBlocks, buildSupplierProposalBlocks, type SupplierProposal, type BankCheck } from './ap-auto-entry-slack'
+import { buildAutoEntryBlocks, buildSupplierProposalBlocks, buildManualCandidateBlocks, type SupplierProposal, type BankCheck } from './ap-auto-entry-slack'
 
 const AP_BUCKET = 'ap-invoices'
 const SIGNED_URL_TTL_SEC = 7 * 24 * 3600   // 7 days for the Slack "View invoice" link
@@ -205,9 +205,13 @@ async function assessSupplierTrust(
   if (!args.supplierUid) return none
 
   const sinceIso = new Date(Date.now() - 180 * 86400_000).toISOString()
+  // entered_manually rows are bills a PERSON keyed in (found by the Slack
+  // "Entered manually?" check) — they are not evidence the automation has
+  // handled this supplier before, so they don't count towards trust.
   const { count } = await c.from('ap_auto_entry_log')
     .select('id', { count: 'exact', head: true })
     .eq('outcome', 'posted').eq('supplier_uid', args.supplierUid)
+    .eq('entered_manually', false)
     .gte('created_at', sinceIso)
   const postedCount = count || 0
 
@@ -218,6 +222,7 @@ async function assessSupplierTrust(
     const { count: sc } = await c.from('ap_auto_entry_log')
       .select('id', { count: 'exact', head: true })
       .eq('outcome', 'posted').eq('supplier_uid', args.supplierUid)
+      .eq('entered_manually', false)
       .ilike('from_address', `%@${senderDomain}`)
       .gte('created_at', sinceIso)
     senderKnown = (sc || 0) > 0
@@ -1182,7 +1187,7 @@ async function processInvoice(
       // reads the vendor's details off the invoice for review, and approving
       // in-thread creates the MYOB card and posts the bill in one go.
       const offerCreateSupplier = failReasons.some(r => r.includes('supplier-not-mapped'))
-      const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: rowId, createSupplierValue: offerCreateSupplier ? rowId : null })
+      const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: rowId, createSupplierValue: offerCreateSupplier ? rowId : null, checkManualValue: rowId })
       const ts = await sendSlack(withUrl, companyFile)
       await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
     }
@@ -1241,7 +1246,7 @@ async function processInvoice(
     // approveAndPost can re-extract + retry with a human vouching) — 160370266
     // showed up buttonless because only the triage-flag branch passed one.
     const rowId = randomUUID()
-    const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url, approveValue: rowId })
+    const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url, approveValue: rowId, checkManualValue: rowId })
     const ts = await sendSlack(built, companyFile)
     await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons: reasons, bankCheck: effectiveBank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: signedTotal, outcome: 'error', bankCheck: effectiveBank, failReasons: reasons, error: posted.reason }
@@ -1385,6 +1390,141 @@ export async function approveAndPost(rowId: string, approvedBy: string): Promise
     .update({ approved_by: approvedBy, approved_at: new Date().toISOString() })
     .eq('id', rowId)
   return postApprovedRow(c, { ...row, approved_by: approvedBy })
+}
+
+// ── "🔍 Entered manually?" button on flag cards ────────────
+// A flagged invoice usually gets keyed into MYOB by hand, and the Slack card
+// then sits there looking outstanding forever. This asks MYOB directly:
+//   1. same supplier + same SupplierInvoiceNumber (OCR-tolerant, amount-aware)
+//   2. that invoice number under ANY supplier — the flag may exist precisely
+//      because no card matched, and the manual entry used the right one
+//   3. failing both, recent bills for the supplier at the SAME amount — a
+//      hand entry often keys the number differently; those come back as
+//      candidates with a "link" button rather than being adopted silently.
+// A hit flips the row to posted (entered_manually) and files the email away.
+export async function checkEnteredManually(
+  rowId: string, checkedBy: string,
+): Promise<{ found: boolean; text: string; blocks?: SlackBlock[] }> {
+  const c = sb()
+  const { data: row } = await c.from('ap_auto_entry_log').select('*').eq('id', rowId).maybeSingle()
+  if (!row) return { found: false, text: '⚠️ This flag no longer exists — nothing to check.' }
+  if (row.outcome === 'posted' || row.myob_bill_uid) {
+    return { found: true, text: `Already in MYOB (${row.invoice_number || 'invoice'}) — nothing to do.` }
+  }
+
+  const companyFile: CompanyFileLabel = (row.company_file as CompanyFileLabel) || 'VPS'
+  const conn = await getConnection(companyFile).catch(() => null)
+  if (!conn?.company_file_id) return { found: false, text: `⚠️ Can't reach MYOB ${companyFile} right now — try again shortly.` }
+
+  const invoiceNumber = (row.invoice_number || '').toString().trim()
+  const amount = row.amount != null && isFinite(Number(row.amount)) ? Math.abs(Number(row.amount)) : null
+
+  // The flag may predate any supplier match — try once more, the card may
+  // have been created since (that is often WHY it was entered by hand).
+  let supplierUid: string | null = row.supplier_uid || null
+  let supplierName: string | null = row.supplier_name || null
+  if (!supplierUid && supplierName) {
+    const m = await tryAutoMatchSupplier(supplierName, null, companyFile).catch(() => null)
+    if (m) { supplierUid = m.supplier.uid; supplierName = m.supplier.name }
+  }
+
+  const sameAmount = (t: number | null | undefined) =>
+    amount == null || (t != null && Math.abs(Math.abs(Number(t)) - amount) <= 0.05)
+
+  // 1. Supplier + invoice number (already covers OCR variants by amount).
+  if (invoiceNumber && supplierUid) {
+    const hit = await findExistingMyobBill(conn.id, conn.company_file_id, invoiceNumber, supplierUid, { expectedTotal: amount })
+      .catch(() => null)
+    if (hit) return markRowPostedManually(c, row, hit, checkedBy, null)
+  }
+
+  // 2. That invoice number under any supplier — the amount must agree, so a
+  //    number collision across suppliers cannot adopt the wrong bill.
+  if (invoiceNumber) {
+    const anySupplier = (await findMyobBillsByInvoiceNumber(conn.id, conn.company_file_id, invoiceNumber).catch(() => []))
+      .filter(b => sameAmount(b.totalAmount))
+    if (anySupplier.length === 1) {
+      const b = anySupplier[0]
+      const note = supplierUid && b.supplierUid && b.supplierUid !== supplierUid
+        ? `entered against MYOB card *${b.supplierName || 'unknown'}*`
+        : b.supplierName ? `supplier *${b.supplierName}*` : null
+      return markRowPostedManually(c, row, b, checkedBy, note)
+    }
+  }
+
+  // 3. Candidates: same supplier, same amount, keyed under another number.
+  let candidates: { uid: string; number: string | null; date: string | null; totalAmount: number | null; supplierInvoiceNumber: string | null }[] = []
+  if (supplierUid && amount != null) {
+    const cutoff = Date.now() - 120 * 86400_000
+    candidates = (await findRecentSupplierBills(conn.id, conn.company_file_id, supplierUid).catch(() => []))
+      .filter(b => sameAmount(b.totalAmount))
+      .filter(b => !b.date || new Date(b.date).getTime() >= cutoff)
+      .slice(0, 3)
+  }
+
+  const who = `${supplierName || 'this supplier'} ${invoiceNumber || '(no invoice number)'}`
+  if (!candidates.length) {
+    return {
+      found: false,
+      text: `🔎 Not in MYOB ${companyFile} — no bill found for ${who}${amount != null ? ` at ${money(amount)}` : ''}. Still needs entering. _(checked by ${checkedBy})_`,
+    }
+  }
+  return {
+    found: false,
+    ...buildManualCandidateBlocks({
+      rowId, companyFile, checkedBy,
+      supplierName: supplierName || row.supplier_name || null,
+      invoiceNumber: invoiceNumber || null, amount,
+      candidates,
+    }),
+  }
+}
+
+// "That's the one" on a candidate — link the chosen MYOB bill to the flag.
+export async function linkManualBill(
+  rowId: string, billUid: string, billLabel: string, checkedBy: string,
+): Promise<string> {
+  const c = sb()
+  const { data: row } = await c.from('ap_auto_entry_log').select('*').eq('id', rowId).maybeSingle()
+  if (!row) return '⚠️ This flag no longer exists — nothing to link.'
+  if (row.outcome === 'posted' || row.myob_bill_uid) return `Already in MYOB (${row.invoice_number || 'invoice'}) — nothing to do.`
+  if (!billUid) return '⚠️ No MYOB bill on that button — run the check again.'
+  const out = await markRowPostedManually(c, row, { uid: billUid, number: billLabel || null, date: null, totalAmount: null }, checkedBy, null)
+  return out.text
+}
+
+// Shared tail for both paths: stamp the row posted-by-hand, link the bill,
+// file the email away, and word the Slack reply.
+async function markRowPostedManually(
+  c: SupabaseClient, row: any,
+  bill: { uid: string; number: string | null; date: string | null; totalAmount: number | null },
+  checkedBy: string,
+  note: string | null,
+): Promise<{ found: true; text: string }> {
+  await c.from('ap_auto_entry_log').update({
+    outcome: 'posted',
+    myob_bill_uid: bill.uid || null,
+    entered_manually: true,
+    manual_checked_by: checkedBy,
+    manual_checked_at: new Date().toISOString(),
+    error: null,
+  }).eq('id', row.id)
+
+  // Entered = handled: file the email away exactly as a successful post does.
+  const filed = await fileEmailAway(String(row.mailbox || ''), String(row.graph_message_id || ''))
+  try { await c.from('ap_auto_entry_log').update({ moved: filed.moved, move_note: filed.note }).eq('id', row.id) } catch { /* best effort */ }
+
+  const bits = [
+    bill.number ? `bill #${bill.number}` : `bill ${String(bill.uid).slice(0, 8)}...`,
+    bill.date ? `dated ${String(bill.date).slice(0, 10)}` : null,
+    bill.totalAmount != null ? money(Math.abs(Number(bill.totalAmount))) : null,
+    note,
+  ].filter(Boolean).join(' · ')
+  const emailBit = filed.moved ? ' Email filed away.' : ''
+  return {
+    found: true,
+    text: `✅ Already in MYOB — ${bits}. Marked *posted manually*; the automation will leave it alone.${emailBit} _(checked by ${checkedBy})_`,
+  }
 }
 
 // ── "Create supplier" flow, step 1: propose ──────────────────────────────

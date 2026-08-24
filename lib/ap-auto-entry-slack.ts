@@ -29,6 +29,10 @@ export interface AutoEntrySlackInput {
   // flag cards. Click extracts the vendor's details off the invoice and
   // threads them for review (handled by /api/slack/ask → proposeSupplier).
   createSupplierValue?: string | null
+  // Same row id — renders a "🔍 Entered manually?" button on flag cards.
+  // Click searches MYOB for a bill someone keyed in by hand; a hit marks the
+  // flag POSTED MANUALLY and files the email away (→ checkEnteredManually).
+  checkManualValue?: string | null
   // JAWS account-choice buttons: post the flagged invoice coded to a chosen
   // account. First option is the system's best guess (shown "suggested").
   // Each → action_id ap_post_account, value {r:rowId,a:uid,n:name}.
@@ -148,6 +152,12 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
       text: { type: 'plain_text', text: '➕ Create supplier', emoji: true },
     })
   }
+  if (i.outcome === 'flagged' && i.checkManualValue) {
+    actions.push({
+      type: 'button', action_id: 'ap_check_manual', value: i.checkManualValue,
+      text: { type: 'plain_text', text: '🔍 Entered manually?', emoji: true },
+    })
+  }
   if (actions.length) blocks.push({ type: 'actions', elements: actions })
 
   // JAWS account-choice row: one button per candidate expense account. The
@@ -179,26 +189,59 @@ export function markApprovedBlocks(
   original: SlackBlock[],
   opts: { approver: string; resultText: string },
 ): { text: string; blocks: SlackBlock[] } {
+  return markResolvedBlocks(original, {
+    headline: '✅ Approved & posted to MYOB',
+    contextText: `✅ ${escOr(opts.resultText, `Approved by ${opts.approver}`)}`,
+    fallbackText: `✅ Approved & posted to MYOB — approved by ${opts.approver}`,
+  })
+}
+
+// Same transformation for the "🔍 Entered manually?" check finding the bill
+// already in MYOB: the invoice IS entered, just not by the automation.
+export function markPostedManuallyBlocks(
+  original: SlackBlock[],
+  opts: { checkedBy: string; resultText: string },
+): { text: string; blocks: SlackBlock[] } {
+  return markResolvedBlocks(original, {
+    headline: '✅ Posted manually',
+    contextText: `✅ ${escOr(opts.resultText, `Found in MYOB by ${opts.checkedBy}`)}`,
+    fallbackText: `✅ Posted manually — found in MYOB by ${opts.checkedBy}`,
+  })
+}
+
+// Shared card-flip: swap the 🟠 header for a resolved one, drop the
+// "why it wasn't auto-posted" section and every action button that would now
+// double-post, and append the outcome as a context line. Pure.
+const RESOLVED_STRIP_ACTIONS = ['ap_approve_post', 'ap_create_supplier', 'ap_check_manual']
+
+function markResolvedBlocks(
+  original: SlackBlock[],
+  opts: { headline: string; contextText: string; fallbackText: string },
+): { text: string; blocks: SlackBlock[] } {
   const blocks: SlackBlock[] = []
   for (const b of Array.isArray(original) ? original : []) {
     if (b?.type === 'header') {
       const t = String(b.text?.text || '')
-      const flipped = t.replace(/^🟠\s*Not auto-posted/i, '✅ Approved & posted to MYOB')
+      const flipped = t.replace(/^🟠\s*Not auto-posted/i, opts.headline)
       blocks.push({ ...b, text: { ...b.text, text: (flipped === t ? `✅ ${t}` : flipped).slice(0, 150) } })
       continue
     }
     // Drop the "why it wasn't auto-posted" explanation — no longer true.
     if (b?.type === 'section' && /why it wasn't auto-posted/i.test(String(b.text?.text || ''))) continue
-    // Rebuild the actions row without the approve button.
+    // Drop the account-choice prompt + its buttons (they'd post a second bill).
+    if (b?.type === 'context' && /post coded to which account/i.test(String(b.elements?.[0]?.text || ''))) continue
+    // Rebuild the actions row without anything that would post again.
     if (b?.type === 'actions') {
-      const kept = (b.elements || []).filter((e: any) => e?.action_id !== 'ap_approve_post' && e?.action_id !== 'ap_create_supplier')
+      const kept = (b.elements || []).filter((e: any) =>
+        !RESOLVED_STRIP_ACTIONS.includes(String(e?.action_id || '')) &&
+        !String(e?.action_id || '').startsWith('ap_post_account_'))
       if (kept.length) blocks.push({ ...b, elements: kept })
       continue
     }
     blocks.push(b)
   }
-  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `✅ ${escOr(opts.resultText, `Approved by ${opts.approver}`)}`.slice(0, 2900) }] })
-  return { text: `✅ Approved & posted to MYOB — approved by ${opts.approver}`.slice(0, 300), blocks }
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: opts.contextText.slice(0, 2900) }] })
+  return { text: opts.fallbackText.slice(0, 300), blocks }
 }
 
 function escOr(s: string | null | undefined, fallback: string): string {
@@ -272,6 +315,58 @@ export function buildSupplierProposalBlocks(i: {
       },
     }],
   })
+  return { text: text.slice(0, 300), blocks }
+}
+
+// ── "🔍 Entered manually?" near-misses (threaded under the flag card) ──
+// The exact search found nothing, but MYOB holds bills for the same supplier
+// at the same amount under a different number — typical of a hand entry that
+// keyed the invoice number differently. Shown for a human to confirm; the
+// button links the chosen bill and marks the flag posted manually.
+export function buildManualCandidateBlocks(i: {
+  rowId: string
+  companyFile: string
+  checkedBy: string
+  supplierName: string | null
+  invoiceNumber: string | null
+  amount: number | null
+  candidates: { uid: string; number: string | null; date: string | null; totalAmount: number | null; supplierInvoiceNumber: string | null }[]
+}): { text: string; blocks: SlackBlock[] } {
+  const text = `🔎 No exact match for ${i.invoiceNumber || 'this invoice'} — but ${i.candidates.length} same-amount bill(s) exist in MYOB ${i.companyFile}`
+  const lines = i.candidates.map(b => {
+    const bits = [
+      `#${b.number || '?'}`,
+      b.date ? String(b.date).slice(0, 10) : null,
+      b.totalAmount != null ? money(Math.abs(Number(b.totalAmount))) : null,
+      b.supplierInvoiceNumber ? `their ref ${b.supplierInvoiceNumber}` : 'no supplier invoice number',
+    ].filter(Boolean)
+    return `• ${bits.join(' · ')}`
+  })
+  const blocks: SlackBlock[] = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*🔎 Not found under ${i.invoiceNumber || 'that number'}* — but MYOB ${i.companyFile} has ${i.candidates.length === 1 ? 'a bill' : `${i.candidates.length} bills`} for *${i.supplierName || 'this supplier'}* at the same amount${i.amount != null ? ` (${money(i.amount)})` : ''}:\n${lines.join('\n')}\n\nIf one of these IS this invoice, link it — otherwise it still needs entering.`,
+      },
+    },
+    {
+      type: 'actions',
+      elements: i.candidates.slice(0, 3).map(b => ({
+        type: 'button',
+        action_id: `ap_link_manual_${b.uid}`,
+        value: JSON.stringify({ r: i.rowId, u: b.uid, n: b.number || '' }),
+        text: { type: 'plain_text', text: `🔗 Link bill #${b.number || '?'}`.slice(0, 75), emoji: true },
+        confirm: {
+          title: { type: 'plain_text', text: 'Link this bill?' },
+          text: { type: 'mrkdwn', text: `Mark this invoice *posted manually*, linked to MYOB bill #${b.number || '?'}${b.date ? ` (${String(b.date).slice(0, 10)})` : ''}. The automation will stop chasing it.` },
+          confirm: { type: 'plain_text', text: 'Link it' },
+          deny: { type: 'plain_text', text: 'Cancel' },
+        },
+      })),
+    },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: `Checked by ${i.checkedBy}` }] },
+  ]
   return { text: text.slice(0, 300), blocks }
 }
 

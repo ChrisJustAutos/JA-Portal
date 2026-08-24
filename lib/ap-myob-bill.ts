@@ -278,6 +278,53 @@ export async function findExistingMyobBill(
   return null
 }
 
+// Every MYOB bill carrying this SupplierInvoiceNumber, WHATEVER the supplier
+// — the supplier-scoped search above can't be used when the flag was raised
+// precisely because no MYOB card matched. Used by the "entered manually?"
+// check on Slack flag cards.
+export async function findMyobBillsByInvoiceNumber(
+  connId: string, cfId: string, supplierInvoiceNumber: string,
+): Promise<(ExistingBillMatch & { supplierUid: string | null; supplierName: string | null })[]> {
+  const escaped = String(supplierInvoiceNumber).replace(/'/g, "''")
+  const out: (ExistingBillMatch & { supplierUid: string | null; supplierName: string | null })[] = []
+  for (const path of [`/accountright/${cfId}/Purchase/Bill/Service`, `/accountright/${cfId}/Purchase/Bill/Item`]) {
+    const result = await myobFetch(connId, path, {
+      query: { '$filter': `SupplierInvoiceNumber eq '${escaped}'`, '$top': 10 },
+    })
+    if (result.status !== 200) continue
+    for (const b of (Array.isArray(result.data?.Items) ? result.data.Items : [])) {
+      out.push({
+        uid: String(b.UID || ''), number: b.Number || null, date: b.Date || null,
+        totalAmount: typeof b.TotalAmount === 'number' ? b.TotalAmount : null,
+        supplierUid: b?.Supplier?.UID || null, supplierName: b?.Supplier?.Name || null,
+      })
+    }
+  }
+  return out.filter(b => b.uid)
+}
+
+// Recent bills for one supplier, newest first — the candidate pool for
+// "someone keyed this in by hand under a different invoice number".
+export async function findRecentSupplierBills(
+  connId: string, cfId: string, supplierUid: string, top = 50,
+): Promise<(ExistingBillMatch & { supplierInvoiceNumber: string | null })[]> {
+  const out: (ExistingBillMatch & { supplierInvoiceNumber: string | null })[] = []
+  for (const path of [`/accountright/${cfId}/Purchase/Bill/Service`, `/accountright/${cfId}/Purchase/Bill/Item`]) {
+    const result = await myobFetch(connId, path, {
+      query: { '$filter': `Supplier/UID eq guid'${supplierUid}'`, '$orderby': 'Date desc', '$top': top },
+    })
+    if (result.status !== 200) continue
+    for (const b of (Array.isArray(result.data?.Items) ? result.data.Items : [])) {
+      out.push({
+        uid: String(b.UID || ''), number: b.Number || null, date: b.Date || null,
+        totalAmount: typeof b.TotalAmount === 'number' ? b.TotalAmount : null,
+        supplierInvoiceNumber: b.SupplierInvoiceNumber || null,
+      })
+    }
+  }
+  return out.filter(b => b.uid).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+}
+
 // ── Shared bill-body builder (pure) ─────────────────────────────────────
 //
 // The strict GST reconciliation / line-nudge / credit-note math, factored out

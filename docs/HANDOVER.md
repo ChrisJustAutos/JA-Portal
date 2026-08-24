@@ -95,7 +95,7 @@ Error fingerprints: generic 500 HTML page = module-load crash (bad import / `.ts
 
 ### Database migrations (SOP)
 
-- Migrations live in `migrations/NNN_description.sql` (199 files, `002`–`199`; note `148` and `153` are each duplicated — sequence is a convention, not a key. Next number: **200**).
+- Migrations live in `migrations/NNN_description.sql` (200 files, `002`–`200`; note `148` and `153` are each duplicated — sequence is a convention, not a key. Next number: **201**).
 - There is **no migration runner**. The procedure is: write the SQL file in `migrations/`, apply it to the live DB via the **Supabase MCP `apply_migration`** tool (project `qtiscbvhlvdvafwtdtcd`) **before** pushing code that depends on it, then commit both.
 - The repo file is the source-of-truth record; the MCP apply is what actually changes the DB.
 
@@ -448,6 +448,12 @@ Supplier emails → Graph inbox pull → Claude extraction → triage list.
 
 **Automation**: `ap-auto-entry` cron (VPS, gated by `AP_AUTO_ENTRY_ENABLED`) posts clean invoices automatically and Slacks a breakdown; supplier allowlists control consolidated and pay-on-proforma handling; duplicates get a ♻️ Slack and are filed to Read/Printed; **locked-period invoices are flagged, never auto-redated**; supplier matching is suffix-blind; link-only emails (no PDF attached) are invisible to the pipeline. `ap-statement-watch` cron reconciles statement PDFs against MYOB and emails a digest (report-only; Capricorn statements are report-only by policy). Manual statement recon UI: `/ap/statement`.
 
+**The Slack flag card is the human interface to the automation** (`lib/ap-auto-entry-slack.ts`, clicks handled in `/api/slack/ask`). Each flagged invoice carries a row id in `ap_auto_entry_log` and up to four buttons: *View invoice* (7-day signed URL), *✅ Approve & post to MYOB* (`approveAndPost` — re-extracts with the strong model, soft checks bypassed), *➕ Create supplier* (`proposeSupplier` → threaded review → `approveCreateSupplierAndPost`), and *🔍 Entered manually?* (`checkEnteredManually`). JAWS cards additionally get an account-choice row (`postWithAccount`).
+
+**"Entered manually?" (migration `200`, 2026-08-25)** closes the automation's blind spot: staff key flagged invoices into MYOB by hand and the card stays orange forever. The check is read-only against MYOB, in three widening nets: (1) same supplier + same `SupplierInvoiceNumber` via `findExistingMyobBill` (already OCR-tolerant and amount-aware); (2) that invoice number under **any** supplier — the flag often exists *because* no card matched — adopted only when the amount agrees, so a number collision across suppliers can't link the wrong bill; (3) recent bills for the supplier at the same amount under a different number, which are **not** adopted silently but returned as threaded candidates with a `🔗 Link bill #…` button (`linkManualBill`). A hit sets `outcome='posted'`, `entered_manually=true`, `manual_checked_by/at`, links `myob_bill_uid`, files the email away, and flips the card to *✅ Posted manually* (`markPostedManuallyBlocks`). `entered_manually` rows are excluded from the supplier-trust counts — they're evidence a *person* handled the supplier, not the automation. Nothing is ever posted to MYOB by this path.
+
+Migration `200` also fixed constraint drift found while building it: `lib/ap-auto-entry.ts` has written `outcome='skipped_duplicate'` since the cross-source duplicate guard shipped, but the check constraint from migration `145` never listed the value — so **every one of those audit rows was silently rejected** (0 rows in the table) and the attachment was re-processed, and re-extracted, on the next run. The value is now allowed.
+
 ### 7.6 CRM (`/crm/*`)
 
 Pipeline kanban, contacts (+timeline), campaigns (Resend), React Flow automations. Replaces Monday quote boards + ActiveCampaign + Zapier — **manual cutover steps are recorded in the project memory/notes; AC + Monday remain live in parallel until cutover**. Website leads arrive via `/api/crm/intake` (token-guarded). Three crons drive automations/campaigns/call-linkage every 5 min.
@@ -654,7 +660,7 @@ Month-end stock report for the **JAWS** company file. Built 2026-08-24 (migratio
 
 **Consistency / drift**
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
-- Migrations `148` and `153` are duplicated numbers; latest applied is `199_jaws_stock_eom`, so next is `200`.
+- Migrations `148` and `153` are duplicated numbers; latest applied is `200_ap_auto_entry_manual_check`, so next is `201`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.

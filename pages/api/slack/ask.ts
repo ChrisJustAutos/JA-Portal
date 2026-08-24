@@ -258,6 +258,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(200).end()
         }
 
+        // AP flag card: "🔍 Entered manually?" — ask MYOB whether someone
+        // already keyed this invoice in by hand. A hit flips the card to
+        // "Posted manually", links the bill and files the email away; a miss
+        // threads the answer (with same-amount near-misses, each linkable)
+        // and leaves the card alone so it can be checked again later.
+        if (action.action_id === 'ap_check_manual' || String(action.action_id || '').startsWith('ap_link_manual_')) {
+          const linking = String(action.action_id || '').startsWith('ap_link_manual_')
+          const by = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'
+          const ch: string = payload.channel?.id || ''
+          const msgTs: string | undefined = payload.message?.ts
+          // The link buttons live on a threaded reply — the flag card to flip
+          // is the thread parent; the check button sits on the card itself.
+          const rootTs: string | undefined = payload.message?.thread_ts || payload.message?.ts
+          const origBlocks = payload.message?.blocks || []
+          waitUntil((async () => {
+            let out: { found: boolean; text: string; blocks?: any[] }
+            try {
+              const ap = await import('../../../lib/ap-auto-entry')
+              if (linking) {
+                let v: any = {}
+                try { v = JSON.parse(action.value || '{}') } catch { /* */ }
+                const text = await ap.linkManualBill(String(v.r || ''), String(v.u || ''), String(v.n || ''), by)
+                out = { found: !text.startsWith('⚠️'), text }
+              } else {
+                out = await ap.checkEnteredManually(String(action.value || ''), by)
+              }
+            } catch (e: any) {
+              out = { found: false, text: `❌ MYOB check failed: ${(e?.message || e).toString().slice(0, 200)}` }
+            }
+            // Found → flip the ORIGINAL flag card to "Posted manually".
+            if (out.found && ch && rootTs) {
+              try {
+                const { markPostedManuallyBlocks } = await import('../../../lib/ap-auto-entry-slack')
+                const parent = rootTs === msgTs ? { blocks: origBlocks } : await (await import('../../../lib/slack-bot/slack')).getMessage(ch, rootTs)
+                if (parent?.blocks?.length) {
+                  const flipped = markPostedManuallyBlocks(parent.blocks, { checkedBy: by, resultText: out.text })
+                  await updateMessage({ channel: ch, ts: rootTs, text: flipped.text, blocks: flipped.blocks })
+                }
+              } catch (e: any) {
+                console.error('[ap-check-manual] card update failed:', e?.message || e)
+              }
+            }
+            // A used link button must not be clickable twice.
+            if (out.found && linking && ch && msgTs && msgTs !== rootTs) {
+              try {
+                const { markProposalDoneBlocks } = await import('../../../lib/ap-auto-entry-slack')
+                const done = markProposalDoneBlocks(origBlocks, `Linked by ${by}`)
+                await updateMessage({ channel: ch, ts: msgTs, text: done.text, blocks: done.blocks })
+              } catch (e: any) {
+                console.error('[ap-check-manual] candidate update failed:', e?.message || e)
+              }
+            }
+            if (ch) await postMessage({ channel: ch, text: out.text, blocks: out.blocks, thread_ts: rootTs }).catch(() => null)
+          })())
+          return res.status(200).end()
+        }
+
         if (action.action_id === 'ap_approve_post') {
           const rowId = String(action.value || '')
           const approver = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'

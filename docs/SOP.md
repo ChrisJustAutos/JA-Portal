@@ -194,15 +194,32 @@ Admin → B2B → **Test Order** runs a real order end to end against a distribu
 
 **⚠ Locked-period invoices are never silently re-dated.** They flag, and you decide.
 
-### 5.2 Duplicates
+### 5.2 The Slack flag card — what the buttons do
+
+Every invoice the automation won't post itself lands as an orange card in the AP Slack channel, with the reason and a link to the PDF. The buttons:
+
+| Button | What it does |
+|---|---|
+| **View invoice** | Opens the PDF (the link lasts 7 days). |
+| **✅ Approve & post to MYOB** | You are vouching for whatever was flagged. Posts the bill straight away and files the email to Read /Printed. |
+| **➕ Create supplier** | Only on "supplier not matched" cards. Reads the vendor's details off the invoice and threads them for you to check *before* any MYOB card is created. |
+| **🔍 Entered manually?** | Asks MYOB whether someone has already keyed this invoice in by hand. Only looks — it never posts anything. |
+
+**Press "Entered manually?" before you touch an older card.** Most flagged invoices get typed into MYOB by whoever is doing the accounts that day, and the Slack card then sits there looking outstanding forever. If the bill is there, the card turns green — **"✅ Posted manually"** — the MYOB bill is linked to it, the email is filed away, and the automation stops chasing it.
+
+If nothing exact turns up but MYOB holds a bill for the **same supplier at the same amount** (a hand entry often keys the invoice number differently), those come back in the thread with a **🔗 Link bill #…** button. Check it really is the same invoice before linking. If nothing matches at all it says so and leaves the card alone — the invoice still needs entering.
+
+**Never press Approve & post on a card you haven't checked for a manual entry.** That is how the same bill ends up in MYOB twice.
+
+### 5.3 Duplicates
 
 Suspected double-ups are marked with ♻ and posted to Slack rather than entered twice. Check the original before dismissing.
 
-### 5.3 Supplier statements
+### 5.4 Supplier statements
 
 **AP → Statement.** Upload or let the watcher read the statement PDF; it reconciles against MYOB and hunts down what's missing. Capricorn statements are **report-only** — do not post from them.
 
-### 5.4 Suppliers that behave differently
+### 5.5 Suppliers that behave differently
 
 Some suppliers are on allowlists — consolidated billing, or pay-on-proforma. If a supplier's invoices keep flagging for a reason that is actually normal for them, that is an allowlist change, not a per-invoice fix. Ask Chris.
 
@@ -458,6 +475,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Workshop map or vehicle trend looks out of date | The nightly MD pull | Reports → Workshop Map shows "synced"; "Pull from MechanicDesk now" forces it (~2–4 min) |
 | A distributor says they never got tracking | Ship Now hasn't been pressed | §4.2 |
 | An AP invoice never arrived | Supplier sent a link, not an attachment | §5 — link-only emails are invisible |
+| An AP Slack card is still orange but the bill *is* in MYOB | Somebody entered it by hand; the automation has no way of knowing | Press **🔍 Entered manually?** on the card — it finds the bill, links it and turns the card green (§5.2) |
 | A weekly email report shows a count that is clearly too low — or zero | A report query that has outgrown the database's 1000-row response cap and is silently dropping the rest | Don't assume the underlying data is missing — check the live screen (Reports → Workshop Map, Reports → Sales Report) for the same period first. If the screen is right and the email is wrong, it's the report, not the workshop. Tell Chris. |
 | Someone approved leave and the person says they got nothing | Either the item wasn't on the application path (a note keyed into a payroll group — §9a), or the portal has no address for them | Settings → Leave Notifications: the item will be under "Waiting on an email address" if it's an address problem. If it isn't listed at all, the decision was made on a note rather than an application. |
 | Ryan gets "no email address for …" notices | The applicant's name isn't in the staff directory and the item has no Email Address | Add either one (§9a) — the email then sends itself; nobody needs to re-approve. You only get that notice once per application. |
@@ -496,3 +514,4 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 7. **Credentials change in the portal**, not in environment variables.
 8. **Reload when the new-version banner appears.**
 9. **Leave is approved on the application, not on a note.** Pressing Approved on an item in Leave Applications emails the applicant; a line typed into a payroll group emails nobody.
+10. **Check “Entered manually?” before approving an AP flag card** — approving one that was already keyed in by hand posts the bill twice.
