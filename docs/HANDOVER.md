@@ -381,7 +381,7 @@ MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,U
 
 ## 7. Modules & SOPs
 
-Full route-by-route inventory: 115 page routes (432 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
+Full route-by-route inventory: 115 page routes (433 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
 
 ### 7.1 Dashboards (`/dashboard`, `/overview`, `/home`)
 
@@ -618,13 +618,15 @@ Staff apply for leave through the monday.com **Payroll & Leave Applications** bo
 
 ### 7.18 Stock EOM — JAWS month end (`/reports/jaws-stock-eom`)
 
-Month-end stock report for the **JAWS** company file. Built 2026-08-24 (migration `199`). Engine `lib/jaws-stock-eom.ts`; API `/api/reports/jaws-stock-eom`; cron `/api/cron/jaws-stock-eom`.
+Month-end stock report for the **JAWS** company file. Built 2026-08-24 (migration `199`). Engine `lib/jaws-stock-eom.ts`; API `/api/reports/jaws-stock-eom`; cron `/api/cron/jaws-stock-eom`; **PDF export** `/api/reports/jaws-stock-eom/pdf?month=YYYY-MM` rendering `lib/jaws-stock-eom-pdf.tsx` (`@react-pdf/renderer`, house style shared with `lib/reports/pdf.tsx`).
 
 **Why it exists alongside `/stock`.** `/stock` (`pages/api/inventory.ts`) already computes the *live* picture — reorder alerts, velocity, dead stock, margin, on-order — on rolling 30/90/365-day windows. What it cannot do is compare months, because **AccountRight only ever reports today's quantity**: there is no historical on-hand to query. So each run freezes its numbers into `jaws_stock_snapshots`, and that stored history is the only source of month-on-month stock movement in the business.
 
 **What the report adds** beyond the live page: the month's trading in isolation (units, revenue ex-GST, COGS, margin); stock turn and days-of-inventory; ageing of held value by last-sold date; slow movers ranked by capital at risk; margin leakage (sold below cost) and cost creep (last paid >10% above average cost — a price-review list); unfilled demand (sold while nothing available, or committed beyond on-hand); overstock (>365 days cover); supplier concentration of value and reorder spend; data-integrity exceptions (negative on-hand, stock with no cost, stock with no sell price); and any JAWS stocktake completed that month (migration `141`, still report-only).
 
 **Reuse, deliberately.** It calls the same `fetchInventoryItems` / `fetchSaleInvoicesWithLines` readers and the same `lineExGst` normalisation as `/stock`, so the two surfaces reconcile instead of becoming a second, subtly different truth.
+
+**PDF export** (2026-08-25). *Export PDF* on the report page downloads the whole report — headline figures, ageing, every exception list and the notes — as A4. It serves the **stored snapshot**, so the PDF always matches what is on screen and returns in about a second; it only builds live when that month has never been generated. The renderer is tolerant of pre-`201` snapshots (missing `capitalAtRisk` / `slowCapital` / `analysedValue` print as `—` rather than `NaN`), so an old month exports rather than failing. The button fetches with credentials and downloads a blob rather than linking directly, so a permission or build error surfaces as a toast instead of a browser error page.
 
 **Never-sold stock is excluded from the "not moving" analysis** (Chris, 2026-08-25). A SKU on this item list that has never been invoiced is almost always a kit component never sold separately — `P-INTK-PIPE` (intake pipe *only*), `17276-52010` / `96711-35053` (intake gaskets No.1 and No.2), the distributor cutting jigs — and it dominated the dead-stock figure while carrying no possible action: **$47.6k of July's $114.7k**. Ageing, dead-90, dead-180, overstock and slow movers now run over `soldEver` (held stock with a last-sold date), and ageing shares are of `analysedValue` rather than the whole holding, so the buckets still total 100%. The excluded count and value stay in the headline (`neverSoldCount` / `neverSoldValue`) and in the notes — the capital is reported, never silently dropped.
 

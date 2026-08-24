@@ -140,6 +140,35 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
     setBusy('')
   }
 
+  // PDF export. Fetched rather than linked so the session cookie rides along
+  // and a failure surfaces as a toast instead of a browser error page — the
+  // endpoint serves the stored snapshot, so this is normally instant.
+  async function downloadPdf() {
+    if (!report) return
+    setBusy('pdf')
+    try {
+      const r = await fetch(`/api/reports/jaws-stock-eom/pdf?month=${encodeURIComponent(report.month)}`, { credentials: 'same-origin' })
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`
+        try { msg = (await r.json()).error || msg } catch { /* not JSON */ }
+        throw new Error(msg)
+      }
+      const blob = await r.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `jaws-stock-${report.month}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Revoke on the next tick — Safari cancels the download if the object
+      // URL disappears while the click is still being handled.
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
+      toast('PDF downloaded', 'success')
+    } catch (e: any) { toast(e?.message || 'PDF export failed', 'error') }
+    setBusy('')
+  }
+
   const h = report?.headline
   const prev = report?.trend.filter(t => t.month < report.month).slice(-1)[0]
   const d = (now?: number, before?: number | null) =>
@@ -170,6 +199,10 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
             <button onClick={() => load(month, true)} disabled={loading}
               style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border2}`, background: T.bg3, color: T.text2, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
               {loading ? 'Working…' : 'Rebuild from MYOB'}
+            </button>
+            <button onClick={downloadPdf} disabled={!!busy || !report}
+              style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border2}`, background: T.bg3, color: T.text2, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              {busy === 'pdf' ? 'Preparing…' : 'Export PDF'}
             </button>
             <button onClick={emailNow} disabled={!!busy || !report}
               style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: T.green, color: '#fff', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
