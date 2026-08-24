@@ -25,6 +25,7 @@ interface Item {
   historyUnits: number; historyRevenueEx: number
   avgUnitsPerMonth: number; avgRevenuePerMonth: number
   monthsCoverAtAvg: number | null; growthPct: number | null
+  monthlySeries?: Array<{ month: string; units: number; revenueEx: number }>
   suggestQty?: number; suggestCost?: number; reason?: string
   slowReason?: string
 }
@@ -42,7 +43,7 @@ interface Report {
   }
   ageing: Array<{ bucket: string; skus: number; value: number }>
   topByUnits: Item[]; topByRevenue: Item[]; topByMargin: Item[]
-  slowMovers: Item[]; reorder: Item[]
+  slowMovers: Item[]; reorder: Item[]; stockPositionList?: Item[]
   belowCost: Item[]; costCreep: Item[]; unfilledDemand: Item[]; overstock: Item[]
   suppliers: Array<{ supplier: string; skus: number; stockValue: number; monthRevenueEx: number; reorderCost: number }>
   integrity: Array<{ sku: string; name: string; issue: string; detail: string }>
@@ -63,6 +64,30 @@ const money = (n: number | null | undefined) => n == null ? '—' : '$' + Math.r
 const pct = (n: number | null | undefined) => n == null ? '—' : `${(n * 100).toFixed(1)}%`
 const qty = (n: number | null | undefined) => n == null ? '—' : String(Math.round(n * 100) / 100)
 const growth = (n: number | null | undefined) => n == null ? '—' : `${n >= 0 ? '+' : ''}${(n * 100).toFixed(0)}%`
+
+const shortMonth = (m: string) => {
+  const [y, mm] = String(m).split('-').map(Number)
+  if (!y || !mm) return String(m)
+  return `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][mm - 1]} ${String(y).slice(2)}`
+}
+
+// Over/under-stocked read across the last n months — same rules as
+// stockPosition() in lib/jaws-stock-eom (6 months' cover = over, 1 = short).
+const POSITION_MONTHS = 6
+function positionOf(i: Item, n = POSITION_MONTHS) {
+  const series = (i.monthlySeries || []).slice(-n)
+  const units = series.map(m => m.units)
+  const total = units.reduce((t, u) => t + u, 0)
+  const avg = series.length ? total / series.length : 0
+  const cover = avg > 0 ? i.onHand / avg : null
+  const position = avg === 0 ? (i.onHand > 0 ? 'No sales' : 'OK')
+    : cover !== null && cover > 6 ? 'Overstocked'
+    : cover !== null && cover < 1 ? 'Short' : 'OK'
+  return { months: series.map(m => m.month), units, avg, cover, position }
+}
+const POSITION_TONE: Record<string, string> = {
+  Overstocked: T.amber, Short: T.red, 'No sales': T.text3, OK: T.green,
+}
 
 const card: React.CSSProperties = { background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }
 const th: React.CSSProperties = { textAlign: 'left', padding: '6px 10px', fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `1px solid ${T.border}`, whiteSpace: 'nowrap' }
@@ -329,6 +354,27 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
                 cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Capital at risk', right: true }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Avg/mo', right: true }, { label: 'Months cover', right: true }, { label: 'Growth', right: true }, { label: 'Why' }, { label: 'Last sold' }, { label: 'Sold since', right: true }]}
                 rows={report.slowMovers.map(i => [i.sku, i.name.slice(0, 36), money(i.capitalAtRisk), money(i.stockValue), qty(i.onHand), qty(i.avgUnitsPerMonth), i.monthsCoverAtAvg == null ? '—' : i.monthsCoverAtAvg.toFixed(1), growth(i.growthPct), i.slowReason || '', i.lastSold || '—', i.unitsSinceMonthEnd ? qty(i.unitsSinceMonthEnd) : '—'])} />
 
+              {!!report.stockPositionList?.length && positionOf(report.stockPositionList[0]).months.length > 0 && (
+                <Table title={`Stock position — ${positionOf(report.stockPositionList[0]).months.length} months of sales vs what is on the shelf`}
+                  hint={`Units invoiced each month against stock on hand as at ${report.generatedAt.slice(0, 10)}. Over 6 months of cover reads as overstocked, under 1 month as short — anything to act on is listed first. This is a different question from the slow-mover list above, which ranks capital at risk over the whole window.`}
+                  cols={[
+                    { label: 'SKU' }, { label: 'Name' },
+                    ...positionOf(report.stockPositionList[0]).months.map(m => ({ label: shortMonth(m), right: true })),
+                    { label: 'On hand', right: true }, { label: 'Avg/mo', right: true },
+                    { label: 'Cover (mo)', right: true }, { label: 'Position' },
+                  ]}
+                  rows={report.stockPositionList.map(i => {
+                    const p = positionOf(i)
+                    return [
+                      i.sku, i.name.slice(0, 34),
+                      ...p.units.map(u => (u ? qty(u) : '–')),
+                      qty(i.onHand), qty(Math.round(p.avg * 100) / 100),
+                      p.cover == null ? '—' : p.cover.toFixed(1),
+                      p.position,
+                    ]
+                  })} />
+              )}
+
               <Table title="Reorder suggestions" hint={`Only the ${h.reorderSheetSize} SKUs on the Stock Order sheet — MYOB's item list also holds kit components that are never sold separately.${h.reorderExcludedCount ? ` ${h.reorderExcludedCount} off-sheet item(s) sat below their alert level and were excluded; add a SKU to the Stock Order sheet if it should be ordered.` : ''} Flagged when below the alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ; cost uses last paid price where MYOB has one.`}
                 cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'On order', right: true }, { label: 'Cover', right: true }, { label: 'Order qty', right: true }, { label: 'Est. cost', right: true }, { label: 'Why' }, { label: 'Supplier' }]}
                 rows={report.reorder.map(i => [i.sku, i.name.slice(0, 34), qty(i.onHand), qty(i.onOrder), i.daysOfCover == null ? '—' : Math.round(i.daysOfCover), qty(i.suggestQty), money(i.suggestCost), i.reason || '', i.supplier || '—'])} />
@@ -348,14 +394,6 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
               <Table title="Overstock — more than a year of cover" hint="At the current 90-day run rate this stock outlasts the year. Money you could have back."
                 cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Cover (days)', right: true }]}
                 rows={report.overstock.map(i => [i.sku, i.name.slice(0, 44), money(i.stockValue), qty(i.onHand), i.daysOfCover == null ? '—' : Math.round(i.daysOfCover)])} />
-
-              <Table title="Suppliers" hint="Where the stock value and the reorder spend concentrate."
-                cols={[{ label: 'Supplier' }, { label: 'SKUs', right: true }, { label: 'Stock value', right: true }, { label: 'Sales this month', right: true }, { label: 'Reorder cost', right: true }]}
-                rows={report.suppliers.map(s => [s.supplier, s.skus, money(s.stockValue), money(s.monthRevenueEx), money(s.reorderCost)])} />
-
-              <Table title="Data to tidy up" hint="Not stock problems — record problems. Each one quietly distorts every figure above."
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Issue' }, { label: 'Detail' }]}
-                rows={report.integrity.map(i => [i.sku, i.name.slice(0, 40), i.issue, i.detail])} />
 
               {report.stocktake && (
                 <div style={{ ...card, marginBottom: 16 }}>

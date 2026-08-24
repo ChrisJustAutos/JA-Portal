@@ -391,7 +391,7 @@ If a customer is landing in the wrong section, fix their membership at **Admin �
 
 ## 8.9 Stock EOM — the month-end stock report (JAWS)
 
-**What arrives without you doing anything.** At **7:30am on the 2nd of each month** the portal emails the month-just-ended stock report for JAWS to Chris and Morgan. The full version lives at **Reports → Stock EOM**, where you can also pick an earlier month or press **Rebuild from MYOB** if something looks stale.
+**What arrives without you doing anything.** At **7:30am on the 2nd of each month** the portal emails the month-just-ended stock report for JAWS to Chris and Morgan. **The email carries the last six months of sales**, both per SKU against stock on hand (the *Stock position* table — over or under stocked, at a glance) and as a company-file total per month, so the trend is in the email itself and not only behind a link. The full version lives at **Reports → Stock EOM**, where you can also pick an earlier month or press **Rebuild from MYOB** if something looks stale.
 
 **Choosing how far back to look.** Under the buttons is a **Sales history** row: presets for 3, 6, 12 and 24 months, or two month boxes for an exact range. It sets the period every average on the report is worked out over — average sales per month, months of cover, and whether sales are growing or falling. It defaults to the 12 months ending with the month you're reading, and 36 months is as far back as it will go.
 
@@ -416,13 +416,12 @@ This is not the same as **Stock & Inventory** (`/stock`), which shows *today* on
 | Top movers (units) and Biggest margin earners | What shifted, and what paid. These are usually *different* SKUs | Keep the margin list stocked first |
 | Where the money is sitting | Held value grouped by how recently it last sold, over the stock that has sold at least once | Anything in **over a year** is a clearance or write-down conversation |
 | **Slow movers** | **Where the capital is stuck — ranked by *capital at risk*, meaning the value held beyond 90 days of that SKU's own selling rate.** A SKU is listed if nothing sold in the 90 days to month end, *or* it still sells but holds over 180 days of cover with more than $2,000 past that mark | **This is the list to work first.** A SKU can be selling every week and still be the worst offender: in July the three biggest were all steady sellers carrying a year of stock — $67k, $67k and $60k tied up. Buy less of them next time, or clear the excess |
+| **Stock position** | **Six months of sales, month by month, against what is on the shelf now.** Over 6 months of cover reads *Overstocked*, under 1 month *Short*, and a SKU that hasn't sold in six months says *No sales*. Anything to act on is listed first | **The over/under-stocking answer.** The monthly columns are there so you can see *why*: four steady months then nothing is a different problem from one big month and five quiet ones |
 | **Reorder suggestions** | **Only SKUs on the Stock Order sheet** — kit components that aren't sold separately are deliberately left out. Flagged when below the MYOB alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ; cost uses last price paid | This is the month's buy list. If something you order isn't listed, add it to the Stock Order sheet — the report only suggests what's on there, and it tells you how many off-sheet items it skipped |
 | Sold while out of stock | Demand you couldn't fill on the spot | Raise the alert level on those SKUs |
 | Sold below cost | Selling price ex GST is under average cost | Fix the price, or find out why it was discounted |
 | **Cost creep** | Last paid is more than 10% above average cost — the buy price moved and the sell price probably didn't | The price-review list. Quietly the most valuable table in the report |
 | Overstock | More than a year of cover at current run rate | Money you could get back |
-| Suppliers | Where stock value and reorder spend concentrate | Leverage on your two or three biggest |
-| Data to tidy up | Negative on-hand, stock with no cost, stock with no sell price | Record problems, not stock problems — each one distorts every figure above |
 
 **Two things to know before quoting any of it**
 

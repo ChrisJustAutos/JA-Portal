@@ -44,6 +44,12 @@ const COST_CREEP_PCT = 0.10  // last purchase price this much above average cost
 const TARGET_COVER_DAYS = 90 // the cover level "capital at risk" is measured against
 const SLOW_COVER_DAYS = 180  // still selling, but this far ahead of demand...
 const SLOW_CAPITAL_MIN = 2000 // ...and this much capital past the 90-day target
+// The over/under-stocked read in the month-end email. Six months of sales is
+// what Morgan asked for (Chris, 2026-08-25): long enough to smooth a quiet
+// month, short enough to still be this year's trading.
+export const POSITION_MONTHS = 6
+const POSITION_OVER_MONTHS = 6   // more than this much cover = overstocked
+const POSITION_SHORT_MONTHS = 1  // less than this much cover = running short
 
 const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -150,6 +156,32 @@ export interface EomItem {
   /** Back half of the window against the front half — this SKU growing or
    *  fading. Null when the window is under 4 months or there is no baseline. */
   growthPct: number | null
+  /** Units and revenue for EVERY month of the window, oldest first. Lets the
+   *  month-end email print the last six months beside what is on the shelf. */
+  monthlySeries: Array<{ month: string; units: number; revenueEx: number }>
+}
+
+/** Over/under-stocked read for one SKU across the last `n` months of its own
+ *  monthly series. Deliberately separate from the slow-mover list: that ranks
+ *  capital at risk, this answers "are we holding about the right amount?" —
+ *  which needs the recent months, not the whole window. */
+export function stockPosition(item: EomItem, n = POSITION_MONTHS): {
+  months: string[]; units: number[]; total: number; avg: number
+  cover: number | null
+  position: 'Overstocked' | 'Short' | 'No sales' | 'OK'
+} {
+  const series = (item.monthlySeries || []).slice(-n)
+  const months = series.map(m => m.month)
+  const units = series.map(m => m.units)
+  const total = units.reduce((t, u) => t + u, 0)
+  const avg = series.length ? total / series.length : 0
+  const cover = avg > 0 ? r2(item.onHand / avg) : null
+  const position =
+    avg === 0 ? (item.onHand > 0 ? 'No sales' : 'OK')
+    : cover !== null && cover > POSITION_OVER_MONTHS ? 'Overstocked'
+    : cover !== null && cover < POSITION_SHORT_MONTHS ? 'Short'
+    : 'OK'
+  return { months, units, total, avg: r2(avg), cover, position }
 }
 
 /** A slow mover carries WHY it is on the list — dead, or simply carrying far
@@ -199,6 +231,10 @@ export interface EomReport {
   topByRevenue: EomItem[]
   topByMargin: EomItem[]
   slowMovers: EomSlowMover[]
+  /** Held stock ranked for the over/under-stocked read: anything flagged
+   *  (overstocked, short, or not selling at all) first by capital, then the
+   *  rest by capital. Drives the month-end email's stock-position table. */
+  stockPositionList: EomItem[]
   reorder: Array<EomItem & { suggestQty: number; suggestCost: number; reason: string }>
   belowCost: EomItem[]
   costCreep: EomItem[]
@@ -338,6 +374,7 @@ export async function buildEomReport(
       avgUnitsPerMonth: r2(avgUnitsPerMonth), avgRevenuePerMonth: r2(avgRevenuePerMonth),
       monthsCoverAtAvg: avgUnitsPerMonth > 0 ? r2(onHand / avgUnitsPerMonth) : null,
       growthPct: halfOverHalfGrowth(series),
+      monthlySeries: histWin.months.map((mk, ix) => ({ month: mk, units: r2(series[ix].units), revenueEx: r2(series[ix].revEx) })),
     }
   })
 
@@ -500,6 +537,16 @@ export async function buildEomReport(
     series: historySeries,
   }
 
+  // Over/under-stocked ranking: something to act on first, then by capital.
+  const positionRank = (i: EomItem) => {
+    const p = stockPosition(i).position
+    return p === 'Short' ? 0 : p === 'Overstocked' ? 1 : p === 'No sales' ? 2 : 3
+  }
+  const stockPositionList = soldEver
+    .slice()
+    .sort((a, b) => positionRank(a) - positionRank(b) || b.stockValue - a.stockValue)
+    .slice(0, LIST_CAP)
+
   const byMonthUnits = (a: EomItem, b: EomItem) => b.monthUnits - a.monthUnits
   const cut = (rows: EomItem[]) => rows.slice(0, LIST_CAP)
 
@@ -536,6 +583,7 @@ export async function buildEomReport(
     topByRevenue: cut([...enriched].filter(i => i.monthRevenueEx > 0).sort((a, b) => b.monthRevenueEx - a.monthRevenueEx)),
     topByMargin: cut([...enriched].filter(i => i.monthMargin > 0).sort((a, b) => b.monthMargin - a.monthMargin)),
     slowMovers: slowMovers.slice(0, LIST_CAP),
+    stockPositionList,
     reorder: reorder.sort((a, b) => b.suggestCost - a.suggestCost).slice(0, LIST_CAP * 2),
     belowCost: cut([...belowCost].sort((a, b) => (a.sellEx - a.avgCost) - (b.sellEx - b.avgCost))),
     costCreep: cut([...costCreep].sort((a, b) => (b.lastPurchasePrice! - b.avgCost) - (a.lastPurchasePrice! - a.avgCost))),
@@ -557,6 +605,7 @@ export async function buildEomReport(
       'Revenue is ex-GST, normalised per invoice using the parent tax-inclusive flag and the line tax code (lib/gst).',
       `Averages, months-of-cover and growth are measured over ${history.months} month(s), ${history.from} to ${history.to}${history.months === DEFAULT_HISTORY_MONTHS && history.to === month ? ' (the default window)' : ' (chosen on the report)'}. A month with no sale counts as a zero, so an average is per month of the window, not per month that happened to sell. Growth compares the back half of the window with the front half; on an odd number of months the middle one is dropped so both halves are equal.`,
       'Months of cover uses the window average; "cover (days)" elsewhere uses the last 90 days only, so a seasonal SKU can look very different under the two — that difference is the point.',
+      `The stock-position table reads the last ${POSITION_MONTHS} months of the window against what is on the shelf now: over ${POSITION_OVER_MONTHS} months of cover is flagged overstocked, under ${POSITION_SHORT_MONTHS} month short. It is a separate question from the slow-mover list, which ranks capital at risk over the whole window.`,
       useSheet
         ? `Reorder suggestions cover only the ${sheet.size} SKUs on the Stock Order sheet — MYOB's item list also holds kit components that are never sold separately.${reorderExcludedCount ? ` ${reorderExcludedCount} item(s) off the sheet were below their alert level and excluded; add a SKU to the Stock Order sheet if it should be ordered.` : ''}`
         : 'The Stock Order sheet is empty, so reorder suggestions cover EVERY MYOB item — expect kit components in the list until the sheet is populated.',
@@ -608,6 +657,14 @@ export async function listSnapshotMonths(): Promise<Array<{ month: string; gener
 const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const money = (n: number) => '$' + Math.round(n).toLocaleString('en-AU')
 const pct = (n: number | null) => n == null ? '—' : `${(n * 100).toFixed(1)}%`
+const shortMonth = (m: string) => {
+  const [y, mm] = String(m).split('-').map(Number)
+  if (!y || !mm) return String(m)
+  return `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][mm - 1]} ${String(y).slice(2)}`
+}
+const POSITION_COLOR: Record<string, string> = {
+  Overstocked: '#d97706', Short: '#dc2626', 'No sales': '#6b7280', OK: '#059669',
+}
 
 function delta(now: number, before: number | undefined | null): string {
   if (before == null || before === 0) return ''
@@ -624,9 +681,11 @@ export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: st
   const row = (label: string, value: string, extra = '') =>
     `<tr><td style="padding:5px 14px 5px 0;color:#555">${esc(label)}</td><td style="padding:5px 0;font-weight:600">${value}${extra}</td></tr>`
 
-  const listTable = (title: string, rows: string[][], head: string[]) => {
+  // `hint` is pre-escaped by the caller where it interpolates values.
+  const listTable = (title: string, rows: string[][], head: string[], hint?: string) => {
     if (!rows.length) return `<h3 style="font-size:14px;margin:18px 0 6px">${esc(title)}</h3><p style="margin:0;color:#666;font-size:13px">Nothing to report.</p>`
     return `<h3 style="font-size:14px;margin:18px 0 6px">${esc(title)}</h3>
+      ${hint ? `<p style="margin:0 0 6px;color:#666;font-size:11.5px;line-height:1.45">${hint}</p>` : ''}
       <table style="border-collapse:collapse;font-size:12.5px;width:100%">
         <tr>${head.map(c => `<th align="left" style="border-bottom:1px solid #ddd;padding:4px 8px 4px 0;color:#666;font-weight:600">${esc(c)}</th>`).join('')}</tr>
         ${rows.map(r => `<tr>${r.map((c, i) => `<td style="padding:4px 8px 4px 0;border-bottom:1px solid #f1f1f1${i ? ';text-align:right' : ''}">${c}</td>`).join('')}</tr>`).join('')}
@@ -666,6 +725,50 @@ export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: st
     ${listTable('Slow movers — where the capital is stuck', rep.slowMovers.slice(0, 10).map(i =>
       [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 30)) + '</span>', money(i.capitalAtRisk), money(i.stockValue), String(r2(i.onHand)), i.monthsCoverAtAvg == null ? '—' : i.monthsCoverAtAvg.toFixed(1), esc(i.slowReason)]),
       ['SKU', 'Capital at risk', 'Value held', 'On hand', 'Months cover', 'Why'])}
+
+    ${(() => {
+      // ── Stock position: six months of sales against what is on the shelf ──
+      // Morgan's ask (2026-08-25) — the month-end email has to answer "are we
+      // over or under stocked?", which needs the recent months laid out, not a
+      // single average. Columns are the last POSITION_MONTHS of the report's
+      // history window (fewer if the window is shorter).
+      const rows = rep.stockPositionList || []
+      if (!rows.length) return ''
+      const cols = stockPosition(rows[0]).months
+      if (!cols.length) return ''
+      const body = rows.slice(0, 14).map(i => {
+        const p = stockPosition(i)
+        const cells = p.units.map(u => (u ? String(r2(u)) : '<span style="color:#bbb">–</span>'))
+        return [
+          esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 26)) + '</span>',
+          ...cells,
+          `<b>${r2(i.onHand)}</b>`,
+          String(p.avg),
+          p.cover == null ? '—' : p.cover.toFixed(1),
+          `<span style="color:${POSITION_COLOR[p.position] || '#6b7280'};font-weight:600">${p.position}</span>`,
+        ]
+      })
+      return listTable(
+        `Stock position — ${cols.length} months of sales vs what is on the shelf`,
+        body,
+        ['SKU', ...cols.map(shortMonth), 'On hand', 'Avg/mo', 'Cover (mo)', 'Position'],
+        `Units invoiced each month, against stock on hand as at ${esc(rep.generatedAt.slice(0, 10))}. Over 6 months of cover reads as overstocked, under 1 month as short. Anything to act on is listed first.`,
+      )
+    })()}
+
+    ${rep.history && rep.history.series.length ? listTable(
+      'Sales by month — the whole company file',
+      rep.history.series.slice(-POSITION_MONTHS).map((m, i, arr) => {
+        const before = i > 0 ? arr[i - 1].revenueEx : null
+        const chg = before && before !== 0 ? (m.revenueEx - before) / before : null
+        return [
+          shortMonth(m.month), String(r2(m.units)), money(m.revenueEx),
+          chg == null ? '—' : `<span style="color:${chg >= 0 ? '#059669' : '#dc2626'}">${chg >= 0 ? '+' : ''}${(chg * 100).toFixed(1)}%</span>`,
+        ]
+      }),
+      ['Month', 'Units', 'Revenue ex', 'vs prev'],
+      'The trading behind the averages above — a run of rising or falling months is the growth read.',
+    ) : ''}
 
     ${listTable(`Reorder suggestions — Stock Order sheet only (${h.reorderSheetSize} SKUs)`, rep.reorder.slice(0, 12).map(i =>
       [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 34)) + '</span>', String(r2(i.suggestQty)), money(i.suggestCost), esc(i.reason)]),

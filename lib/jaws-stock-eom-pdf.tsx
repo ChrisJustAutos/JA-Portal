@@ -11,6 +11,7 @@
 
 import React from 'react'
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer'
+import { stockPosition } from './jaws-stock-eom'
 import type { EomReport, EomItem } from './jaws-stock-eom'
 
 const C = {
@@ -54,6 +55,11 @@ const money = (n: number | null | undefined) =>
 const pct = (n: number | null | undefined) => n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`
 const qty = (n: number | null | undefined) => n == null ? '—' : String(Math.round(Number(n) * 100) / 100)
 const growth = (n: number | null | undefined) => n == null ? '—' : `${Number(n) >= 0 ? '+' : ''}${(Number(n) * 100).toFixed(0)}%`
+const shortMonth = (m: string) => {
+  const [y, mm] = String(m).split('-').map(Number)
+  if (!y || !mm) return String(m)
+  return `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][mm - 1]} ${String(y).slice(2)}`
+}
 
 interface Col { label: string; width: string; right?: boolean }
 
@@ -190,6 +196,29 @@ function StockEomDoc({ rep }: { rep: EomReport }) {
           ])}
         />
 
+        {rep.stockPositionList?.length ? (
+          <Table
+            title={`Stock position — ${stockPosition(rep.stockPositionList[0]).months.length} months of sales vs what is on the shelf`}
+            hint={`Units invoiced each month against stock on hand as at ${rep.generatedAt.slice(0, 10)}. Over 6 months of cover reads as overstocked, under 1 month as short. Anything to act on is listed first.`}
+            cols={[
+              { label: 'SKU', width: '22%' },
+              ...stockPosition(rep.stockPositionList[0]).months.map(m => ({ label: shortMonth(m), width: '7%', right: true })),
+              { label: 'On hand', width: '9%', right: true }, { label: 'Avg/mo', width: '9%', right: true },
+              { label: 'Cover (mo)', width: '9%', right: true }, { label: 'Position', width: '11%' },
+            ]}
+            rows={rep.stockPositionList.slice(0, 16).map(i => {
+              const pos = stockPosition(i)
+              return [
+                i.sku.slice(0, 22),
+                ...pos.units.map(u => (u ? qty(u) : '–')),
+                qty(i.onHand), qty(pos.avg),
+                pos.cover == null ? '—' : pos.cover.toFixed(1),
+                pos.position,
+              ]
+            })}
+          />
+        ) : null}
+
         <Table
           title={`Reorder suggestions — Stock Order sheet only (${h.reorderSheetSize} SKUs)`}
           hint={`Flagged when below the MYOB alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ.${h.reorderExcludedCount ? ` ${h.reorderExcludedCount} off-sheet item(s) sat below their alert level and were excluded — add a SKU to the sheet if it should be ordered.` : ''}`}
@@ -272,22 +301,6 @@ function StockEomDoc({ rep }: { rep: EomReport }) {
             { label: 'Margin now', width: '12%', right: true },
           ]}
           rows={rep.costCreep.map(i => [i.sku.slice(0, 22), name(i, 28), qty(i.onHand), money(i.avgCost), money(i.lastPurchasePrice), pct(i.marginPct)])}
-        />
-
-        <Table
-          title="Value and spend by supplier"
-          cols={[
-            { label: 'Supplier', width: '40%' }, { label: 'SKUs', width: '12%', right: true },
-            { label: 'Stock value', width: '18%', right: true }, { label: 'Sales this month', width: '16%', right: true },
-            { label: 'To reorder', width: '14%', right: true },
-          ]}
-          rows={rep.suppliers.map(x => [x.supplier.slice(0, 44), x.skus, money(x.stockValue), money(x.monthRevenueEx), money(x.reorderCost)])}
-        />
-
-        <Table
-          title="Data to fix in MYOB"
-          cols={[{ label: 'SKU', width: '20%' }, { label: 'Name', width: '32%' }, { label: 'Issue', width: '24%' }, { label: 'Detail', width: '24%' }]}
-          rows={rep.integrity.map(x => [x.sku.slice(0, 22), x.name.slice(0, 32), x.issue, x.detail])}
         />
 
         {rep.stocktake ? (
