@@ -21,15 +21,16 @@ interface Item {
   marginPct: number | null; marginDollar: number | null; lastPurchasePrice: number | null
   monthUnits: number; monthRevenueEx: number; monthMargin: number; prevMonthUnits: number
   units90: number; lastSold: string | null; daysSinceLastSold: number | null; unitsSinceMonthEnd: number
-  daysOfCover: number | null
+  daysOfCover: number | null; capitalAtRisk: number
   suggestQty?: number; suggestCost?: number; reason?: string
+  slowReason?: string
 }
 interface Report {
   month: string; monthLabel: string; generatedAt: string
   headline: any
   ageing: Array<{ bucket: string; skus: number; value: number }>
   topByUnits: Item[]; topByRevenue: Item[]; topByMargin: Item[]
-  slowMovers: Item[]; neverSold: Item[]; reorder: Item[]
+  slowMovers: Item[]; reorder: Item[]
   belowCost: Item[]; costCreep: Item[]; unfilledDemand: Item[]; overstock: Item[]
   suppliers: Array<{ supplier: string; skus: number; stockValue: number; monthRevenueEx: number; reorderCost: number }>
   integrity: Array<{ sku: string; name: string; issue: string; detail: string }>
@@ -186,14 +187,15 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
                 <Kpi label="Gross margin" value={money(h.monthMargin)} sub={`${pct(h.monthMarginPct)} of sales`} delta={d(h.monthMarginPct, prev?.monthMarginPct)} />
                 <Kpi label="Stock turn (12m)" value={h.turnsAnnualised == null ? '—' : `${h.turnsAnnualised.toFixed(2)}×`} sub={h.daysInventory ? `${h.daysInventory} days of inventory` : undefined} />
                 <Kpi label="Dead stock (90d)" value={money(h.dead90Value)} sub={`${h.dead90Count} SKUs · ${money(h.dead180Value)} at 180d`} delta={d(h.dead90Value, prev?.deadValue)} tone={h.dead90Value > 0 ? T.amber : undefined} />
-                <Kpi label="Never sold" value={money(h.neverSoldValue)} sub={`${h.neverSoldCount} SKUs holding stock`} tone={h.neverSoldValue > 0 ? T.red : undefined} />
+                <Kpi label="Slow movers — capital at risk" value={money(h.slowCapital)} sub={`${h.slowCount} SKUs holding more than 90 days of their own demand`} tone={h.slowCapital > 0 ? T.amber : undefined} />
+                <Kpi label="Never sold (excluded)" value={money(h.neverSoldValue)} sub={`${h.neverSoldCount} SKUs — treated as kit parts, left out of the figures above`} />
                 <Kpi label="Overstock (>1yr cover)" value={money(h.overstockValue)} sub={`${h.overstockCount} SKUs`} tone={h.overstockValue > 0 ? T.amber : undefined} />
                 <Kpi label="Reorder suggested" value={money(h.reorderCost)} sub={`${h.reorderCount} SKUs · ${h.outOfStockCount} out, ${h.lowStockCount} low`} />
               </div>
 
-              <Table title="Where the money is sitting" hint="Held stock value by how recently that SKU last sold. “Never sold” is the list worth arguing about."
+              <Table title="Where the money is sitting" hint={`Held stock value by how recently that SKU last sold, over the ${money(h.analysedValue)} that has sold at least once. Stock that has never sold — ${money(h.neverSoldValue)} across ${h.neverSoldCount} SKUs — is excluded: on this item list that is almost always a kit component never sold separately. Shares are of the analysed value, so they total 100%.`}
                 cols={[{ label: 'Last sold' }, { label: 'SKUs', right: true }, { label: 'Value held', right: true }, { label: 'Share', right: true }]}
-                rows={report.ageing.map(a => [a.bucket, a.skus, money(a.value), h.stockValue > 0 ? pct(a.value / h.stockValue) : '—'])} />
+                rows={report.ageing.map(a => [a.bucket, a.skus, money(a.value), h.analysedValue > 0 ? pct(a.value / h.analysedValue) : '—'])} />
 
               <Table title="Top movers this month — by units" hint="What actually shifted. Prev = same SKU last month, so you can see momentum."
                 cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Units', right: true }, { label: 'Prev', right: true }, { label: 'Revenue ex', right: true }, { label: 'Margin %', right: true }, { label: 'Cover (days)', right: true }]}
@@ -203,13 +205,9 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
                 cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Margin $', right: true }, { label: 'Margin %', right: true }, { label: 'Units', right: true }]}
                 rows={report.topByMargin.map(i => [i.sku, i.name.slice(0, 46), money(i.monthMargin), pct(i.marginPct), qty(i.monthUnits)])} />
 
-              <Table title="Slow movers — capital sitting still" hint={`Holding stock with no sale in the 90 days to the end of ${report.monthLabel}, worst first by value tied up. “Sold since” is what has moved after the month closed — a number there means the SKU is waking up, not dead.`}
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Last sold' }, { label: 'Days' }, { label: 'Sold since', right: true }]}
-                rows={report.slowMovers.map(i => [i.sku, i.name.slice(0, 44), money(i.stockValue), qty(i.onHand), i.lastSold || 'never', i.daysSinceLastSold ?? '—', i.unitsSinceMonthEnd ? qty(i.unitsSinceMonthEnd) : '—'])} />
-
-              <Table title="Never sold" hint="Stock on the shelf that has never been invoiced in the 12 months read. Write-down, clearance or delete candidates."
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Sold since', right: true }, { label: 'Supplier' }]}
-                rows={report.neverSold.map(i => [i.sku, i.name.slice(0, 44), money(i.stockValue), qty(i.onHand), i.unitsSinceMonthEnd ? qty(i.unitsSinceMonthEnd) : '—', i.supplier || '—'])} />
+              <Table title="Slow movers — where the capital is stuck" hint={`Two ways onto this list: nothing sold in the 90 days to the end of ${report.monthLabel}, or it still sells but holds over 180 days of cover with at least $2,000 tied up beyond a 90-day target. Ranked by capital at risk — the value held beyond 90 days of that SKU's own demand — so the money is at the top, not the longest-idle SKU. Stock that has never sold is excluded (kit parts). “Sold since” is what moved after the month closed: a number there means the SKU is waking up.`}
+                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Capital at risk', right: true }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Cover (days)', right: true }, { label: 'Why' }, { label: 'Last sold' }, { label: 'Sold since', right: true }]}
+                rows={report.slowMovers.map(i => [i.sku, i.name.slice(0, 40), money(i.capitalAtRisk), money(i.stockValue), qty(i.onHand), i.daysOfCover == null ? '—' : Math.round(i.daysOfCover), i.slowReason || '', i.lastSold || '—', i.unitsSinceMonthEnd ? qty(i.unitsSinceMonthEnd) : '—'])} />
 
               <Table title="Reorder suggestions" hint={`Only the ${h.reorderSheetSize} SKUs on the Stock Order sheet — MYOB's item list also holds kit components that are never sold separately.${h.reorderExcludedCount ? ` ${h.reorderExcludedCount} off-sheet item(s) sat below their alert level and were excluded; add a SKU to the Stock Order sheet if it should be ordered.` : ''} Flagged when below the alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ; cost uses last paid price where MYOB has one.`}
                 cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'On order', right: true }, { label: 'Cover', right: true }, { label: 'Order qty', right: true }, { label: 'Est. cost', right: true }, { label: 'Why' }, { label: 'Supplier' }]}

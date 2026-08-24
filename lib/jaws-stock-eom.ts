@@ -41,6 +41,9 @@ function sb(): SupabaseClient {
 const LIST_CAP = 25          // rows kept per exception list — a review list, not a dump
 const OVERSTOCK_DAYS = 365   // cover beyond a year = excess capital
 const COST_CREEP_PCT = 0.10  // last purchase price this much above average cost
+const TARGET_COVER_DAYS = 90 // the cover level "capital at risk" is measured against
+const SLOW_COVER_DAYS = 180  // still selling, but this far ahead of demand...
+const SLOW_CAPITAL_MIN = 2000 // ...and this much capital past the 90-day target
 
 const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -76,7 +79,17 @@ export interface EomItem {
    *  here isn't dead — it just hadn't sold in the window being reported. */
   unitsSinceMonthEnd: number
   runRatePerDay: number; daysOfCover: number | null
+  /** Value held beyond TARGET_COVER_DAYS of demand — the capital this SKU is
+   *  tying up over and above what its own sales rate justifies. Equals the
+   *  whole stock value when nothing has sold in 90 days (run rate 0). This is
+   *  what ranks the slow-mover list: $60k at 200 days of cover matters more
+   *  than $300 that has never moved. */
+  capitalAtRisk: number
 }
+
+/** A slow mover carries WHY it is on the list — dead, or simply carrying far
+ *  more stock than its sales rate justifies. */
+export type EomSlowMover = EomItem & { slowReason: string }
 
 export interface EomReport {
   month: string; monthLabel: string
@@ -88,7 +101,14 @@ export interface EomReport {
     lowStockCount: number; outOfStockCount: number
     dead90Count: number; dead90Value: number
     dead180Count: number; dead180Value: number
+    /** Held stock that has NEVER been invoiced — excluded from every "not
+     *  moving" list below (almost always a kit component). Reported so the
+     *  capital is visible, never silently dropped. */
     neverSoldCount: number; neverSoldValue: number
+    /** Held value the ageing/slow-mover analysis actually covers = stock
+     *  value minus the never-sold exclusion. */
+    analysedValue: number
+    slowCount: number; slowCapital: number
     overstockCount: number; overstockValue: number
     reorderCount: number; reorderCost: number
     /** SKUs on the Stock Order sheet the reorder list is drawn from. */
@@ -101,8 +121,7 @@ export interface EomReport {
   topByUnits: EomItem[]
   topByRevenue: EomItem[]
   topByMargin: EomItem[]
-  slowMovers: EomItem[]
-  neverSold: EomItem[]
+  slowMovers: EomSlowMover[]
   reorder: Array<EomItem & { suggestQty: number; suggestCost: number; reason: string }>
   belowCost: EomItem[]
   costCreep: EomItem[]
@@ -213,6 +232,8 @@ export async function buildEomReport(month: string): Promise<EomReport> {
       unitsSinceMonthEnd: a ? a.unitsAfter : 0,
       runRatePerDay,
       daysOfCover: runRatePerDay > 0 ? onHand / runRatePerDay : null,
+      // Capped at MYOB's own CurrentValue: onHand x avgCost can drift from it.
+      capitalAtRisk: r2(Math.min(num(it.CurrentValue), Math.max(0, onHand - runRatePerDay * TARGET_COVER_DAYS) * avgCost)),
     }
   })
 
@@ -223,10 +244,35 @@ export async function buildEomReport(month: string): Promise<EomReport> {
   const cogs12m = enriched.reduce((s, i) => s + i.units365 * i.avgCost, 0)
   const turns = stockValue > 0 ? cogs12m / stockValue : null
 
-  const dead90 = held.filter(i => i.units90 === 0)
-  const dead180 = held.filter(i => i.daysSinceLastSold === null || i.daysSinceLastSold > 180)
+  // Never-sold stock is EXCLUDED from every "not moving" list (Chris,
+  // 2026-08-25). On this item list a SKU that has never been invoiced is
+  // almost always a kit component that is never sold on its own, so listing it
+  // as dead capital is noise — it dominated the dead-stock figure ($47.6k of
+  // July's $114.7k) and no action follows from it. The count and value stay in
+  // the headline so the capital is visible, not silently dropped.
   const neverSold = held.filter(i => i.lastSold === null)
-  const overstock = held.filter(i => i.daysOfCover !== null && i.daysOfCover > OVERSTOCK_DAYS)
+  const soldEver = held.filter(i => i.lastSold !== null)
+  const analysedValue = soldEver.reduce((s, i) => s + i.stockValue, 0)
+
+  const dead90 = soldEver.filter(i => i.units90 === 0)
+  const dead180 = soldEver.filter(i => i.daysSinceLastSold !== null && i.daysSinceLastSold > 180)
+  const overstock = soldEver.filter(i => i.daysOfCover !== null && i.daysOfCover > OVERSTOCK_DAYS)
+
+  // Slow movers are about CAPITAL, not just silence (Chris, 2026-08-25). Two
+  // ways onto the list: nothing sold in the 90 days to month end, OR it is
+  // still selling but carries more than SLOW_COVER_DAYS of cover with at least
+  // SLOW_CAPITAL_MIN tied up beyond a 90-day target. Ranked by capital at risk,
+  // so the money sits at the top rather than the longest-idle SKU.
+  const slowMovers: EomSlowMover[] = soldEver
+    .filter(i => i.units90 === 0 ||
+      (i.daysOfCover !== null && i.daysOfCover > SLOW_COVER_DAYS && i.capitalAtRisk >= SLOW_CAPITAL_MIN))
+    .map(i => ({
+      ...i,
+      slowReason: i.units90 === 0
+        ? `no sale in the 90 days to month end`
+        : `${Math.round(i.daysOfCover!)} days of cover — ${money(i.capitalAtRisk)} past a 90-day hold`,
+    }))
+    .sort((a, b) => b.capitalAtRisk - a.capitalAtRisk)
 
   // Reorder: below the alert level, or cover under 60 days on something that
   // actually moves. Quantity respects MOQ where MYOB has one.
@@ -270,10 +316,9 @@ export async function buildEomReport(month: string): Promise<EomReport> {
     ['90–180 days', i => i.daysSinceLastSold !== null && i.daysSinceLastSold > 90 && i.daysSinceLastSold <= 180],
     ['180–365 days', i => i.daysSinceLastSold !== null && i.daysSinceLastSold > 180 && i.daysSinceLastSold <= 365],
     ['Over a year', i => i.daysSinceLastSold !== null && i.daysSinceLastSold > 365],
-    ['Never sold', i => i.daysSinceLastSold === null],
   ]
   const ageing = ageBuckets.map(([bucket, test]) => {
-    const rows = held.filter(test)
+    const rows = soldEver.filter(test)
     return { bucket, skus: rows.length, value: r2(rows.reduce((s, i) => s + i.stockValue, 0)) }
   })
 
@@ -346,6 +391,8 @@ export async function buildEomReport(month: string): Promise<EomReport> {
       dead90Count: dead90.length, dead90Value: r2(dead90.reduce((s, i) => s + i.stockValue, 0)),
       dead180Count: dead180.length, dead180Value: r2(dead180.reduce((s, i) => s + i.stockValue, 0)),
       neverSoldCount: neverSold.length, neverSoldValue: r2(neverSold.reduce((s, i) => s + i.stockValue, 0)),
+      analysedValue: r2(analysedValue),
+      slowCount: slowMovers.length, slowCapital: r2(slowMovers.reduce((s, i) => s + i.capitalAtRisk, 0)),
       overstockCount: overstock.length, overstockValue: r2(overstock.reduce((s, i) => s + i.stockValue, 0)),
       reorderCount: reorder.length, reorderCost: r2(reorder.reduce((s, i) => s + i.suggestCost, 0)),
       reorderSheetSize: sheet.size, reorderExcludedCount,
@@ -355,8 +402,7 @@ export async function buildEomReport(month: string): Promise<EomReport> {
     topByUnits: cut([...enriched].filter(i => i.monthUnits > 0).sort(byMonthUnits)),
     topByRevenue: cut([...enriched].filter(i => i.monthRevenueEx > 0).sort((a, b) => b.monthRevenueEx - a.monthRevenueEx)),
     topByMargin: cut([...enriched].filter(i => i.monthMargin > 0).sort((a, b) => b.monthMargin - a.monthMargin)),
-    slowMovers: cut([...dead90].sort((a, b) => b.stockValue - a.stockValue)),
-    neverSold: cut([...neverSold].sort((a, b) => b.stockValue - a.stockValue)),
+    slowMovers: slowMovers.slice(0, LIST_CAP),
     reorder: reorder.sort((a, b) => b.suggestCost - a.suggestCost).slice(0, LIST_CAP * 2),
     belowCost: cut([...belowCost].sort((a, b) => (a.sellEx - a.avgCost) - (b.sellEx - b.avgCost))),
     costCreep: cut([...costCreep].sort((a, b) => (b.lastPurchasePrice! - b.avgCost) - (a.lastPurchasePrice! - a.avgCost))),
@@ -372,6 +418,8 @@ export async function buildEomReport(month: string): Promise<EomReport> {
       `On-hand quantities read from MYOB at ${now.toISOString().slice(0, 16).replace('T', ' ')} UTC — "as at now", not the last instant of ${label}. AccountRight exposes no historical quantity.`,
       'COGS and margin use units × current average cost. Invoice lines carry no cost of sale, so these figures rank SKUs reliably but are not the P&L.',
       `Stock turn = trailing 12-month COGS ÷ current stock value. Overstock = more than ${OVERSTOCK_DAYS} days of cover at the 90-day run rate.`,
+      `Stock that has NEVER sold is excluded from the ageing, dead-stock and slow-mover figures — on this item list it is almost always a kit component that is never sold separately.${neverSold.length ? ` ${neverSold.length} SKU(s) holding ${money(r2(neverSold.reduce((s, i) => s + i.stockValue, 0)))} were excluded on that basis.` : ''} The ageing shares are of the ${money(r2(analysedValue))} analysed, not the whole holding.`,
+      `Slow movers are ranked by capital at risk — the value held beyond ${TARGET_COVER_DAYS} days of that SKU's own demand. A SKU joins the list when nothing sold in the 90 days to month end, or when it still sells but holds over ${SLOW_COVER_DAYS} days of cover with at least ${money(SLOW_CAPITAL_MIN)} past that target. Overstock (>${OVERSTOCK_DAYS} days) is the extreme end of the same list, shown separately.`,
       'Every sales figure is as at the end of the reported month — sales made after it are excluded, so a re-run of an old month gives the same answer. "Sold since" shows what has moved since, so a slow mover that has started selling again is obvious.',
       'Revenue is ex-GST, normalised per invoice using the parent tax-inclusive flag and the line tax code (lib/gst).',
       useSheet
@@ -398,6 +446,7 @@ export async function saveSnapshot(rep: EomReport, userId?: string | null): Prom
     dead_90_count: h.dead90Count, dead_90_value: h.dead90Value,
     dead_180_count: h.dead180Count, dead_180_value: h.dead180Value,
     never_sold_count: h.neverSoldCount, never_sold_value: h.neverSoldValue,
+    slow_count: h.slowCount, slow_capital: h.slowCapital,
     overstock_count: h.overstockCount, overstock_value: h.overstockValue,
     reorder_count: h.reorderCount, reorder_cost: h.reorderCost,
     payload: rep,
@@ -458,8 +507,9 @@ export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: st
       ${row('Stock turn (12m)', h.turnsAnnualised == null ? '—' : `${h.turnsAnnualised.toFixed(2)}× · ${h.daysInventory} days of inventory`)}
       ${row('SKUs sold this month', `${h.activeSkusThisMonth} of ${h.skus}`)}
       ${row('Dead stock (no sale 90d)', `${money(h.dead90Value)} across ${h.dead90Count} SKUs`, delta(h.dead90Value, prev?.deadValue))}
-      ${row('Never sold', `${money(h.neverSoldValue)} across ${h.neverSoldCount} SKUs`)}
+      ${row('Slow movers — capital at risk', `${money(h.slowCapital)} across ${h.slowCount} SKUs`)}
       ${row('Overstock (>1yr cover)', `${money(h.overstockValue)} across ${h.overstockCount} SKUs`)}
+      ${row('Never sold (excluded)', `${money(h.neverSoldValue)} across ${h.neverSoldCount} SKUs — treated as kit parts`)}
       ${row('Out of stock / low', `${h.outOfStockCount} out · ${h.lowStockCount} low`)}
       ${row('Reorder suggested', `${h.reorderCount} SKUs · ${money(h.reorderCost)} to buy`)}
     </table>
@@ -472,9 +522,9 @@ export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: st
       [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', money(i.monthMargin), pct(i.marginPct)]),
       ['SKU', 'Margin $', 'Margin %'])}
 
-    ${listTable('Capital sitting still — no sale in the 90 days to month end', rep.slowMovers.slice(0, 10).map(i =>
-      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', money(i.stockValue), i.lastSold ? esc(i.lastSold) : 'never', i.unitsSinceMonthEnd ? String(r2(i.unitsSinceMonthEnd)) : '—']),
-      ['SKU', 'Value held', 'Last sold', 'Sold since'])}
+    ${listTable('Slow movers — where the capital is stuck', rep.slowMovers.slice(0, 10).map(i =>
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 34)) + '</span>', money(i.capitalAtRisk), money(i.stockValue), esc(i.slowReason), i.unitsSinceMonthEnd ? String(r2(i.unitsSinceMonthEnd)) : '—']),
+      ['SKU', 'Capital at risk', 'Value held', 'Why', 'Sold since'])}
 
     ${listTable(`Reorder suggestions — Stock Order sheet only (${h.reorderSheetSize} SKUs)`, rep.reorder.slice(0, 12).map(i =>
       [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 34)) + '</span>', String(r2(i.suggestQty)), money(i.suggestCost), esc(i.reason)]),

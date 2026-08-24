@@ -395,15 +395,17 @@ If a customer is landing in the wrong section, fix their membership at **Admin �
 
 This is not the same as **Stock & Inventory** (`/stock`), which shows *today* on rolling 30/90-day windows. The month-end report is a frozen snapshot, and it's the only place you can see stock movement **month against month** — MYOB itself only ever tells you today's quantity, so the comparison exists purely because the portal saves each month.
 
-**The eight numbers at the top:** stock on hand · sales for the month (ex GST) · gross margin · stock turn and days of inventory · dead stock (nothing sold in 90 days) · never sold · overstock (more than a year of cover) · reorder suggested. Each shows the movement against last month once there are two months of history.
+**The numbers at the top:** stock on hand · sales for the month (ex GST) · gross margin · stock turn and days of inventory · dead stock (nothing sold in 90 days) · **slow movers — capital at risk** · overstock (more than a year of cover) · reorder suggested · never sold (excluded). Each shows the movement against last month once there are two months of history.
+
+**Stock that has never sold is left out of the "not moving" figures.** On the JAWS item list a part that has never been invoiced is nearly always a kit component that is never sold on its own — the intake pipe *only*, the two intake gaskets, the cutting jigs. Counting those as dead capital was noise: they were $47.6k of July's $114.7k of "dead stock" and there was nothing anyone could do about them. They're still reported, as their own line marked **excluded**, so the money is visible — they just no longer distort dead stock, ageing or the slow-mover list.
 
 **The lists, and what to actually do with them**
 
 | List | What it's telling you | Action |
 |---|---|---|
 | Top movers (units) and Biggest margin earners | What shifted, and what paid. These are usually *different* SKUs | Keep the margin list stocked first |
-| Where the money is sitting | Held value grouped by how recently it last sold | The **Never sold** row is the argument worth having each month |
-| Slow movers / Never sold | Capital doing nothing, worst first | Clearance, write-down, or stop reordering |
+| Where the money is sitting | Held value grouped by how recently it last sold, over the stock that has sold at least once | Anything in **over a year** is a clearance or write-down conversation |
+| **Slow movers** | **Where the capital is stuck — ranked by *capital at risk*, meaning the value held beyond 90 days of that SKU's own selling rate.** A SKU is listed if nothing sold in the 90 days to month end, *or* it still sells but holds over 180 days of cover with more than $2,000 past that mark | **This is the list to work first.** A SKU can be selling every week and still be the worst offender: in July the three biggest were all steady sellers carrying a year of stock — $67k, $67k and $60k tied up. Buy less of them next time, or clear the excess |
 | **Reorder suggestions** | **Only SKUs on the Stock Order sheet** — kit components that aren't sold separately are deliberately left out. Flagged when below the MYOB alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ; cost uses last price paid | This is the month's buy list. If something you order isn't listed, add it to the Stock Order sheet — the report only suggests what's on there, and it tells you how many off-sheet items it skipped |
 | Sold while out of stock | Demand you couldn't fill on the spot | Raise the alert level on those SKUs |
 | Sold below cost | Selling price ex GST is under average cost | Fix the price, or find out why it was discounted |
@@ -480,6 +482,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Someone approved leave and the person says they got nothing | Either the item wasn't on the application path (a note keyed into a payroll group — §9a), or the portal has no address for them | Settings → Leave Notifications: the item will be under "Waiting on an email address" if it's an address problem. If it isn't listed at all, the decision was made on a note rather than an application. |
 | Ryan gets "no email address for …" notices | The applicant's name isn't in the staff directory and the item has no Email Address | Add either one (§9a) — the email then sends itself; nobody needs to re-approve. You only get that notice once per application. |
 | Stock EOM figures look stale or wrong | The report shows a stored snapshot, so it's frozen at whatever time it was generated | Reports → Stock EOM → **Rebuild from MYOB**. If the on-hand looks off by a few days' trading, that's expected — see §8.9 |
+| Dead stock drops sharply between two months | Months before September 2026 counted never-sold kit parts as dead stock; from 25 Aug 2026 they're excluded | Not a data loss — the old month is on the old basis. Reports → Stock EOM → pick that month → **Rebuild from MYOB** restates it so the two compare like for like |
 | The month-end stock email didn't arrive on the 2nd | Either the MYOB connection or the recipient list | Admin → Connections for MYOB health, then Reports → Stock EOM → **Email this report** to send it by hand |
 | Someone can't see a tab | Permissions, working as designed | Ask Chris |
 
