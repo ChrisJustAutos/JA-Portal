@@ -47,13 +47,14 @@ Settings → your profile → enable two-factor, scan the QR with your authentic
 
 The portal is installable. In Chrome or Edge, use the install icon in the address bar; on iPhone, Share → Add to Home Screen. You get a normal app icon, full screen, and push notifications.
 
-**Portal links open in the app, not a browser tab** — on Android and on Windows/Mac Chrome or Edge, once the app is installed. Tap a link in an email or Slack and it lands in the installed portal, in the window you already had open rather than a new one.
+**Portal links open in the app, not a browser tab.** Click a portal link in Outlook, Slack or Teams on your computer and it lands in the installed portal app — in the window you already had open, rather than piling up new ones. Those desktop apps hand links to your default browser, and the browser passes anything that belongs to the portal straight to the app.
 
-Three things to know:
+**One switch, once per computer.** The first portal link you click after installing may ask whether to open it in the app — say yes and it stops asking. If it never asks and links keep opening in a tab, turn it on directly: open the portal app, click the **⋮** menu in its title bar, and tick **Open supported links in this app** (Edge: `edge://apps` → the portal → same setting). Chrome moves this menu around between versions, so if you can't find it, ask Chris rather than assuming it's broken.
 
-- **Android**: the app updates itself in the background after this change shipped. If links still open in the browser after a day or so, remove the app from the home screen and install it again.
-- **Desktop Chrome/Edge**: the first link may ask whether to open it in the app — say yes, and it stops asking. You can also set it directly: ⋮ → Cast, save and share → *(app name)* → **Open supported links in this app**.
-- **iPhone and iPad cannot do this.** iOS always opens links in Safari, even with the portal on your home screen; that is an Apple restriction, not a portal setting. Open the app from the home-screen icon and navigate from there.
+Two limits, neither fixable in the portal:
+
+- **iPhone and iPad can't do this at all.** iOS always opens links in Safari, even with the portal on the home screen — an Apple restriction. Open the app from its icon and navigate from there.
+- **Links tapped inside a phone app's own browser** (Slack or Gmail on a phone) may never reach Chrome, so they stay in that app's browser.
 
 ### 1.4 Notifications
 
