@@ -15,10 +15,11 @@ const TABS: Array<{ id: string; label: string; href: string; perm: Permission; r
   { id: 'forecast', label: 'Forecast', href: '/reports/forecast', perm: 'view:reports', roles: ['admin', 'manager'] },
   { id: 'workshop-map', label: 'Workshop Map', href: '/reports/map',  perm: 'view:reports' },
   { id: 'distributor-map', label: 'Distributor Map', href: '/reports/distributor-map', perm: 'view:reports' },
+  { id: 'jaws-stock-eom', label: 'Stock EOM', href: '/reports/jaws-stock-eom', perm: 'view:stock', roles: ['admin', 'manager'] },
   { id: 'distributors', label: 'Distributors', href: '/distributors', perm: 'view:distributors' },
 ]
 
-export default function ReportsTabs({ active, role, reportTabs }: { active: 'reports' | 'sales-report' | 'sales-dashboard' | 'mgmt-dashboard' | 'forecast' | 'workshop-map' | 'distributor-map' | 'distributors'; role: UserRole; reportTabs?: string[] | null }) {
+export default function ReportsTabs({ active, role, reportTabs }: { active: 'reports' | 'sales-report' | 'sales-dashboard' | 'mgmt-dashboard' | 'forecast' | 'workshop-map' | 'distributor-map' | 'distributors' | 'jaws-stock-eom'; role: UserRole; reportTabs?: string[] | null }) {
   const router = useRouter()
   const tabs = TABS.filter(t =>
     roleHasPermission(role, t.perm) &&

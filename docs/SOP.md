@@ -372,6 +372,38 @@ If a customer is landing in the wrong section, fix their membership at **Admin �
 
 ---
 
+## 8.9 Stock EOM — the month-end stock report (JAWS)
+
+**What arrives without you doing anything.** At **7:30am on the 2nd of each month** the portal emails the month-just-ended stock report for JAWS to Chris and Morgan. The full version lives at **Reports → Stock EOM**, where you can also pick an earlier month or press **Rebuild from MYOB** if something looks stale.
+
+This is not the same as **Stock & Inventory** (`/stock`), which shows *today* on rolling 30/90-day windows. The month-end report is a frozen snapshot, and it's the only place you can see stock movement **month against month** — MYOB itself only ever tells you today's quantity, so the comparison exists purely because the portal saves each month.
+
+**The eight numbers at the top:** stock on hand · sales for the month (ex GST) · gross margin · stock turn and days of inventory · dead stock (nothing sold in 90 days) · never sold · overstock (more than a year of cover) · reorder suggested. Each shows the movement against last month once there are two months of history.
+
+**The lists, and what to actually do with them**
+
+| List | What it's telling you | Action |
+|---|---|---|
+| Top movers (units) and Biggest margin earners | What shifted, and what paid. These are usually *different* SKUs | Keep the margin list stocked first |
+| Where the money is sitting | Held value grouped by how recently it last sold | The **Never sold** row is the argument worth having each month |
+| Slow movers / Never sold | Capital doing nothing, worst first | Clearance, write-down, or stop reordering |
+| **Reorder suggestions** | Below the MYOB alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ; cost uses last price paid | This is the month's buy list — cross-check against the Stock Order sheet before ordering |
+| Sold while out of stock | Demand you couldn't fill on the spot | Raise the alert level on those SKUs |
+| Sold below cost | Selling price ex GST is under average cost | Fix the price, or find out why it was discounted |
+| **Cost creep** | Last paid is more than 10% above average cost — the buy price moved and the sell price probably didn't | The price-review list. Quietly the most valuable table in the report |
+| Overstock | More than a year of cover at current run rate | Money you could get back |
+| Suppliers | Where stock value and reorder spend concentrate | Leverage on your two or three biggest |
+| Data to tidy up | Negative on-hand, stock with no cost, stock with no sell price | Record problems, not stock problems — each one distorts every figure above |
+
+**Two things to know before quoting any of it**
+
+- **The on-hand figures are read when the report runs, not at midnight on the last day of the month.** MYOB can't give a historical quantity. The 2nd-of-the-month timing keeps the gap small, and the report prints the exact read time on its face.
+- **Margin is indicative, not the P&L.** It's units multiplied by *current* average cost, because invoice lines don't carry the cost of sale. It ranks SKUs honestly and finds leakage — but don't reconcile it to the accounts and don't expect it to match the year-end figures.
+
+**Who can see it.** Admins and managers with stock access. It carries costs, margins and supplier pricing, so a reports-only login can't open it — that's deliberate, not a bug.
+
+---
+
 ## 9. Tasks, projects and messages
 
 - **Tasks** — board and list views, with automations you draw as a flow diagram.
@@ -428,6 +460,8 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | A weekly email report shows a count that is clearly too low — or zero | A report query that has outgrown the database's 1000-row response cap and is silently dropping the rest | Don't assume the underlying data is missing — check the live screen (Reports → Workshop Map, Reports → Sales Report) for the same period first. If the screen is right and the email is wrong, it's the report, not the workshop. Tell Chris. |
 | Someone approved leave and the person says they got nothing | Either the item wasn't on the application path (a note keyed into a payroll group — §9a), or the portal has no address for them | Settings → Leave Notifications: the item will be under "Waiting on an email address" if it's an address problem. If it isn't listed at all, the decision was made on a note rather than an application. |
 | Ryan gets "no email address for …" notices | The applicant's name isn't in the staff directory and the item has no Email Address | Add either one (§9a) — the email then sends itself; nobody needs to re-approve. You only get that notice once per application. |
+| Stock EOM figures look stale or wrong | The report shows a stored snapshot, so it's frozen at whatever time it was generated | Reports → Stock EOM → **Rebuild from MYOB**. If the on-hand looks off by a few days' trading, that's expected — see §8.9 |
+| The month-end stock email didn't arrive on the 2nd | Either the MYOB connection or the recipient list | Admin → Connections for MYOB health, then Reports → Stock EOM → **Email this report** to send it by hand |
 | Someone can't see a tab | Permissions, working as designed | Ask Chris |
 
 **Where to look first, always:** Admin → Connections. It shows every integration and when it last succeeded.
@@ -446,6 +480,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Check every integration's health | Admin → Connections |
 | Per-person reply-to address on outgoing mail | Settings → Users |
 | Leave approval emails — switch, HR address, staff directory, who was emailed | Settings → Leave Notifications (§9a) |
+| Who gets the month-end stock email | Settings → Integrations → `JAWS_EOM_EMAIL_TO` (comma-separated) |
 
 ---
 

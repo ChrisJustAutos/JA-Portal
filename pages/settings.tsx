@@ -349,6 +349,7 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
     { id: 'mgmt-dashboard', label: 'Management Dashboard' },
     { id: 'workshop-map', label: 'Workshop Map' },
     { id: 'distributor-map', label: 'Distributor Map' },
+    { id: 'jaws-stock-eom', label: 'Stock EOM' },
   ]
   function ReportTabPicker({ value, onChange }: { value: string[] | null; onChange: (next: string[] | null) => void }) {
     const list = value || []

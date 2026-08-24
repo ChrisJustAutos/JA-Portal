@@ -1,0 +1,469 @@
+// lib/jaws-stock-eom.ts
+// SERVER-ONLY. Month-end stock report for the JAWS company file.
+//
+// The /stock page (pages/api/inventory.ts) already computes the LIVE inventory
+// picture — reorder alerts, velocity, dead stock, margin, on-order. This module
+// is the month-end layer that page can't provide:
+//
+//   * the month's trading in isolation (units, revenue, COGS, margin), not a
+//     rolling 30/90/365 window
+//   * month-on-month movement, which needs stored history because AccountRight
+//     only ever tells you today's quantity (migration 199)
+//   * stock turn and days-of-inventory
+//   * the exception lists worth reviewing once a month rather than daily:
+//     ageing of held value, margin leakage, cost creep, unfilled demand,
+//     overstock, supplier concentration, data integrity
+//
+// Deliberately reuses lib/myob-reporting's proven readers and lib/gst's
+// lineExGst so its numbers reconcile with the /stock page rather than drifting
+// into a second, subtly different truth.
+//
+// ⚠ TWO HONEST APPROXIMATIONS, stated on the report itself:
+//   1. On-hand is read live, so it is "as at generation time", not the last
+//      instant of the month. AccountRight exposes no historical quantity.
+//   2. COGS is units × current AverageCost. Invoice lines don't carry the cost
+//      of sale, and average cost moves, so margin is indicative — good enough to
+//      rank SKUs and spot leakage, not a substitute for the P&L.
+
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { fetchInventoryItems, fetchSaleInvoicesWithLines } from './myob-reporting'
+import { lineExGst } from './gst'
+import { getIntegrations } from './integration-config'
+import { sendMail } from './email'
+
+let _sb: SupabaseClient | null = null
+function sb(): SupabaseClient {
+  if (_sb) return _sb
+  _sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
+  return _sb
+}
+
+const LIST_CAP = 25          // rows kept per exception list — a review list, not a dump
+const OVERSTOCK_DAYS = 365   // cover beyond a year = excess capital
+const COST_CREEP_PCT = 0.10  // last purchase price this much above average cost
+
+const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+const r2 = (n: number) => Math.round(n * 100) / 100
+const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+
+/** 'YYYY-MM' → inclusive [start, end] dates. */
+export function monthWindow(month: string): { start: Date; end: Date; label: string } {
+  const [y, m] = month.split('-').map(Number)
+  const start = new Date(Date.UTC(y, m - 1, 1))
+  const end = new Date(Date.UTC(y, m, 0, 23, 59, 59))
+  const label = start.toLocaleDateString('en-AU', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  return { start, end, label }
+}
+
+/** The month just ended, in Brisbane terms (the cron's default target). */
+export function previousMonth(now = new Date()): string {
+  const bne = new Date(now.getTime() + 10 * 3600 * 1000)
+  return monthKey(new Date(Date.UTC(bne.getUTCFullYear(), bne.getUTCMonth() - 1, 1)))
+}
+
+export interface EomItem {
+  sku: string; name: string; supplier: string | null
+  onHand: number; available: number; committed: number; onOrder: number
+  avgCost: number; stockValue: number
+  sellEx: number; marginPct: number | null; marginDollar: number | null
+  lastPurchasePrice: number | null
+  reorderLevel: number; reorderQty: number
+  monthUnits: number; monthRevenueEx: number; monthCogs: number; monthMargin: number
+  prevMonthUnits: number
+  units90: number; units365: number
+  lastSold: string | null; daysSinceLastSold: number | null
+  runRatePerDay: number; daysOfCover: number | null
+}
+
+export interface EomReport {
+  month: string; monthLabel: string
+  generatedAt: string
+  headline: {
+    skus: number; stockValue: number; qtyOnHand: number; qtyOnOrder: number; qtyCommitted: number
+    monthUnits: number; monthRevenueEx: number; monthCogs: number; monthMargin: number; monthMarginPct: number | null
+    turnsAnnualised: number | null; daysInventory: number | null
+    lowStockCount: number; outOfStockCount: number
+    dead90Count: number; dead90Value: number
+    dead180Count: number; dead180Value: number
+    neverSoldCount: number; neverSoldValue: number
+    overstockCount: number; overstockValue: number
+    reorderCount: number; reorderCost: number
+    activeSkusThisMonth: number
+  }
+  ageing: Array<{ bucket: string; skus: number; value: number }>
+  topByUnits: EomItem[]
+  topByRevenue: EomItem[]
+  topByMargin: EomItem[]
+  slowMovers: EomItem[]
+  neverSold: EomItem[]
+  reorder: Array<EomItem & { suggestQty: number; suggestCost: number; reason: string }>
+  belowCost: EomItem[]
+  costCreep: EomItem[]
+  unfilledDemand: EomItem[]
+  overstock: EomItem[]
+  suppliers: Array<{ supplier: string; skus: number; stockValue: number; monthRevenueEx: number; reorderCost: number }>
+  integrity: Array<{ sku: string; name: string; issue: string; detail: string }>
+  stocktake: { count: number; latest: string | null; matched: number; unmatched: number } | null
+  trend: Array<{ month: string; stockValue: number; monthRevenueEx: number; monthMarginPct: number | null; deadValue: number; turns: number | null }>
+  notes: string[]
+}
+
+export async function buildEomReport(month: string): Promise<EomReport> {
+  const { start, end, label } = monthWindow(month)
+  const prev = monthWindow(previousMonthOf(month))
+  const now = new Date()
+
+  const [items, sales] = await Promise.all([
+    fetchInventoryItems('JAWS'),
+    // 13 months back from the START of the reported month gives the month itself,
+    // the month before it, and a full 12 months for run rates and turns.
+    fetchSaleInvoicesWithLines('JAWS', { start: new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 12, 1)).toISOString().slice(0, 10) }),
+  ])
+
+  const invById = new Map<string, { date: Date; isTaxInclusive: boolean }>()
+  for (const inv of sales.invoices) {
+    if (!inv.ID || !inv.Date) continue
+    invById.set(String(inv.ID), { date: new Date(inv.Date), isTaxInclusive: inv.IsTaxInclusive === true })
+  }
+
+  interface Agg {
+    monthUnits: number; monthRevenueEx: number
+    prevUnits: number
+    units90: number; units365: number; revenue365Ex: number
+    lastSold: Date | null
+    monthly: Record<string, { units: number; revEx: number }>
+  }
+  const per = new Map<string, Agg>()
+  const d90 = new Date(end.getTime() - 90 * 86400000)
+  const d365 = new Date(end.getTime() - 365 * 86400000)
+
+  for (const line of sales.lines) {
+    const sku = line.ItemNumber ? String(line.ItemNumber).trim() : ''
+    if (!sku) continue
+    const meta = invById.get(String(line.SaleInvoiceId))
+    if (!meta) continue
+    const qty = num(line.ShipQuantity)
+    const ex = lineExGst(num(line.Total), meta.isTaxInclusive, line.TaxCodeCode)
+    let a = per.get(sku)
+    if (!a) { a = { monthUnits: 0, monthRevenueEx: 0, prevUnits: 0, units90: 0, units365: 0, revenue365Ex: 0, lastSold: null, monthly: {} }; per.set(sku, a) }
+    const d = meta.date
+    if (d >= start && d <= end) { a.monthUnits += qty; a.monthRevenueEx += ex }
+    if (d >= prev.start && d <= prev.end) a.prevUnits += qty
+    if (d >= d90 && d <= end) a.units90 += qty
+    if (d >= d365 && d <= end) { a.units365 += qty; a.revenue365Ex += ex }
+    if (!a.lastSold || d > a.lastSold) a.lastSold = d
+    const mk = monthKey(d)
+    const m = a.monthly[mk] || { units: 0, revEx: 0 }
+    m.units += qty; m.revEx += ex
+    a.monthly[mk] = m
+  }
+
+  const enriched: EomItem[] = items.map((it: any) => {
+    const sku = String(it.Number || '').trim()
+    const onHand = num(it.QuantityOnHand)
+    const avgCost = num(it.AverageCost)
+    const sellInc = num(it.SellingBaseSellingPrice)
+    const incTax = it.SellingIsTaxInclusive === true
+    const sellEx = sellInc > 0 ? (incTax && String(it.SellingTaxCodeCode || '') === 'GST' ? sellInc / 1.1 : sellInc) : 0
+    const a = per.get(sku)
+    const monthUnits = a ? a.monthUnits : 0
+    const monthRevenueEx = a ? a.monthRevenueEx : 0
+    const monthCogs = monthUnits * avgCost
+    const units90 = a ? a.units90 : 0
+    const lastSold = a?.lastSold || null
+    const runRatePerDay = units90 / 90
+    const supplierRaw = it.RestockingSupplierName ? String(it.RestockingSupplierName) : null
+    return {
+      sku, name: String(it.Name || ''),
+      supplier: supplierRaw && supplierRaw !== '*None' ? supplierRaw : null,
+      onHand, available: num(it.QuantityAvailable), committed: num(it.QuantityCommitted), onOrder: num(it.QuantityOnOrder),
+      avgCost, stockValue: num(it.CurrentValue),
+      sellEx, marginPct: sellEx > 0 ? (sellEx - avgCost) / sellEx : null,
+      marginDollar: sellEx > 0 ? sellEx - avgCost : null,
+      lastPurchasePrice: it.BuyingLastPurchasePrice != null ? num(it.BuyingLastPurchasePrice) : null,
+      reorderLevel: num(it.RestockingMinimumLevelForRestockingAlert),
+      reorderQty: num(it.RestockingDefaultOrderQuantity),
+      monthUnits, monthRevenueEx, monthCogs, monthMargin: monthRevenueEx - monthCogs,
+      prevMonthUnits: a ? a.prevUnits : 0,
+      units90, units365: a ? a.units365 : 0,
+      lastSold: lastSold ? lastSold.toISOString().slice(0, 10) : null,
+      daysSinceLastSold: lastSold ? Math.round((end.getTime() - lastSold.getTime()) / 86400000) : null,
+      runRatePerDay,
+      daysOfCover: runRatePerDay > 0 ? onHand / runRatePerDay : null,
+    }
+  })
+
+  const held = enriched.filter(i => i.stockValue > 0)
+  const stockValue = enriched.reduce((s, i) => s + i.stockValue, 0)
+  const monthRevenueEx = enriched.reduce((s, i) => s + i.monthRevenueEx, 0)
+  const monthCogs = enriched.reduce((s, i) => s + i.monthCogs, 0)
+  const cogs12m = enriched.reduce((s, i) => s + i.units365 * i.avgCost, 0)
+  const turns = stockValue > 0 ? cogs12m / stockValue : null
+
+  const dead90 = held.filter(i => i.units90 === 0)
+  const dead180 = held.filter(i => i.daysSinceLastSold === null || i.daysSinceLastSold > 180)
+  const neverSold = held.filter(i => i.lastSold === null)
+  const overstock = held.filter(i => i.daysOfCover !== null && i.daysOfCover > OVERSTOCK_DAYS)
+
+  // Reorder: below the alert level, or cover under 60 days on something that
+  // actually moves. Quantity respects MOQ where MYOB has one.
+  const reorder = enriched
+    .map(i => {
+      const belowLevel = i.reorderLevel > 0 && i.onHand <= i.reorderLevel
+      const thinCover = i.daysOfCover !== null && i.daysOfCover < 60 && i.units90 > 0
+      if (!belowLevel && !thinCover) return null
+      const target = Math.max(i.reorderLevel, Math.ceil(i.runRatePerDay * 90))
+      const gap = Math.max(0, target - i.onHand - i.onOrder)
+      const suggestQty = Math.max(gap, i.reorderQty > 0 && gap > 0 ? i.reorderQty : 0)
+      if (suggestQty <= 0) return null
+      return {
+        ...i, suggestQty, suggestCost: r2(suggestQty * (i.lastPurchasePrice || i.avgCost)),
+        reason: belowLevel && thinCover ? 'below alert level + thin cover' : belowLevel ? 'below alert level' : 'under 60 days cover',
+      }
+    })
+    .filter(Boolean) as EomReport['reorder']
+
+  const belowCost = enriched.filter(i => i.monthUnits > 0 && i.sellEx > 0 && i.avgCost > 0 && i.sellEx < i.avgCost)
+  const costCreep = enriched.filter(i =>
+    i.lastPurchasePrice != null && i.lastPurchasePrice > 0 && i.avgCost > 0 &&
+    i.lastPurchasePrice > i.avgCost * (1 + COST_CREEP_PCT) && i.sellEx > 0)
+  const unfilledDemand = enriched.filter(i => i.monthUnits > 0 && (i.available <= 0 || i.committed > i.onHand))
+
+  const ageBuckets: Array<[string, (i: EomItem) => boolean]> = [
+    ['Sold in last 30 days', i => i.daysSinceLastSold !== null && i.daysSinceLastSold <= 30],
+    ['30–90 days', i => i.daysSinceLastSold !== null && i.daysSinceLastSold > 30 && i.daysSinceLastSold <= 90],
+    ['90–180 days', i => i.daysSinceLastSold !== null && i.daysSinceLastSold > 90 && i.daysSinceLastSold <= 180],
+    ['180–365 days', i => i.daysSinceLastSold !== null && i.daysSinceLastSold > 180 && i.daysSinceLastSold <= 365],
+    ['Over a year', i => i.daysSinceLastSold !== null && i.daysSinceLastSold > 365],
+    ['Never sold', i => i.daysSinceLastSold === null],
+  ]
+  const ageing = ageBuckets.map(([bucket, test]) => {
+    const rows = held.filter(test)
+    return { bucket, skus: rows.length, value: r2(rows.reduce((s, i) => s + i.stockValue, 0)) }
+  })
+
+  const bySupplier = new Map<string, { supplier: string; skus: number; stockValue: number; monthRevenueEx: number; reorderCost: number }>()
+  for (const i of enriched) {
+    const k = i.supplier || '(no supplier set)'
+    const row = bySupplier.get(k) || { supplier: k, skus: 0, stockValue: 0, monthRevenueEx: 0, reorderCost: 0 }
+    row.skus++; row.stockValue += i.stockValue; row.monthRevenueEx += i.monthRevenueEx
+    bySupplier.set(k, row)
+  }
+  for (const r of reorder) {
+    const row = bySupplier.get(r.supplier || '(no supplier set)')
+    if (row) row.reorderCost += r.suggestCost
+  }
+
+  const integrity: EomReport['integrity'] = []
+  for (const i of enriched) {
+    if (i.onHand < 0) integrity.push({ sku: i.sku, name: i.name, issue: 'Negative on-hand', detail: `${i.onHand} units` })
+    else if (i.onHand > 0 && i.avgCost <= 0) integrity.push({ sku: i.sku, name: i.name, issue: 'Stock with no cost', detail: `${i.onHand} units at $0 average cost` })
+    if (i.onHand > 0 && i.sellEx <= 0) integrity.push({ sku: i.sku, name: i.name, issue: 'No selling price', detail: `${i.onHand} units held` })
+    if (i.marginPct !== null && i.marginPct < 0 && i.onHand > 0) integrity.push({ sku: i.sku, name: i.name, issue: 'Sell price below cost', detail: `sell $${r2(i.sellEx)} ex vs cost $${r2(i.avgCost)}` })
+  }
+
+  // Stocktakes completed inside the month (report-only, migration 141)
+  let stocktake: EomReport['stocktake'] = null
+  try {
+    const { data } = await sb().from('jaws_stocktake_uploads')
+      .select('completed_at, matched_count, unmatched_count')
+      .gte('completed_at', start.toISOString()).lte('completed_at', end.toISOString())
+    if (data && data.length) {
+      stocktake = {
+        count: data.length,
+        latest: data.map(d => d.completed_at).sort().slice(-1)[0]?.slice(0, 10) || null,
+        matched: data.reduce((s, d) => s + (d.matched_count || 0), 0),
+        unmatched: data.reduce((s, d) => s + (d.unmatched_count || 0), 0),
+      }
+    }
+  } catch { /* report-only extra; never fail the run for it */ }
+
+  const { data: hist } = await sb().from('jaws_stock_snapshots')
+    .select('month, stock_value, month_revenue_ex, month_margin_pct, dead_90_value, turns_annualised')
+    .order('month', { ascending: true }).limit(24)
+  const trend = (hist || []).filter(h => h.month <= month).map(h => ({
+    month: h.month, stockValue: Number(h.stock_value) || 0, monthRevenueEx: Number(h.month_revenue_ex) || 0,
+    monthMarginPct: h.month_margin_pct == null ? null : Number(h.month_margin_pct),
+    deadValue: Number(h.dead_90_value) || 0,
+    turns: h.turns_annualised == null ? null : Number(h.turns_annualised),
+  }))
+
+  const byMonthUnits = (a: EomItem, b: EomItem) => b.monthUnits - a.monthUnits
+  const cut = (rows: EomItem[]) => rows.slice(0, LIST_CAP)
+
+  return {
+    month, monthLabel: label, generatedAt: now.toISOString(),
+    headline: {
+      skus: enriched.length,
+      stockValue: r2(stockValue),
+      qtyOnHand: r2(enriched.reduce((s, i) => s + i.onHand, 0)),
+      qtyOnOrder: r2(enriched.reduce((s, i) => s + i.onOrder, 0)),
+      qtyCommitted: r2(enriched.reduce((s, i) => s + i.committed, 0)),
+      monthUnits: r2(enriched.reduce((s, i) => s + i.monthUnits, 0)),
+      monthRevenueEx: r2(monthRevenueEx),
+      monthCogs: r2(monthCogs),
+      monthMargin: r2(monthRevenueEx - monthCogs),
+      monthMarginPct: monthRevenueEx > 0 ? r2((monthRevenueEx - monthCogs) / monthRevenueEx) : null,
+      turnsAnnualised: turns == null ? null : r2(turns),
+      daysInventory: turns && turns > 0 ? Math.round(365 / turns) : null,
+      lowStockCount: enriched.filter(i => i.onHand > 0 && i.reorderLevel > 0 && i.onHand <= i.reorderLevel).length,
+      outOfStockCount: enriched.filter(i => i.onHand <= 0).length,
+      dead90Count: dead90.length, dead90Value: r2(dead90.reduce((s, i) => s + i.stockValue, 0)),
+      dead180Count: dead180.length, dead180Value: r2(dead180.reduce((s, i) => s + i.stockValue, 0)),
+      neverSoldCount: neverSold.length, neverSoldValue: r2(neverSold.reduce((s, i) => s + i.stockValue, 0)),
+      overstockCount: overstock.length, overstockValue: r2(overstock.reduce((s, i) => s + i.stockValue, 0)),
+      reorderCount: reorder.length, reorderCost: r2(reorder.reduce((s, i) => s + i.suggestCost, 0)),
+      activeSkusThisMonth: enriched.filter(i => i.monthUnits > 0).length,
+    },
+    ageing,
+    topByUnits: cut([...enriched].filter(i => i.monthUnits > 0).sort(byMonthUnits)),
+    topByRevenue: cut([...enriched].filter(i => i.monthRevenueEx > 0).sort((a, b) => b.monthRevenueEx - a.monthRevenueEx)),
+    topByMargin: cut([...enriched].filter(i => i.monthMargin > 0).sort((a, b) => b.monthMargin - a.monthMargin)),
+    slowMovers: cut([...dead90].sort((a, b) => b.stockValue - a.stockValue)),
+    neverSold: cut([...neverSold].sort((a, b) => b.stockValue - a.stockValue)),
+    reorder: reorder.sort((a, b) => b.suggestCost - a.suggestCost).slice(0, LIST_CAP * 2),
+    belowCost: cut([...belowCost].sort((a, b) => (a.sellEx - a.avgCost) - (b.sellEx - b.avgCost))),
+    costCreep: cut([...costCreep].sort((a, b) => (b.lastPurchasePrice! - b.avgCost) - (a.lastPurchasePrice! - a.avgCost))),
+    unfilledDemand: cut([...unfilledDemand].sort(byMonthUnits)),
+    overstock: cut([...overstock].sort((a, b) => b.stockValue - a.stockValue)),
+    suppliers: Array.from(bySupplier.values())
+      .map(s => ({ ...s, stockValue: r2(s.stockValue), monthRevenueEx: r2(s.monthRevenueEx), reorderCost: r2(s.reorderCost) }))
+      .sort((a, b) => b.stockValue - a.stockValue).slice(0, LIST_CAP),
+    integrity: integrity.slice(0, LIST_CAP * 2),
+    stocktake,
+    trend,
+    notes: [
+      `On-hand quantities read from MYOB at ${now.toISOString().slice(0, 16).replace('T', ' ')} UTC — "as at now", not the last instant of ${label}. AccountRight exposes no historical quantity.`,
+      'COGS and margin use units × current average cost. Invoice lines carry no cost of sale, so these figures rank SKUs reliably but are not the P&L.',
+      `Stock turn = trailing 12-month COGS ÷ current stock value. Overstock = more than ${OVERSTOCK_DAYS} days of cover at the 90-day run rate.`,
+      'Revenue is ex-GST, normalised per invoice using the parent tax-inclusive flag and the line tax code (lib/gst).',
+    ],
+  }
+}
+
+function previousMonthOf(month: string): string {
+  const [y, m] = month.split('-').map(Number)
+  return monthKey(new Date(Date.UTC(y, m - 2, 1)))
+}
+
+export async function saveSnapshot(rep: EomReport, userId?: string | null): Promise<void> {
+  const h = rep.headline
+  const { error } = await sb().from('jaws_stock_snapshots').upsert({
+    month: rep.month, generated_at: rep.generatedAt, generated_by: userId || null,
+    skus: h.skus, stock_value: h.stockValue, qty_on_hand: h.qtyOnHand, qty_on_order: h.qtyOnOrder, qty_committed: h.qtyCommitted,
+    month_units: h.monthUnits, month_revenue_ex: h.monthRevenueEx, month_cogs: h.monthCogs,
+    month_margin: h.monthMargin, month_margin_pct: h.monthMarginPct,
+    turns_annualised: h.turnsAnnualised, days_inventory: h.daysInventory,
+    low_stock_count: h.lowStockCount, out_of_stock_count: h.outOfStockCount,
+    dead_90_count: h.dead90Count, dead_90_value: h.dead90Value,
+    dead_180_count: h.dead180Count, dead_180_value: h.dead180Value,
+    never_sold_count: h.neverSoldCount, never_sold_value: h.neverSoldValue,
+    overstock_count: h.overstockCount, overstock_value: h.overstockValue,
+    reorder_count: h.reorderCount, reorder_cost: h.reorderCost,
+    payload: rep,
+  }, { onConflict: 'month' })
+  if (error) throw new Error(`jaws_stock_snapshots write failed: ${error.message}`)
+}
+
+export async function loadSnapshot(month: string): Promise<EomReport | null> {
+  const { data } = await sb().from('jaws_stock_snapshots').select('payload').eq('month', month).maybeSingle()
+  return (data?.payload as EomReport) || null
+}
+
+export async function listSnapshotMonths(): Promise<Array<{ month: string; generated_at: string }>> {
+  const { data } = await sb().from('jaws_stock_snapshots').select('month, generated_at').order('month', { ascending: false }).limit(36)
+  return data || []
+}
+
+// ── the month-end email ──────────────────────────────────────────────────
+
+const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const money = (n: number) => '$' + Math.round(n).toLocaleString('en-AU')
+const pct = (n: number | null) => n == null ? '—' : `${(n * 100).toFixed(1)}%`
+
+function delta(now: number, before: number | undefined | null): string {
+  if (before == null || before === 0) return ''
+  const d = now - before
+  const p = (d / Math.abs(before)) * 100
+  const up = d >= 0
+  const colour = up ? '#0a7c42' : '#b3261e'
+  return `<span style="color:${colour};font-size:12px"> ${up ? '▲' : '▼'} ${Math.abs(p).toFixed(1)}%</span>`
+}
+
+export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: string; html: string } {
+  const h = rep.headline
+  const prev = rep.trend.filter(t => t.month < rep.month).slice(-1)[0]
+  const row = (label: string, value: string, extra = '') =>
+    `<tr><td style="padding:5px 14px 5px 0;color:#555">${esc(label)}</td><td style="padding:5px 0;font-weight:600">${value}${extra}</td></tr>`
+
+  const listTable = (title: string, rows: string[][], head: string[]) => {
+    if (!rows.length) return `<h3 style="font-size:14px;margin:18px 0 6px">${esc(title)}</h3><p style="margin:0;color:#666;font-size:13px">Nothing to report.</p>`
+    return `<h3 style="font-size:14px;margin:18px 0 6px">${esc(title)}</h3>
+      <table style="border-collapse:collapse;font-size:12.5px;width:100%">
+        <tr>${head.map(c => `<th align="left" style="border-bottom:1px solid #ddd;padding:4px 8px 4px 0;color:#666;font-weight:600">${esc(c)}</th>`).join('')}</tr>
+        ${rows.map(r => `<tr>${r.map((c, i) => `<td style="padding:4px 8px 4px 0;border-bottom:1px solid #f1f1f1${i ? ';text-align:right' : ''}">${c}</td>`).join('')}</tr>`).join('')}
+      </table>`
+  }
+
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;max-width:760px;margin:0 auto">
+    <div style="border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:14px">
+      <div style="font-size:18px;font-weight:700">Just Autos — JAWS Stock, ${esc(rep.monthLabel)}</div>
+      <div style="font-size:12px;color:#666;margin-top:3px">Month-end report · stock read ${esc(rep.generatedAt.slice(0, 10))}</div>
+    </div>
+
+    <table style="border-collapse:collapse;margin-bottom:6px">
+      ${row('Stock on hand', money(h.stockValue), delta(h.stockValue, prev?.stockValue))}
+      ${row('Sales this month (ex GST)', money(h.monthRevenueEx), delta(h.monthRevenueEx, prev?.monthRevenueEx))}
+      ${row('Gross margin', `${money(h.monthMargin)} (${pct(h.monthMarginPct)})`, prev?.monthMarginPct != null && h.monthMarginPct != null ? delta(h.monthMarginPct, prev.monthMarginPct) : '')}
+      ${row('Stock turn (12m)', h.turnsAnnualised == null ? '—' : `${h.turnsAnnualised.toFixed(2)}× · ${h.daysInventory} days of inventory`)}
+      ${row('SKUs sold this month', `${h.activeSkusThisMonth} of ${h.skus}`)}
+      ${row('Dead stock (no sale 90d)', `${money(h.dead90Value)} across ${h.dead90Count} SKUs`, delta(h.dead90Value, prev?.deadValue))}
+      ${row('Never sold', `${money(h.neverSoldValue)} across ${h.neverSoldCount} SKUs`)}
+      ${row('Overstock (>1yr cover)', `${money(h.overstockValue)} across ${h.overstockCount} SKUs`)}
+      ${row('Out of stock / low', `${h.outOfStockCount} out · ${h.lowStockCount} low`)}
+      ${row('Reorder suggested', `${h.reorderCount} SKUs · ${money(h.reorderCost)} to buy`)}
+    </table>
+
+    ${listTable('Top movers this month (units)', rep.topByUnits.slice(0, 10).map(i =>
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', String(r2(i.monthUnits)), money(i.monthRevenueEx), pct(i.marginPct)]),
+      ['SKU', 'Units', 'Revenue ex', 'Margin'])}
+
+    ${listTable('Biggest margin earners this month', rep.topByMargin.slice(0, 10).map(i =>
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', money(i.monthMargin), pct(i.marginPct)]),
+      ['SKU', 'Margin $', 'Margin %'])}
+
+    ${listTable('Capital sitting still — no sale in 90 days', rep.slowMovers.slice(0, 10).map(i =>
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', money(i.stockValue), i.lastSold ? esc(i.lastSold) : 'never']),
+      ['SKU', 'Value held', 'Last sold'])}
+
+    ${listTable('Reorder suggestions', rep.reorder.slice(0, 12).map(i =>
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 34)) + '</span>', String(r2(i.suggestQty)), money(i.suggestCost), esc(i.reason)]),
+      ['SKU', 'Qty', 'Est. cost', 'Why'])}
+
+    ${rep.unfilledDemand.length ? listTable('Sold while out of stock — demand you could not fill', rep.unfilledDemand.slice(0, 8).map(i =>
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', String(r2(i.monthUnits)), String(r2(i.available))]),
+      ['SKU', 'Units sold', 'Available']) : ''}
+
+    ${rep.costCreep.length ? listTable('Cost creep — buy price up, sell price unchanged', rep.costCreep.slice(0, 8).map(i =>
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 34)) + '</span>', money(i.avgCost), money(i.lastPurchasePrice || 0), pct(i.marginPct)]),
+      ['SKU', 'Avg cost', 'Last paid', 'Margin now']) : ''}
+
+    <p style="margin:20px 0 6px"><a href="${esc(portalUrl)}/reports/jaws-stock-eom?month=${esc(rep.month)}" style="color:#4f8ef7;font-weight:600">Open the full report in the portal →</a></p>
+    <div style="border-top:1px solid #eee;margin-top:16px;padding-top:10px;color:#888;font-size:11.5px">
+      ${rep.notes.map(n => `<div style="margin-bottom:4px">${esc(n)}</div>`).join('')}
+      Just Autos Mechanical · generated automatically by the Just Autos portal.
+    </div>
+  </div>`
+
+  return { subject: `JAWS stock — ${rep.monthLabel}: ${money(h.stockValue)} on hand, ${money(h.monthMargin)} margin`, html }
+}
+
+export async function emailEomReport(rep: EomReport): Promise<string[]> {
+  const cfg = await getIntegrations(['JAWS_EOM_EMAIL_TO', 'PORTAL_BASE_URL'])
+  const to = (cfg.JAWS_EOM_EMAIL_TO || 'chris@justautosmechanical.com.au,morgan@justautosmechanical.com.au')
+    .split(/[,;]+/).map(s => s.trim()).filter(Boolean)
+  const portalUrl = cfg.PORTAL_BASE_URL || 'https://justautos.app'
+  const mail = renderEomEmail(rep, portalUrl)
+  await sendMail(to[0], { to, subject: mail.subject, html: mail.html })
+  return to
+}

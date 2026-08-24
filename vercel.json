@@ -118,6 +118,12 @@
     },
     "pages/api/cron/mgmt-dashboard-warm.ts": {
       "maxDuration": 300
+    },
+    "pages/api/cron/jaws-stock-eom.ts": {
+      "maxDuration": 300
+    },
+    "pages/api/reports/jaws-stock-eom.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [
@@ -216,6 +222,10 @@
     {
       "path": "/api/cron/leave-decisions",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/jaws-stock-eom",
+      "schedule": "30 21 1 * *"
     }
   ]
 }

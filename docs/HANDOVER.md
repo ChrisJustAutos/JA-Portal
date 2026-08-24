@@ -13,7 +13,7 @@ An internal management platform for **Just Autos**, covering two MYOB business e
 - **JAWS** — Just Autos Wholesale (distribution arm, holds stock, ~14 distributors across Australia)
 - **VPS** — Vehicle Performance Solutions (the workshop entity; runs on **Mechanics Desk**, which remains the system of record — see §7.2)
 
-It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (24 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
+It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (25 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
 
 | | |
 |---|---|
@@ -95,7 +95,7 @@ Error fingerprints: generic 500 HTML page = module-load crash (bad import / `.ts
 
 ### Database migrations (SOP)
 
-- Migrations live in `migrations/NNN_description.sql` (198 files, `002`–`198`; note `148` and `153` are each duplicated — sequence is a convention, not a key. Next number: **199**).
+- Migrations live in `migrations/NNN_description.sql` (199 files, `002`–`199`; note `148` and `153` are each duplicated — sequence is a convention, not a key. Next number: **200**).
 - There is **no migration runner**. The procedure is: write the SQL file in `migrations/`, apply it to the live DB via the **Supabase MCP `apply_migration`** tool (project `qtiscbvhlvdvafwtdtcd`) **before** pushing code that depends on it, then commit both.
 - The repo file is the source-of-truth record; the MCP apply is what actually changes the DB.
 
@@ -300,7 +300,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 
 ## 6. Scheduled automation
 
-### 6.1 Vercel crons (24 — `vercel.json`; schedules are UTC; Brisbane = UTC+10)
+### 6.1 Vercel crons (25 — `vercel.json`; schedules are UTC; Brisbane = UTC+10)
 
 | Cron | Brisbane time | Purpose |
 |---|---|---|
@@ -327,6 +327,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 | `/api/cron/b2b-dropship-confirm` | every 15 min | Supplier confirmation emails → full drop-ship receiving flow |
 | `/api/cron/mgmt-dashboard-warm` | 05:30 daily | Pre-compute Management Dashboard MYOB bundles |
 | `/api/cron/leave-decisions` | every 15 min | Leave applications decided on the Monday board → email the applicant (approved *and* denied), cc/reply-to HR. Only items on the application path count — see §7.17. `LEAVE_EMAILS_ENABLED=false` switches it off |
+| `/api/cron/jaws-stock-eom` | 07:30 on the **2nd** | JAWS month-end stock report for the month just ended → snapshot (migration 199) + email to `JAWS_EOM_EMAIL_TO`. Cron can't express "last day of month"; running into the new month also guarantees the month's invoices are all in. See §7.18 |
 
 ⚠ Two handlers exist but are **not scheduled** (headers claim otherwise): `bank-payments-slack.ts` (7am payment digests) and `slack-cleanup.ts` (parts-bot TTL deletes). Manual-invoke only until added to `vercel.json`.
 
@@ -458,6 +459,8 @@ CDR list with audio, transcripts, coaching analysis (per-call-type rubrics), Sen
 **SOP if calls stop appearing**: check Connections page (`freepbx_cdr_sync` freshness) → SSH to the PBX via Tailscale → check `ja-cdr-sync` systemd timer. Transcripts stale → `ja-transcribe`. Live monitor "not configured" → `ja-ami-monitor` hasn't pushed a snapshot in >20s.
 
 ### 7.8 Reports (`/reports/*`)
+
+Sub-tabs: Reports · Sales Report · Sales Dashboard · Management Dashboard · Forecast · Workshop Map · Distributor Map · **Stock EOM** (§7.18, `view:stock`) · Distributors.
 
 Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it reported over the portal workshop tables, which stay empty while MechanicDesk is the system of record) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings) · **Sales Dashboard** (daily/monthly/total sales taken, plus a quote-pipeline view — see below) · **Forecast** (admin+manager; portal rebuild of the Monday "Forecast Dashboard - Includes JAWS" — see below). Per-user report-tab allowlists control who sees what.
 
@@ -605,6 +608,24 @@ Staff apply for leave through the monday.com **Payroll & Leave Applications** bo
 - **Settings** resolve DB-first through `integration_settings`: `LEAVE_EMAILS_ENABLED` (kill switch) and `LEAVE_HR_EMAIL` (copied on every email, the reply-to, and where unresolved notices go — `ryan@justautosmechanical.com.au`).
 - **Known gap**: a separate board automation moves approved items into the payroll groups three days before the leave starts. If an approval were pressed and that mover ran inside the same 15-minute window, the item would leave the application path before the portal saw it and no email would go out. Practically impossible (a daily automation vs a 15-minute cron) but real; the fix if it ever bites is a per-item Send button on the Leave Notifications screen.
 
+### 7.18 Stock EOM — JAWS month end (`/reports/jaws-stock-eom`)
+
+Month-end stock report for the **JAWS** company file. Built 2026-08-24 (migration `199`). Engine `lib/jaws-stock-eom.ts`; API `/api/reports/jaws-stock-eom`; cron `/api/cron/jaws-stock-eom`.
+
+**Why it exists alongside `/stock`.** `/stock` (`pages/api/inventory.ts`) already computes the *live* picture — reorder alerts, velocity, dead stock, margin, on-order — on rolling 30/90/365-day windows. What it cannot do is compare months, because **AccountRight only ever reports today's quantity**: there is no historical on-hand to query. So each run freezes its numbers into `jaws_stock_snapshots`, and that stored history is the only source of month-on-month stock movement in the business.
+
+**What the report adds** beyond the live page: the month's trading in isolation (units, revenue ex-GST, COGS, margin); stock turn and days-of-inventory; ageing of held value by last-sold date, including a *never sold* bucket; margin leakage (sold below cost) and cost creep (last paid >10% above average cost — a price-review list); unfilled demand (sold while nothing available, or committed beyond on-hand); overstock (>365 days cover); supplier concentration of value and reorder spend; data-integrity exceptions (negative on-hand, stock with no cost, stock with no sell price); and any JAWS stocktake completed that month (migration `141`, still report-only).
+
+**Reuse, deliberately.** It calls the same `fetchInventoryItems` / `fetchSaleInvoicesWithLines` readers and the same `lineExGst` normalisation as `/stock`, so the two surfaces reconcile instead of becoming a second, subtly different truth.
+
+**⚠ Two approximations, printed on the report itself:**
+- **On-hand is "as at generation time", not the last instant of the month.** Unavoidable — see above. The cron runs early on the 2nd to keep the gap small.
+- **COGS = units × current average cost.** Invoice lines carry no cost of sale and average cost drifts, so margin ranks SKUs reliably but is *not* the P&L. Don't reconcile it to the accounts.
+
+**Access.** Page and API both require **`view:stock`**, not just `view:reports` — the report carries costs, margins and supplier pricing, so a reports-only login (e.g. marketing) is refused. The tab is admin/manager only, and it participates in the per-user report allowlist (`visible_report_tabs`).
+
+**Settings** (DB-first via `integration_settings`): `JAWS_EOM_EMAIL_TO` (comma-separated; defaults to Chris + Morgan), `PORTAL_BASE_URL` for the email's deep link. A month can be rebuilt on demand from the page ("Rebuild from MYOB") or re-run for a specific month via `?month=YYYY-MM` on the cron route.
+
 ---
 
 ## 8. Monitoring & troubleshooting
@@ -629,7 +650,7 @@ Staff apply for leave through the monday.com **Payroll & Leave Applications** bo
 
 **Consistency / drift**
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
-- Migrations `148` and `153` are duplicated numbers; latest applied is `198_leave_directory_board_aliases`, so next is `199`.
+- Migrations `148` and `153` are duplicated numbers; latest applied is `199_jaws_stock_eom`, so next is `200`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.
