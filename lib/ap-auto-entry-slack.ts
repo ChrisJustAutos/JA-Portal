@@ -214,6 +214,17 @@ export function markPostedManuallyBlocks(
 // double-post, and append the outcome as a context line. Pure.
 const RESOLVED_STRIP_ACTIONS = ['ap_approve_post', 'ap_create_supplier', 'ap_check_manual']
 
+// An OPEN flag card's header, as Slack hands it back to us.
+//
+// Slack stores the emoji we posted as its SHORTCODE, so a card read back
+// through conversations.replies (or off a button's interaction payload) has
+// the header ":large_orange_circle: Not auto-posted — Supplier", NOT the
+// "🟠 …" we sent. Matching only the literal emoji silently matched nothing —
+// it made the 2026-08-25 button backfill skip every card it was pointed at.
+// Both forms are accepted here, and the "Not auto-posted" text is the real
+// anchor: a card that has been flipped no longer contains it.
+const OPEN_FLAG_HEADER = /^\s*(?::large_orange_circle:|🟠)?\s*Not auto-posted/i
+
 function markResolvedBlocks(
   original: SlackBlock[],
   opts: { headline: string; contextText: string; fallbackText: string },
@@ -222,7 +233,7 @@ function markResolvedBlocks(
   for (const b of Array.isArray(original) ? original : []) {
     if (b?.type === 'header') {
       const t = String(b.text?.text || '')
-      const flipped = t.replace(/^🟠\s*Not auto-posted/i, opts.headline)
+      const flipped = t.replace(OPEN_FLAG_HEADER, opts.headline)
       blocks.push({ ...b, text: { ...b.text, text: (flipped === t ? `✅ ${t}` : flipped).slice(0, 150) } })
       continue
     }
@@ -323,18 +334,24 @@ export function buildSupplierProposalBlocks(i: {
 // would lose the thread. Pure: takes the live message blocks, returns new
 // blocks, or null when the card must not be touched — already carries the
 // button, or is no longer an open flag (header already flipped green).
-export function addCheckManualButton(original: SlackBlock[], rowId: string): SlackBlock[] | null {
-  const blocks = Array.isArray(original) ? original : []
-  if (!blocks.length || !rowId) return null
+export type AddButtonResult = { blocks: SlackBlock[]; skip?: undefined } | { blocks?: undefined; skip: string }
 
+export function addCheckManualButton(original: SlackBlock[], rowId: string): AddButtonResult {
+  const blocks = Array.isArray(original) ? original : []
+  if (!blocks.length) return { skip: 'card has no blocks' }
+  if (!rowId) return { skip: 'no log row id' }
+
+  // Only OPEN flag cards — a card that has been approved, posted manually or
+  // otherwise resolved no longer says "Not auto-posted" in its header.
   const header = blocks.find(b => b?.type === 'header')
-  // Only open flag cards. A resolved card starts with a tick; an unflipped one
-  // starts with the orange circle. Anything else is not a flag card.
-  if (!String(header?.text?.text || '').trim().startsWith('🟠')) return null
+  const headerText = String(header?.text?.text || '').trim()
+  if (!OPEN_FLAG_HEADER.test(headerText)) {
+    return { skip: `not an open flag card (header: "${headerText.slice(0, 60) || 'none'}")` }
+  }
 
   const elementsOf = (b: any) => (Array.isArray(b?.elements) ? b.elements : [])
   const already = blocks.some(b => b?.type === 'actions' && elementsOf(b).some((e: any) => e?.action_id === 'ap_check_manual'))
-  if (already) return null
+  if (already) return { skip: 'already has the button' }
 
   const button = {
     type: 'button', action_id: 'ap_check_manual', value: rowId,
@@ -349,7 +366,7 @@ export function addCheckManualButton(original: SlackBlock[], rowId: string): Sla
   if (mainIdx >= 0) {
     const out = blocks.slice()
     out[mainIdx] = { ...blocks[mainIdx], elements: [...elementsOf(blocks[mainIdx]), button] }
-    return out
+    return { blocks: out }
   }
 
   // No action row at all (a card whose PDF staging failed): add one, above the
@@ -358,7 +375,7 @@ export function addCheckManualButton(original: SlackBlock[], rowId: string): Sla
     /post coded to which account/i.test(String(b?.elements?.[0]?.text || '')))
   const row: SlackBlock = { type: 'actions', elements: [button] }
   const at = promptIdx >= 0 ? promptIdx : blocks.length
-  return [...blocks.slice(0, at), row, ...blocks.slice(at)]
+  return { blocks: [...blocks.slice(0, at), row, ...blocks.slice(at)] }
 }
 
 // ── "🔍 Entered manually?" near-misses (threaded under the flag card) ──

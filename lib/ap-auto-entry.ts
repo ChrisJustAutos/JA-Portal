@@ -1561,11 +1561,11 @@ export async function backfillCheckManualButtons(
     const msg = await getMessage(channel, row.slack_ts).catch(() => null)
     if (!msg?.blocks?.length) { skipped.push({ invoice: label, why: 'card not found in Slack' }); continue }
 
-    const blocks = addCheckManualButton(msg.blocks, row.id)
-    if (!blocks) { skipped.push({ invoice: label, why: 'already has the button, or no longer an open flag' }); continue }
+    const attempt = addCheckManualButton(msg.blocks, row.id)
+    if (attempt.skip) { skipped.push({ invoice: label, why: attempt.skip }); continue }
 
     if (dryRun) { updated++; continue }
-    const ok = await updateMessage({ channel, ts: row.slack_ts, text: msg.text, blocks }).catch(() => false)
+    const ok = await updateMessage({ channel, ts: row.slack_ts, text: msg.text, blocks: attempt.blocks }).catch(() => false)
     if (ok) updated++
     else skipped.push({ invoice: label, why: 'Slack rejected the update' })
   }
