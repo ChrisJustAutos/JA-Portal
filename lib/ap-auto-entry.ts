@@ -54,9 +54,9 @@ import { reattachStagedPdf, sameInvoiceNumberLoose, findExistingMyobBill, findMy
 import { postApInvoice } from './accounting/post-ap-invoice'
 import { getConnection } from './myob'
 import { postWebhook, type SlackBlock } from './slack'
-import { postMessage } from './slack-bot/slack'
+import { postMessage, getMessage, updateMessage } from './slack-bot/slack'
 import { randomUUID } from 'crypto'
-import { buildAutoEntryBlocks, buildSupplierProposalBlocks, buildManualCandidateBlocks, type SupplierProposal, type BankCheck } from './ap-auto-entry-slack'
+import { buildAutoEntryBlocks, buildSupplierProposalBlocks, buildManualCandidateBlocks, addCheckManualButton, type SupplierProposal, type BankCheck } from './ap-auto-entry-slack'
 
 const AP_BUCKET = 'ap-invoices'
 const SIGNED_URL_TTL_SEC = 7 * 24 * 3600   // 7 days for the Slack "View invoice" link
@@ -1525,6 +1525,51 @@ async function markRowPostedManually(
     found: true,
     text: `✅ Already in MYOB — ${bits}. Marked *posted manually*; the automation will leave it alone.${emailBit} _(checked by ${checkedBy})_`,
   }
+}
+
+// ── Retro-fit the "🔍 Entered manually?" button onto older cards ──
+// Every open flag card still sitting in Slack gets the "Entered manually?"
+// button added in place (chat.update, so the card keeps its ts and thread).
+// Only touches cards that are still open: outcome flagged/error, no MYOB bill
+// linked, header still orange. Idempotent — a card that already carries the
+// button is skipped, so it is safe to run repeatedly.
+export async function backfillCheckManualButtons(
+  opts: { days?: number; dryRun?: boolean } = {},
+): Promise<{ scanned: number; updated: number; skipped: { invoice: string; why: string }[]; dryRun: boolean }> {
+  const c = sb()
+  const days = Math.max(1, Math.min(Number(opts.days) || 2, 30))
+  const dryRun = !!opts.dryRun
+  const since = new Date(Date.now() - days * 86400_000).toISOString()
+
+  const { data: rows } = await c.from('ap_auto_entry_log')
+    .select('id, company_file, invoice_number, supplier_name, slack_ts, outcome, created_at')
+    .in('outcome', ['flagged', 'error'])
+    .is('myob_bill_uid', null)
+    .not('slack_ts', 'is', null)
+    .gte('created_at', since)
+    .order('created_at', { ascending: true })
+
+  const skipped: { invoice: string; why: string }[] = []
+  let updated = 0
+  for (const row of rows || []) {
+    const label = `${row.supplier_name || 'unknown'} ${row.invoice_number || '(no number)'}`
+    // 'sent' is the webhook fallback marker — no real ts, nothing to update.
+    if (!row.slack_ts || row.slack_ts === 'sent') { skipped.push({ invoice: label, why: 'posted via webhook, no message id' }); continue }
+    const channel = apSlackChannel(row.company_file)
+    if (!channel) { skipped.push({ invoice: label, why: 'no Slack channel configured' }); continue }
+
+    const msg = await getMessage(channel, row.slack_ts).catch(() => null)
+    if (!msg?.blocks?.length) { skipped.push({ invoice: label, why: 'card not found in Slack' }); continue }
+
+    const blocks = addCheckManualButton(msg.blocks, row.id)
+    if (!blocks) { skipped.push({ invoice: label, why: 'already has the button, or no longer an open flag' }); continue }
+
+    if (dryRun) { updated++; continue }
+    const ok = await updateMessage({ channel, ts: row.slack_ts, text: msg.text, blocks }).catch(() => false)
+    if (ok) updated++
+    else skipped.push({ invoice: label, why: 'Slack rejected the update' })
+  }
+  return { scanned: (rows || []).length, updated, skipped, dryRun }
 }
 
 // ── "Create supplier" flow, step 1: propose ──────────────────────────────

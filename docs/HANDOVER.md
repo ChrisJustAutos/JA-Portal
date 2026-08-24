@@ -43,7 +43,7 @@ It is one Next.js application that contains: a **staff portal** (dashboards, wor
 ```
                           ┌────────────────────────────────────────┐
                           │  Vercel (Next.js app, justautos.app)   │
-   Staff browsers ───────▶│  pages/        UI (111 routes)         │
+   Staff browsers ───────▶│  pages/        UI (115 routes)         │
    Distributor browsers ─▶│  pages/api/    ~all business logic     │
    Suppliers ────────────▶│  23 crons (vercel.json)                │
                           └───────┬──────────────────┬─────────────┘
@@ -381,7 +381,7 @@ MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,U
 
 ## 7. Modules & SOPs
 
-Full route-by-route inventory: 113 page routes (426 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
+Full route-by-route inventory: 115 page routes (432 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
 
 ### 7.1 Dashboards (`/dashboard`, `/overview`, `/home`)
 
@@ -450,7 +450,7 @@ Supplier emails → Graph inbox pull → Claude extraction → triage list.
 
 **The Slack flag card is the human interface to the automation** (`lib/ap-auto-entry-slack.ts`, clicks handled in `/api/slack/ask`). Each flagged invoice carries a row id in `ap_auto_entry_log` and up to four buttons: *View invoice* (7-day signed URL), *✅ Approve & post to MYOB* (`approveAndPost` — re-extracts with the strong model, soft checks bypassed), *➕ Create supplier* (`proposeSupplier` → threaded review → `approveCreateSupplierAndPost`), and *🔍 Entered manually?* (`checkEnteredManually`). JAWS cards additionally get an account-choice row (`postWithAccount`).
 
-**"Entered manually?" (migration `200`, 2026-08-25)** closes the automation's blind spot: staff key flagged invoices into MYOB by hand and the card stays orange forever. The check is read-only against MYOB, in three widening nets: (1) same supplier + same `SupplierInvoiceNumber` via `findExistingMyobBill` (already OCR-tolerant and amount-aware); (2) that invoice number under **any** supplier — the flag often exists *because* no card matched — adopted only when the amount agrees, so a number collision across suppliers can't link the wrong bill; (3) recent bills for the supplier at the same amount under a different number, which are **not** adopted silently but returned as threaded candidates with a `🔗 Link bill #…` button (`linkManualBill`). A hit sets `outcome='posted'`, `entered_manually=true`, `manual_checked_by/at`, links `myob_bill_uid`, files the email away, and flips the card to *✅ Posted manually* (`markPostedManuallyBlocks`). `entered_manually` rows are excluded from the supplier-trust counts — they're evidence a *person* handled the supplier, not the automation. Nothing is ever posted to MYOB by this path.
+**"Entered manually?" (migration `200`, 2026-08-25)** closes the automation's blind spot: staff key flagged invoices into MYOB by hand and the card stays orange forever. The check is read-only against MYOB, in three widening nets: (1) same supplier + same `SupplierInvoiceNumber` via `findExistingMyobBill` (already OCR-tolerant and amount-aware); (2) that invoice number under **any** supplier — the flag often exists *because* no card matched — adopted only when the amount agrees, so a number collision across suppliers can't link the wrong bill; (3) recent bills for the supplier at the same amount under a different number, which are **not** adopted silently but returned as threaded candidates with a `🔗 Link bill #…` button (`linkManualBill`). A hit sets `outcome='posted'`, `entered_manually=true`, `manual_checked_by/at`, links `myob_bill_uid`, files the email away, and flips the card to *✅ Posted manually* (`markPostedManuallyBlocks`). `entered_manually` rows are excluded from the supplier-trust counts — they're evidence a *person* handled the supplier, not the automation. Nothing is ever posted to MYOB by this path. Cards posted before the button existed can be retro-fitted in place (chat.update, so the card keeps its ts and thread) with `GET /api/ap/admin/backfill-manual-button?days=N&dry=1` (`edit:supplier_invoices`, `backfillCheckManualButtons`); it only touches still-open flags and skips cards that already carry the button, so it is safe to re-run.
 
 Migration `200` also fixed constraint drift found while building it: `lib/ap-auto-entry.ts` has written `outcome='skipped_duplicate'` since the cross-source duplicate guard shipped, but the check constraint from migration `145` never listed the value — so **every one of those audit rows was silently rejected** (0 rows in the table) and the attachment was re-processed, and re-extracted, on the next run. The value is now allowed.
 

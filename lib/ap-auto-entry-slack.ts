@@ -318,6 +318,49 @@ export function buildSupplierProposalBlocks(i: {
   return { text: text.slice(0, 300), blocks }
 }
 
+// ── Retro-fit the "🔍 Entered manually?" button onto a posted card ──
+// Cards posted before the button existed still need it, and re-posting them
+// would lose the thread. Pure: takes the live message blocks, returns new
+// blocks, or null when the card must not be touched — already carries the
+// button, or is no longer an open flag (header already flipped green).
+export function addCheckManualButton(original: SlackBlock[], rowId: string): SlackBlock[] | null {
+  const blocks = Array.isArray(original) ? original : []
+  if (!blocks.length || !rowId) return null
+
+  const header = blocks.find(b => b?.type === 'header')
+  // Only open flag cards. A resolved card starts with a tick; an unflipped one
+  // starts with the orange circle. Anything else is not a flag card.
+  if (!String(header?.text?.text || '').trim().startsWith('🟠')) return null
+
+  const elementsOf = (b: any) => (Array.isArray(b?.elements) ? b.elements : [])
+  const already = blocks.some(b => b?.type === 'actions' && elementsOf(b).some((e: any) => e?.action_id === 'ap_check_manual'))
+  if (already) return null
+
+  const button = {
+    type: 'button', action_id: 'ap_check_manual', value: rowId,
+    text: { type: 'plain_text', text: '🔍 Entered manually?', emoji: true },
+  }
+
+  // Prefer the card's main action row — the one holding Approve / View
+  // invoice. NOT the JAWS account-choice row (ap_post_account_*), where the
+  // button would read as another "post it" option.
+  const mainIdx = blocks.findIndex(b => b?.type === 'actions' &&
+    elementsOf(b).some((e: any) => !String(e?.action_id || '').startsWith('ap_post_account_')))
+  if (mainIdx >= 0) {
+    const out = blocks.slice()
+    out[mainIdx] = { ...blocks[mainIdx], elements: [...elementsOf(blocks[mainIdx]), button] }
+    return out
+  }
+
+  // No action row at all (a card whose PDF staging failed): add one, above the
+  // account-choice prompt if there is one, so it stays with the card body.
+  const promptIdx = blocks.findIndex(b => b?.type === 'context' &&
+    /post coded to which account/i.test(String(b?.elements?.[0]?.text || '')))
+  const row: SlackBlock = { type: 'actions', elements: [button] }
+  const at = promptIdx >= 0 ? promptIdx : blocks.length
+  return [...blocks.slice(0, at), row, ...blocks.slice(at)]
+}
+
 // ── "🔍 Entered manually?" near-misses (threaded under the flag card) ──
 // The exact search found nothing, but MYOB holds bills for the same supplier
 // at the same amount under a different number — typical of a hand entry that
