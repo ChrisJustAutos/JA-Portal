@@ -1,5 +1,6 @@
 // pages/api/reports/jaws-stock-eom/pdf.ts
-// GET ?month=YYYY-MM → the month-end stock report as a PDF download.
+// GET ?month=YYYY-MM[&from=YYYY-MM&to=YYYY-MM] → the report as a PDF download.
+// from/to pick the sales-history window, exactly as on the report screen.
 //
 // Serves the STORED snapshot when there is one, so the PDF matches the screen
 // exactly (and downloads in a second). Only builds live when that month has
@@ -11,7 +12,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { buildEomReport, saveSnapshot, loadSnapshot, previousMonth } from '../../../../lib/jaws-stock-eom'
+import { buildEomReport, saveSnapshot, loadSnapshot, previousMonth, resolveHistoryWindow } from '../../../../lib/jaws-stock-eom'
 import { renderStockEomPdf, stockEomPdfFilename } from '../../../../lib/jaws-stock-eom-pdf'
 
 // A live build reads 13 months of invoice lines out of AccountRight.
@@ -27,11 +28,20 @@ export default withAuth('view:reports', async (req: NextApiRequest, res: NextApi
 
   const month = String(req.query.month || previousMonth())
   if (!MONTH_RE.test(month)) return res.status(400).json({ error: 'month must be YYYY-MM' })
+  const from = req.query.from ? String(req.query.from) : null
+  const to = req.query.to ? String(req.query.to) : null
+  if ((from && !MONTH_RE.test(from)) || (to && !MONTH_RE.test(to))) {
+    return res.status(400).json({ error: 'from/to must be YYYY-MM' })
+  }
+  const want = resolveHistoryWindow(month, from, to)
 
   try {
     let rep = await loadSnapshot(month)
-    if (!rep) {
-      rep = await buildEomReport(month)
+    // Export what the screen shows: if the stored snapshot was built over a
+    // different history window, rebuild rather than hand over other numbers.
+    const storedWindow = rep?.history ? `${rep.history.from}:${rep.history.to}` : null
+    if (!rep || (storedWindow && storedWindow !== `${want.from}:${want.to}`) || (!storedWindow && (from || to))) {
+      rep = await buildEomReport(month, { historyFrom: from, historyTo: to })
       await saveSnapshot(rep, user.id)
     }
     const buffer = await renderStockEomPdf(rep)

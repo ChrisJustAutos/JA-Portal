@@ -22,12 +22,24 @@ interface Item {
   monthUnits: number; monthRevenueEx: number; monthMargin: number; prevMonthUnits: number
   units90: number; lastSold: string | null; daysSinceLastSold: number | null; unitsSinceMonthEnd: number
   daysOfCover: number | null; capitalAtRisk: number
+  historyUnits: number; historyRevenueEx: number
+  avgUnitsPerMonth: number; avgRevenuePerMonth: number
+  monthsCoverAtAvg: number | null; growthPct: number | null
   suggestQty?: number; suggestCost?: number; reason?: string
   slowReason?: string
 }
 interface Report {
   month: string; monthLabel: string; generatedAt: string
   headline: any
+  history?: {
+    from: string; to: string; months: number
+    unitsTotal: number; revenueExTotal: number
+    avgUnitsPerMonth: number; avgRevenuePerMonth: number
+    growthPct: number | null
+    firstHalfLabel: string | null; firstHalfRevenueEx: number | null
+    secondHalfLabel: string | null; secondHalfRevenueEx: number | null
+    series: Array<{ month: string; units: number; revenueEx: number }>
+  }
   ageing: Array<{ bucket: string; skus: number; value: number }>
   topByUnits: Item[]; topByRevenue: Item[]; topByMargin: Item[]
   slowMovers: Item[]; reorder: Item[]
@@ -39,9 +51,18 @@ interface Report {
   notes: string[]
 }
 
+// 'YYYY-MM' shifted by n months — used by the history-window presets.
+const addMonthsStr = (m: string, n: number) => {
+  if (!/^\d{4}-\d{2}$/.test(m)) return m
+  const [y, mm] = m.split('-').map(Number)
+  const d = new Date(Date.UTC(y, mm - 1 + n, 1))
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+}
+
 const money = (n: number | null | undefined) => n == null ? '—' : '$' + Math.round(n).toLocaleString('en-AU')
 const pct = (n: number | null | undefined) => n == null ? '—' : `${(n * 100).toFixed(1)}%`
 const qty = (n: number | null | undefined) => n == null ? '—' : String(Math.round(n * 100) / 100)
+const growth = (n: number | null | undefined) => n == null ? '—' : `${n >= 0 ? '+' : ''}${(n * 100).toFixed(0)}%`
 
 const card: React.CSSProperties = { background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }
 const th: React.CSSProperties = { textAlign: 'left', padding: '6px 10px', fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `1px solid ${T.border}`, whiteSpace: 'nowrap' }
@@ -105,17 +126,27 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
   const [month, setMonth] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
+  // Sales-history window. Empty = whatever the server defaults to (the 12
+  // months ending with the reported month); once a report is loaded these
+  // hold the window it was actually built with.
+  const [from, setFrom] = useState<string>('')
+  const [to, setTo] = useState<string>('')
 
-  const load = useCallback(async (m?: string, refresh = false) => {
+  const load = useCallback(async (m?: string, refresh = false, win?: { from?: string; to?: string }) => {
     setLoading(true)
     try {
       const q = new URLSearchParams()
       if (m) q.set('month', m)
       if (refresh) q.set('refresh', '1')
+      if (win?.from) q.set('from', win.from)
+      if (win?.to) q.set('to', win.to)
       const r = await fetch(`/api/reports/jaws-stock-eom?${q}`, { credentials: 'same-origin' })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
       setReport(d.report); setMonths(d.months || []); setMonth(d.report.month)
+      // Reflect back the window the report was built with, so the pickers
+      // always describe the numbers on screen.
+      if (d.report?.history) { setFrom(d.report.history.from); setTo(d.report.history.to) }
       if (refresh) toast('Rebuilt from MYOB', 'success')
     } catch (e: any) {
       toast(e?.message || 'Failed to load', 'error')
@@ -147,7 +178,9 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
     if (!report) return
     setBusy('pdf')
     try {
-      const r = await fetch(`/api/reports/jaws-stock-eom/pdf?month=${encodeURIComponent(report.month)}`, { credentials: 'same-origin' })
+      const q = new URLSearchParams({ month: report.month })
+      if (report.history) { q.set('from', report.history.from); q.set('to', report.history.to) }
+      const r = await fetch(`/api/reports/jaws-stock-eom/pdf?${q}`, { credentials: 'same-origin' })
       if (!r.ok) {
         let msg = `HTTP ${r.status}`
         try { msg = (await r.json()).error || msg } catch { /* not JSON */ }
@@ -200,6 +233,11 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
               style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border2}`, background: T.bg3, color: T.text2, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
               {loading ? 'Working…' : 'Rebuild from MYOB'}
             </button>
+            <button onClick={() => load(month, true, { from, to })} disabled={loading || !report}
+              style={{ padding: '7px 12px', borderRadius: 6, border: `1px solid ${T.border2}`, background: T.bg3, color: T.text2, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+              title="Rebuild using the sales-history window selected below">
+              Apply window
+            </button>
             <button onClick={downloadPdf} disabled={!!busy || !report}
               style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border2}`, background: T.bg3, color: T.text2, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
               {busy === 'pdf' ? 'Preparing…' : 'Export PDF'}
@@ -208,6 +246,34 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
               style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: T.green, color: '#fff', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
               {busy === 'email' ? 'Sending…' : 'Email this report'}
             </button>
+          </div>
+
+          {/* Sales-history window — drives every average, months-of-cover and the
+              growth read. Presets are the common asks; the month boxes are there
+              when a specific range is wanted. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 14, padding: '9px 12px', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8 }}>
+            <span style={{ fontSize: 11.5, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sales history</span>
+            {[3, 6, 12, 24].map(n => {
+              const f = addMonthsStr(month || report?.month || '', -(n - 1))
+              const active = !!report?.history && report.history.from === f && report.history.to === (month || report.month)
+              return (
+                <button key={n} onClick={() => { setFrom(f); setTo(month); load(month, true, { from: f, to: month }) }} disabled={loading || !month}
+                  style={{ padding: '5px 10px', borderRadius: 6, border: `1px solid ${active ? T.accent : T.border2}`, background: active ? T.accent : T.bg3, color: active ? '#fff' : T.text2, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  {n} months
+                </button>
+              )
+            })}
+            <span style={{ fontSize: 12, color: T.text3 }}>or</span>
+            <input type="month" value={from} max={to || month} onChange={e => setFrom(e.target.value)}
+              style={{ padding: '5px 8px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: 'inherit' }} />
+            <span style={{ fontSize: 12, color: T.text3 }}>→</span>
+            <input type="month" value={to} max={month} onChange={e => setTo(e.target.value)}
+              style={{ padding: '5px 8px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: 'inherit' }} />
+            <span style={{ fontSize: 11.5, color: T.text3 }}>
+              {report?.history
+                ? `Averages, months of cover and growth are measured over ${report.history.months} month${report.history.months === 1 ? '' : 's'} (${report.history.from} → ${report.history.to}). Press Apply window after changing it.`
+                : 'Defaults to the 12 months ending with the reported month.'}
+            </span>
           </div>
 
           {loading && !report && <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 13 }}>Reading MYOB — a full rebuild pulls 13 months of invoice lines, so this can take a minute…</div>}
@@ -219,6 +285,11 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
                 <Kpi label="Sales this month (ex GST)" value={money(h.monthRevenueEx)} sub={`${qty(h.monthUnits)} units · ${h.activeSkusThisMonth} SKUs sold`} delta={d(h.monthRevenueEx, prev?.monthRevenueEx)} />
                 <Kpi label="Gross margin" value={money(h.monthMargin)} sub={`${pct(h.monthMarginPct)} of sales`} delta={d(h.monthMarginPct, prev?.monthMarginPct)} />
                 <Kpi label="Stock turn (12m)" value={h.turnsAnnualised == null ? '—' : `${h.turnsAnnualised.toFixed(2)}×`} sub={h.daysInventory ? `${h.daysInventory} days of inventory` : undefined} />
+                <Kpi label="Average sales / month" value={money(report.history?.avgRevenuePerMonth)}
+                  sub={report.history ? `${qty(report.history.avgUnitsPerMonth)} units per month over ${report.history.months} months` : 'Rebuild to measure'} />
+                <Kpi label="Growth over the window" value={report.history?.growthPct == null ? '—' : `${report.history.growthPct >= 0 ? '+' : ''}${(report.history.growthPct * 100).toFixed(1)}%`}
+                  sub={report.history?.firstHalfLabel ? `${report.history.secondHalfLabel} vs ${report.history.firstHalfLabel}` : 'Needs at least 4 months'}
+                  tone={report.history?.growthPct == null ? undefined : report.history.growthPct >= 0 ? T.green : T.red} />
                 <Kpi label="Dead stock (90d)" value={money(h.dead90Value)} sub={`${h.dead90Count} SKUs · ${money(h.dead180Value)} at 180d`} delta={d(h.dead90Value, prev?.deadValue)} tone={h.dead90Value > 0 ? T.amber : undefined} />
                 <Kpi label="Slow movers — capital at risk" value={money(h.slowCapital)} sub={`${h.slowCount} SKUs holding more than 90 days of their own demand`} tone={h.slowCapital > 0 ? T.amber : undefined} />
                 <Kpi label="Never sold (excluded)" value={money(h.neverSoldValue)} sub={`${h.neverSoldCount} SKUs — treated as kit parts, left out of the figures above`} />
@@ -226,21 +297,37 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
                 <Kpi label="Reorder suggested" value={money(h.reorderCost)} sub={`${h.reorderCount} SKUs · ${h.outOfStockCount} out, ${h.lowStockCount} low`} />
               </div>
 
+              {report.history && (
+                <Table title="Sales by month — the history window"
+                  hint={`Every average, months-of-cover and growth figure on this report is measured over these ${report.history.months} months (${report.history.from} → ${report.history.to}). Change the window at the top and press Apply window. Share of window shows how much of the period's revenue landed in each month — a run of rising shares is growth.`}
+                  cols={[{ label: 'Month' }, { label: 'Units', right: true }, { label: 'Revenue ex', right: true }, { label: 'Share of window', right: true }, { label: 'vs previous month', right: true }]}
+                  rows={report.history.series.map((m, i, arr) => {
+                    const before = i > 0 ? arr[i - 1].revenueEx : null
+                    const chg = before && before !== 0 ? (m.revenueEx - before) / before : null
+                    return [
+                      m.month, qty(m.units), money(m.revenueEx),
+                      report.history!.revenueExTotal > 0 ? pct(m.revenueEx / report.history!.revenueExTotal) : '—',
+                      chg == null ? '—' : `${chg >= 0 ? '+' : ''}${(chg * 100).toFixed(1)}%`,
+                    ]
+                  })} />
+              )}
+
               <Table title="Where the money is sitting" hint={`Held stock value by how recently that SKU last sold, over the ${money(h.analysedValue)} that has sold at least once. Stock that has never sold — ${money(h.neverSoldValue)} across ${h.neverSoldCount} SKUs — is excluded: on this item list that is almost always a kit component never sold separately. Shares are of the analysed value, so they total 100%.`}
                 cols={[{ label: 'Last sold' }, { label: 'SKUs', right: true }, { label: 'Value held', right: true }, { label: 'Share', right: true }]}
                 rows={report.ageing.map(a => [a.bucket, a.skus, money(a.value), h.analysedValue > 0 ? pct(a.value / h.analysedValue) : '—'])} />
 
-              <Table title="Top movers this month — by units" hint="What actually shifted. Prev = same SKU last month, so you can see momentum."
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Units', right: true }, { label: 'Prev', right: true }, { label: 'Revenue ex', right: true }, { label: 'Margin %', right: true }, { label: 'Cover (days)', right: true }]}
-                rows={report.topByUnits.map(i => [i.sku, i.name.slice(0, 46), qty(i.monthUnits), qty(i.prevMonthUnits), money(i.monthRevenueEx), pct(i.marginPct), i.daysOfCover == null ? '—' : Math.round(i.daysOfCover)])} />
+              <Table title="Top movers this month — by units"
+                hint={`What actually shifted. Prev = same SKU last month. Avg/mo and Growth are over the history window; months of cover is on-hand at that average rate. On hand is as at ${report.generatedAt.slice(0, 10)}, when the stock was read.`}
+                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'Units', right: true }, { label: 'Prev', right: true }, { label: 'Avg/mo', right: true }, { label: 'Growth', right: true }, { label: 'Revenue ex', right: true }, { label: 'Margin %', right: true }, { label: 'Months cover', right: true }]}
+                rows={report.topByUnits.map(i => [i.sku, i.name.slice(0, 40), qty(i.onHand), qty(i.monthUnits), qty(i.prevMonthUnits), qty(i.avgUnitsPerMonth), growth(i.growthPct), money(i.monthRevenueEx), pct(i.marginPct), i.monthsCoverAtAvg == null ? '—' : i.monthsCoverAtAvg.toFixed(1)])} />
 
               <Table title="Biggest margin earners this month" hint="Margin dollars, not revenue — usually a different list, and the one that pays the wages."
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Margin $', right: true }, { label: 'Margin %', right: true }, { label: 'Units', right: true }]}
-                rows={report.topByMargin.map(i => [i.sku, i.name.slice(0, 46), money(i.monthMargin), pct(i.marginPct), qty(i.monthUnits)])} />
+                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'Margin $', right: true }, { label: 'Margin %', right: true }, { label: 'Units', right: true }, { label: 'Avg/mo', right: true }]}
+                rows={report.topByMargin.map(i => [i.sku, i.name.slice(0, 44), qty(i.onHand), money(i.monthMargin), pct(i.marginPct), qty(i.monthUnits), qty(i.avgUnitsPerMonth)])} />
 
               <Table title="Slow movers — where the capital is stuck" hint={`Two ways onto this list: nothing sold in the 90 days to the end of ${report.monthLabel}, or it still sells but holds over 180 days of cover with at least $2,000 tied up beyond a 90-day target. Ranked by capital at risk — the value held beyond 90 days of that SKU's own demand — so the money is at the top, not the longest-idle SKU. Stock that has never sold is excluded (kit parts). “Sold since” is what moved after the month closed: a number there means the SKU is waking up.`}
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Capital at risk', right: true }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Cover (days)', right: true }, { label: 'Why' }, { label: 'Last sold' }, { label: 'Sold since', right: true }]}
-                rows={report.slowMovers.map(i => [i.sku, i.name.slice(0, 40), money(i.capitalAtRisk), money(i.stockValue), qty(i.onHand), i.daysOfCover == null ? '—' : Math.round(i.daysOfCover), i.slowReason || '', i.lastSold || '—', i.unitsSinceMonthEnd ? qty(i.unitsSinceMonthEnd) : '—'])} />
+                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Capital at risk', right: true }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Avg/mo', right: true }, { label: 'Months cover', right: true }, { label: 'Growth', right: true }, { label: 'Why' }, { label: 'Last sold' }, { label: 'Sold since', right: true }]}
+                rows={report.slowMovers.map(i => [i.sku, i.name.slice(0, 36), money(i.capitalAtRisk), money(i.stockValue), qty(i.onHand), qty(i.avgUnitsPerMonth), i.monthsCoverAtAvg == null ? '—' : i.monthsCoverAtAvg.toFixed(1), growth(i.growthPct), i.slowReason || '', i.lastSold || '—', i.unitsSinceMonthEnd ? qty(i.unitsSinceMonthEnd) : '—'])} />
 
               <Table title="Reorder suggestions" hint={`Only the ${h.reorderSheetSize} SKUs on the Stock Order sheet — MYOB's item list also holds kit components that are never sold separately.${h.reorderExcludedCount ? ` ${h.reorderExcludedCount} off-sheet item(s) sat below their alert level and were excluded; add a SKU to the Stock Order sheet if it should be ordered.` : ''} Flagged when below the alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ; cost uses last paid price where MYOB has one.`}
                 cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'On order', right: true }, { label: 'Cover', right: true }, { label: 'Order qty', right: true }, { label: 'Est. cost', right: true }, { label: 'Why' }, { label: 'Supplier' }]}

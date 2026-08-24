@@ -393,6 +393,14 @@ If a customer is landing in the wrong section, fix their membership at **Admin �
 
 **What arrives without you doing anything.** At **7:30am on the 2nd of each month** the portal emails the month-just-ended stock report for JAWS to Chris and Morgan. The full version lives at **Reports → Stock EOM**, where you can also pick an earlier month or press **Rebuild from MYOB** if something looks stale.
 
+**Choosing how far back to look.** Under the buttons is a **Sales history** row: presets for 3, 6, 12 and 24 months, or two month boxes for an exact range. It sets the period every average on the report is worked out over — average sales per month, months of cover, and whether sales are growing or falling. It defaults to the 12 months ending with the month you're reading, and 36 months is as far back as it will go.
+
+Change it, then press **Apply window** — the report rebuilds on the new period (it has to; the old figures were worked out over a different one). The *Sales by month* table shows the period month by month, so a run of rising or falling months is visible at a glance, and the **Growth over the window** tile compares the back half of the period against the front half.
+
+**Two different "cover" numbers, on purpose.** *Cover (days)* is based on the last 90 days only — it reacts fast. *Months cover* is on-hand at the window average — it's steadier. When they disagree the SKU is seasonal or has just changed pace, and that gap is worth looking at rather than ignoring.
+
+**On-hand shows in most tables now**, and it is the quantity **as at the moment the report was generated** (shown at the top). MYOB can only ever tell us today's quantity, so on an older month the stock figures are today's, while the sales figures are that month's.
+
 **To keep a copy or send it on, press *Export PDF*.** It downloads the whole report — every figure and list on the screen — as a PDF named for the month (`jaws-stock-2026-07.pdf`), ready to file or email to the accountant. It exports what is on screen, so if you want the very latest numbers press **Rebuild from MYOB** first.
 
 This is not the same as **Stock & Inventory** (`/stock`), which shows *today* on rolling 30/90-day windows. The month-end report is a frozen snapshot, and it's the only place you can see stock movement **month against month** — MYOB itself only ever tells you today's quantity, so the comparison exists purely because the portal saves each month.

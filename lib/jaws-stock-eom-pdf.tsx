@@ -53,6 +53,7 @@ const money = (n: number | null | undefined) =>
   n == null || !isFinite(Number(n)) ? '—' : '$' + Math.round(Number(n)).toLocaleString('en-AU')
 const pct = (n: number | null | undefined) => n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`
 const qty = (n: number | null | undefined) => n == null ? '—' : String(Math.round(Number(n) * 100) / 100)
+const growth = (n: number | null | undefined) => n == null ? '—' : `${Number(n) >= 0 ? '+' : ''}${(Number(n) * 100).toFixed(0)}%`
 
 interface Col { label: string; width: string; right?: boolean }
 
@@ -113,7 +114,8 @@ function StockEomDoc({ rep }: { rep: EomReport }) {
         <View style={s.header}>
           <Text style={s.title}>JAWS Stock — {rep.monthLabel}</Text>
           <Text style={s.subtitle}>
-            Just Autos Wholesale · month-end report · stock read {rep.generatedAt.slice(0, 10)} · all amounts ex-GST
+            Just Autos Wholesale · month-end report · stock on hand as at {rep.generatedAt.slice(0, 10)} · all amounts ex-GST
+            {rep.history ? ` · sales history ${rep.history.from} to ${rep.history.to}` : ''}
           </Text>
         </View>
 
@@ -127,12 +129,41 @@ function StockEomDoc({ rep }: { rep: EomReport }) {
           <Stat label="Slow movers — capital at risk" value={money(h.slowCapital)} sub={`${h.slowCount} SKUs past 90 days of demand`} color={h.slowCapital > 0 ? C.amber : undefined} />
           <Stat label="Overstock (>1yr cover)" value={money(h.overstockValue)} sub={`${h.overstockCount} SKUs`} color={h.overstockValue > 0 ? C.amber : undefined} />
           <Stat label="Reorder suggested" value={money(h.reorderCost)} sub={`${h.reorderCount} SKUs · ${h.outOfStockCount} out, ${h.lowStockCount} low`} />
+
+          {rep.history ? (
+            <>
+              <Stat label="Average sales / month" value={money(rep.history.avgRevenuePerMonth)} sub={`${qty(rep.history.avgUnitsPerMonth)} units/mo over ${rep.history.months} months`} />
+              <Stat
+                label="Growth over the window"
+                value={growth(rep.history.growthPct)}
+                sub={rep.history.firstHalfLabel ? `${rep.history.secondHalfLabel} vs ${rep.history.firstHalfLabel}` : 'needs 4+ months'}
+                color={rep.history.growthPct == null ? undefined : rep.history.growthPct >= 0 ? C.green : C.red}
+              />
+            </>
+          ) : null}
         </View>
 
         <Text style={s.hint}>
           Never sold: {money(h.neverSoldValue)} across {h.neverSoldCount} SKUs — excluded from the ageing, dead-stock and
           slow-mover figures above, as on this item list it is almost always a kit component never sold separately.
         </Text>
+
+        {rep.history ? (
+          <Table
+            title="Sales by month — the history window"
+            hint={`Every average, months-of-cover and growth figure on this report is measured over these ${rep.history.months} months (${rep.history.from} to ${rep.history.to}).`}
+            cols={[{ label: 'Month', width: '25%' }, { label: 'Units', width: '18%', right: true }, { label: 'Revenue ex', width: '22%', right: true }, { label: 'Share of window', width: '18%', right: true }, { label: 'vs prev month', width: '17%', right: true }]}
+            rows={rep.history.series.map((m, i, arr) => {
+              const before = i > 0 ? arr[i - 1].revenueEx : null
+              const chg = before && before !== 0 ? (m.revenueEx - before) / before : null
+              return [
+                m.month, qty(m.units), money(m.revenueEx),
+                rep.history.revenueExTotal > 0 ? pct(m.revenueEx / rep.history.revenueExTotal) : '—',
+                chg == null ? '—' : `${chg >= 0 ? '+' : ''}${(chg * 100).toFixed(1)}%`,
+              ]
+            })}
+          />
+        ) : null}
 
         <Table
           title="Where the money is sitting"
@@ -145,15 +176,17 @@ function StockEomDoc({ rep }: { rep: EomReport }) {
           title="Slow movers — where the capital is stuck"
           hint={"Listed when nothing sold in the 90 days to month end, or it still sells but holds over 180 days of cover with $2,000+ tied up past a 90-day target. Ranked by capital at risk: value held beyond 90 days of that SKU's own demand."}
           cols={[
-            { label: 'SKU', width: '18%' }, { label: 'Name', width: '26%' },
-            { label: 'Capital at risk', width: '13%', right: true }, { label: 'Value held', width: '12%', right: true },
-            { label: 'Cover', width: '9%', right: true }, { label: 'Last sold', width: '12%', right: true },
-            { label: 'Sold since', width: '10%', right: true },
+            { label: 'SKU', width: '17%' }, { label: 'Name', width: '21%' },
+            { label: 'Capital at risk', width: '12%', right: true }, { label: 'Value held', width: '11%', right: true },
+            { label: 'On hand', width: '8%', right: true }, { label: 'Avg/mo', width: '7%', right: true },
+            { label: 'Cover (mo)', width: '10%', right: true }, { label: 'Growth', width: '7%', right: true },
+            { label: 'Last sold', width: '7%', right: true },
           ]}
           rows={rep.slowMovers.map(i => [
-            i.sku.slice(0, 20), name(i, 26), money(i.capitalAtRisk), money(i.stockValue),
-            i.daysOfCover == null ? 'dead' : String(Math.round(i.daysOfCover)),
-            i.lastSold || '—', i.unitsSinceMonthEnd ? qty(i.unitsSinceMonthEnd) : '—',
+            i.sku.slice(0, 18), name(i, 22), money(i.capitalAtRisk), money(i.stockValue),
+            qty(i.onHand), qty(i.avgUnitsPerMonth),
+            i.monthsCoverAtAvg == null ? '—' : i.monthsCoverAtAvg.toFixed(1),
+            growth(i.growthPct), i.lastSold || '—',
           ])}
         />
 
@@ -176,22 +209,24 @@ function StockEomDoc({ rep }: { rep: EomReport }) {
         <Table
           title="Top movers this month — by units"
           cols={[
-            { label: 'SKU', width: '20%' }, { label: 'Name', width: '30%' },
-            { label: 'Units', width: '10%', right: true }, { label: 'Prev', width: '10%', right: true },
-            { label: 'Revenue ex', width: '16%', right: true }, { label: 'Margin %', width: '14%', right: true },
+            { label: 'SKU', width: '18%' }, { label: 'Name', width: '24%' },
+            { label: 'On hand', width: '9%', right: true }, { label: 'Units', width: '9%', right: true },
+            { label: 'Prev', width: '8%', right: true }, { label: 'Avg/mo', width: '9%', right: true },
+            { label: 'Growth', width: '8%', right: true }, { label: 'Revenue ex', width: '15%', right: true },
           ]}
-          rows={rep.topByUnits.slice(0, 15).map(i => [i.sku.slice(0, 22), name(i), qty(i.monthUnits), qty(i.prevMonthUnits), money(i.monthRevenueEx), pct(i.marginPct)])}
+          rows={rep.topByUnits.slice(0, 15).map(i => [i.sku.slice(0, 20), name(i, 26), qty(i.onHand), qty(i.monthUnits), qty(i.prevMonthUnits), qty(i.avgUnitsPerMonth), growth(i.growthPct), money(i.monthRevenueEx)])}
         />
 
         <Table
           title="Biggest margin earners this month"
           hint="Margin dollars, not revenue — usually a different list, and the one that pays the wages."
           cols={[
-            { label: 'SKU', width: '20%' }, { label: 'Name', width: '34%' },
-            { label: 'Margin $', width: '16%', right: true }, { label: 'Margin %', width: '15%', right: true },
-            { label: 'Units', width: '15%', right: true },
+            { label: 'SKU', width: '20%' }, { label: 'Name', width: '28%' },
+            { label: 'On hand', width: '11%', right: true },
+            { label: 'Margin $', width: '15%', right: true }, { label: 'Margin %', width: '13%', right: true },
+            { label: 'Units', width: '13%', right: true },
           ]}
-          rows={rep.topByMargin.slice(0, 15).map(i => [i.sku.slice(0, 22), name(i, 34), money(i.monthMargin), pct(i.marginPct), qty(i.monthUnits)])}
+          rows={rep.topByMargin.slice(0, 15).map(i => [i.sku.slice(0, 22), name(i, 28), qty(i.onHand), money(i.monthMargin), pct(i.marginPct), qty(i.monthUnits)])}
         />
 
         <Table
@@ -208,32 +243,35 @@ function StockEomDoc({ rep }: { rep: EomReport }) {
           title="Sold while out of stock"
           hint="Sold this month but nothing available, or committed beyond what's on hand — demand you couldn't fill on the spot."
           cols={[
-            { label: 'SKU', width: '20%' }, { label: 'Name', width: '32%' },
-            { label: 'Units sold', width: '12%', right: true }, { label: 'Available', width: '12%', right: true },
-            { label: 'Committed', width: '12%', right: true }, { label: 'On order', width: '12%', right: true },
+            { label: 'SKU', width: '20%' }, { label: 'Name', width: '28%' },
+            { label: 'On hand', width: '10%', right: true }, { label: 'Units sold', width: '11%', right: true },
+            { label: 'Available', width: '10%', right: true }, { label: 'Committed', width: '11%', right: true },
+            { label: 'On order', width: '10%', right: true },
           ]}
-          rows={rep.unfilledDemand.map(i => [i.sku.slice(0, 22), name(i, 32), qty(i.monthUnits), qty(i.available), qty(i.committed), qty(i.onOrder)])}
+          rows={rep.unfilledDemand.map(i => [i.sku.slice(0, 22), name(i, 28), qty(i.onHand), qty(i.monthUnits), qty(i.available), qty(i.committed), qty(i.onOrder)])}
         />
 
         <Table
           title="Sold below cost this month"
           cols={[
-            { label: 'SKU', width: '20%' }, { label: 'Name', width: '32%' },
-            { label: 'Sell ex', width: '16%', right: true }, { label: 'Avg cost', width: '16%', right: true },
-            { label: 'Units', width: '16%', right: true },
+            { label: 'SKU', width: '20%' }, { label: 'Name', width: '28%' },
+            { label: 'On hand', width: '12%', right: true },
+            { label: 'Sell ex', width: '14%', right: true }, { label: 'Avg cost', width: '14%', right: true },
+            { label: 'Units', width: '12%', right: true },
           ]}
-          rows={rep.belowCost.map(i => [i.sku.slice(0, 22), name(i, 32), money(i.sellEx), money(i.avgCost), qty(i.monthUnits)])}
+          rows={rep.belowCost.map(i => [i.sku.slice(0, 22), name(i, 28), qty(i.onHand), money(i.sellEx), money(i.avgCost), qty(i.monthUnits)])}
         />
 
         <Table
           title="Cost creep — buy price up, sell price unchanged"
           hint="Last price paid more than 10% above the average cost. A price-review list."
           cols={[
-            { label: 'SKU', width: '20%' }, { label: 'Name', width: '32%' },
-            { label: 'Avg cost', width: '16%', right: true }, { label: 'Last paid', width: '16%', right: true },
-            { label: 'Margin now', width: '16%', right: true },
+            { label: 'SKU', width: '20%' }, { label: 'Name', width: '28%' },
+            { label: 'On hand', width: '12%', right: true },
+            { label: 'Avg cost', width: '14%', right: true }, { label: 'Last paid', width: '14%', right: true },
+            { label: 'Margin now', width: '12%', right: true },
           ]}
-          rows={rep.costCreep.map(i => [i.sku.slice(0, 22), name(i, 32), money(i.avgCost), money(i.lastPurchasePrice), pct(i.marginPct)])}
+          rows={rep.costCreep.map(i => [i.sku.slice(0, 22), name(i, 28), qty(i.onHand), money(i.avgCost), money(i.lastPurchasePrice), pct(i.marginPct)])}
         />
 
         <Table

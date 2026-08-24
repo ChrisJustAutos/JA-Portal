@@ -64,6 +64,57 @@ export function previousMonth(now = new Date()): string {
   return monthKey(new Date(Date.UTC(bne.getUTCFullYear(), bne.getUTCMonth() - 1, 1)))
 }
 
+/** Shift a 'YYYY-MM' by n months. */
+export function addMonths(month: string, n: number): string {
+  const [y, m] = month.split('-').map(Number)
+  return monthKey(new Date(Date.UTC(y, m - 1 + n, 1)))
+}
+
+/** Inclusive list of 'YYYY-MM' from → to. Empty when from is after to. */
+export function monthsBetween(from: string, to: string): string[] {
+  const out: string[] = []
+  let cur = from
+  for (let guard = 0; guard < 600 && cur <= to; guard++) { out.push(cur); cur = addMonths(cur, 1) }
+  return out
+}
+
+/** How far back the sales history may be pulled. 36 months keeps the MYOB
+ *  read inside the 300s function budget on a cold cache. */
+export const MAX_HISTORY_MONTHS = 36
+export const DEFAULT_HISTORY_MONTHS = 12
+
+/** Resolve the requested history window against the reported month. The window
+ *  always ENDS at or before the reported month — a month-end report must not
+ *  average in sales it could not have known about. */
+export function resolveHistoryWindow(
+  month: string, from?: string | null, to?: string | null,
+): { from: string; to: string; months: string[] } {
+  const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
+  let hTo = to && MONTH_RE.test(to) ? to : month
+  if (hTo > month) hTo = month
+  let hFrom = from && MONTH_RE.test(from) ? from : addMonths(hTo, -(DEFAULT_HISTORY_MONTHS - 1))
+  if (hFrom > hTo) hFrom = hTo
+  // Cap the span, keeping the end fixed — the recent months are the ones that
+  // matter, and an unbounded range would time the MYOB read out.
+  if (monthsBetween(hFrom, hTo).length > MAX_HISTORY_MONTHS) hFrom = addMonths(hTo, -(MAX_HISTORY_MONTHS - 1))
+  return { from: hFrom, to: hTo, months: monthsBetween(hFrom, hTo) }
+}
+
+/** Growth across a monthly series: the back half against the front half. On an
+ *  odd number of months the middle one is dropped so both halves are the same
+ *  length. Null under 4 months — two-month halves are noise, not a trend. */
+export function halfOverHalfGrowth(series: Array<{ units: number; revEx: number }>): number | null {
+  if (series.length < 4) return null
+  const half = Math.floor(series.length / 2)
+  const sum = (rows: typeof series, k: 'units' | 'revEx') => rows.reduce((s, r) => s + r[k], 0)
+  const first = series.slice(0, half)
+  const second = series.slice(series.length - half)
+  const fRev = sum(first, 'revEx'), sRev = sum(second, 'revEx')
+  if (fRev > 0) return (sRev - fRev) / fRev
+  const fU = sum(first, 'units'), sU = sum(second, 'units')
+  return fU > 0 ? (sU - fU) / fU : null
+}
+
 export interface EomItem {
   sku: string; name: string; supplier: string | null
   onHand: number; available: number; committed: number; onOrder: number
@@ -85,6 +136,20 @@ export interface EomItem {
    *  what ranks the slow-mover list: $60k at 200 days of cover matters more
    *  than $300 that has never moved. */
   capitalAtRisk: number
+
+  // ── over the chosen sales-history window (report.history) ──
+  /** Units invoiced across the whole window. */
+  historyUnits: number
+  historyRevenueEx: number
+  /** Window totals ÷ months in the window — the "average sale" figures. */
+  avgUnitsPerMonth: number
+  avgRevenuePerMonth: number
+  /** On-hand ÷ average units per month: months of stock at the average rate.
+   *  Steadier than daysOfCover, which is driven by the last 90 days alone. */
+  monthsCoverAtAvg: number | null
+  /** Back half of the window against the front half — this SKU growing or
+   *  fading. Null when the window is under 4 months or there is no baseline. */
+  growthPct: number | null
 }
 
 /** A slow mover carries WHY it is on the list — dead, or simply carrying far
@@ -117,6 +182,18 @@ export interface EomReport {
     reorderExcludedCount: number
     activeSkusThisMonth: number
   }
+  /** The sales-history window every average/growth figure is measured over,
+   *  plus the month-by-month series behind it. */
+  history: {
+    from: string; to: string; months: number
+    unitsTotal: number; revenueExTotal: number
+    avgUnitsPerMonth: number; avgRevenuePerMonth: number
+    /** Back half vs front half of the window, on revenue. */
+    growthPct: number | null
+    firstHalfLabel: string | null; firstHalfRevenueEx: number | null
+    secondHalfLabel: string | null; secondHalfRevenueEx: number | null
+    series: Array<{ month: string; units: number; revenueEx: number }>
+  }
   ageing: Array<{ bucket: string; skus: number; value: number }>
   topByUnits: EomItem[]
   topByRevenue: EomItem[]
@@ -134,10 +211,18 @@ export interface EomReport {
   notes: string[]
 }
 
-export async function buildEomReport(month: string): Promise<EomReport> {
+export async function buildEomReport(
+  month: string,
+  opts: { historyFrom?: string | null; historyTo?: string | null } = {},
+): Promise<EomReport> {
   const { start, end, label } = monthWindow(month)
   const prev = monthWindow(previousMonthOf(month))
   const now = new Date()
+
+  // The sales-history window drives every average, the months-of-cover figure
+  // and the growth read (Chris, 2026-08-25). Defaults to the 12 months ending
+  // with the reported month; the report states which window it used.
+  const histWin = resolveHistoryWindow(month, opts.historyFrom, opts.historyTo)
 
   // The Stock Order sheet (b2b_reorder_items, migration 114) is the curated list
   // of SKUs Just Autos actually buys. MYOB's item list is much wider and includes
@@ -148,11 +233,17 @@ export async function buildEomReport(month: string): Promise<EomReport> {
   const { data: sheetRows } = await sb().from('b2b_reorder_items').select('sku')
   const sheet = new Set((sheetRows || []).map(r => String(r.sku || '').trim().toUpperCase()).filter(Boolean))
 
+  // 13 months back from the START of the reported month gives the month itself,
+  // the month before it, and a full 12 months for run rates and turns — read
+  // ALWAYS, so stock turn stays comparable whatever history window is chosen.
+  // A longer window simply starts the read earlier.
+  const defaultStart = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 12, 1))
+  const historyStart = monthWindow(histWin.from).start
+  const fetchStart = historyStart < defaultStart ? historyStart : defaultStart
+
   const [items, sales] = await Promise.all([
     fetchInventoryItems('JAWS'),
-    // 13 months back from the START of the reported month gives the month itself,
-    // the month before it, and a full 12 months for run rates and turns.
-    fetchSaleInvoicesWithLines('JAWS', { start: new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 12, 1)).toISOString().slice(0, 10) }),
+    fetchSaleInvoicesWithLines('JAWS', { start: fetchStart.toISOString().slice(0, 10) }),
   ])
 
   const invById = new Map<string, { date: Date; isTaxInclusive: boolean }>()
@@ -213,6 +304,15 @@ export async function buildEomReport(month: string): Promise<EomReport> {
     const units90 = a ? a.units90 : 0
     const lastSold = a?.lastSold || null
     const runRatePerDay = units90 / 90
+
+    // Sales history over the chosen window, straight off the per-month tallies
+    // already built above. A month with no sale contributes a zero, so the
+    // averages are per month of the WINDOW, not per month that happened to sell.
+    const series = histWin.months.map(mk => a?.monthly[mk] || { units: 0, revEx: 0 })
+    const historyUnits = series.reduce((t, m) => t + m.units, 0)
+    const historyRevenueEx = series.reduce((t, m) => t + m.revEx, 0)
+    const avgUnitsPerMonth = historyUnits / histWin.months.length
+    const avgRevenuePerMonth = historyRevenueEx / histWin.months.length
     const supplierRaw = it.RestockingSupplierName ? String(it.RestockingSupplierName) : null
     return {
       sku, name: String(it.Name || ''),
@@ -234,6 +334,10 @@ export async function buildEomReport(month: string): Promise<EomReport> {
       daysOfCover: runRatePerDay > 0 ? onHand / runRatePerDay : null,
       // Capped at MYOB's own CurrentValue: onHand x avgCost can drift from it.
       capitalAtRisk: r2(Math.min(num(it.CurrentValue), Math.max(0, onHand - runRatePerDay * TARGET_COVER_DAYS) * avgCost)),
+      historyUnits: r2(historyUnits), historyRevenueEx: r2(historyRevenueEx),
+      avgUnitsPerMonth: r2(avgUnitsPerMonth), avgRevenuePerMonth: r2(avgRevenuePerMonth),
+      monthsCoverAtAvg: avgUnitsPerMonth > 0 ? r2(onHand / avgUnitsPerMonth) : null,
+      growthPct: halfOverHalfGrowth(series),
     }
   })
 
@@ -368,6 +472,34 @@ export async function buildEomReport(month: string): Promise<EomReport> {
     turns: h.turns_annualised == null ? null : Number(h.turns_annualised),
   }))
 
+  // Whole-business sales by month across the window — the growth/decline read.
+  const historySeries = histWin.months.map(mk => {
+    let units = 0, revenueEx = 0
+    Array.from(per.values()).forEach(a => {
+      const m = a.monthly[mk]
+      if (m) { units += m.units; revenueEx += m.revEx }
+    })
+    return { month: mk, units: r2(units), revenueEx: r2(revenueEx) }
+  })
+  const historyUnitsTotal = historySeries.reduce((t, m) => t + m.units, 0)
+  const historyRevenueTotal = historySeries.reduce((t, m) => t + m.revenueEx, 0)
+  const halfSize = Math.floor(historySeries.length / 2)
+  const firstHalf = historySeries.slice(0, halfSize)
+  const secondHalf = historySeries.slice(historySeries.length - halfSize)
+  const halfLabel = (rows: typeof historySeries) => rows.length ? `${rows[0].month} – ${rows[rows.length - 1].month}` : null
+  const history: EomReport['history'] = {
+    from: histWin.from, to: histWin.to, months: histWin.months.length,
+    unitsTotal: r2(historyUnitsTotal), revenueExTotal: r2(historyRevenueTotal),
+    avgUnitsPerMonth: r2(historyUnitsTotal / histWin.months.length),
+    avgRevenuePerMonth: r2(historyRevenueTotal / histWin.months.length),
+    growthPct: halfOverHalfGrowth(historySeries.map(m => ({ units: m.units, revEx: m.revenueEx }))),
+    firstHalfLabel: halfSize ? halfLabel(firstHalf) : null,
+    firstHalfRevenueEx: halfSize ? r2(firstHalf.reduce((t, m) => t + m.revenueEx, 0)) : null,
+    secondHalfLabel: halfSize ? halfLabel(secondHalf) : null,
+    secondHalfRevenueEx: halfSize ? r2(secondHalf.reduce((t, m) => t + m.revenueEx, 0)) : null,
+    series: historySeries,
+  }
+
   const byMonthUnits = (a: EomItem, b: EomItem) => b.monthUnits - a.monthUnits
   const cut = (rows: EomItem[]) => rows.slice(0, LIST_CAP)
 
@@ -398,6 +530,7 @@ export async function buildEomReport(month: string): Promise<EomReport> {
       reorderSheetSize: sheet.size, reorderExcludedCount,
       activeSkusThisMonth: enriched.filter(i => i.monthUnits > 0).length,
     },
+    history,
     ageing,
     topByUnits: cut([...enriched].filter(i => i.monthUnits > 0).sort(byMonthUnits)),
     topByRevenue: cut([...enriched].filter(i => i.monthRevenueEx > 0).sort((a, b) => b.monthRevenueEx - a.monthRevenueEx)),
@@ -422,6 +555,8 @@ export async function buildEomReport(month: string): Promise<EomReport> {
       `Slow movers are ranked by capital at risk — the value held beyond ${TARGET_COVER_DAYS} days of that SKU's own demand. A SKU joins the list when nothing sold in the 90 days to month end, or when it still sells but holds over ${SLOW_COVER_DAYS} days of cover with at least ${money(SLOW_CAPITAL_MIN)} past that target. Overstock (>${OVERSTOCK_DAYS} days) is the extreme end of the same list, shown separately.`,
       'Every sales figure is as at the end of the reported month — sales made after it are excluded, so a re-run of an old month gives the same answer. "Sold since" shows what has moved since, so a slow mover that has started selling again is obvious.',
       'Revenue is ex-GST, normalised per invoice using the parent tax-inclusive flag and the line tax code (lib/gst).',
+      `Averages, months-of-cover and growth are measured over ${history.months} month(s), ${history.from} to ${history.to}${history.months === DEFAULT_HISTORY_MONTHS && history.to === month ? ' (the default window)' : ' (chosen on the report)'}. A month with no sale counts as a zero, so an average is per month of the window, not per month that happened to sell. Growth compares the back half of the window with the front half; on an odd number of months the middle one is dropped so both halves are equal.`,
+      'Months of cover uses the window average; "cover (days)" elsewhere uses the last 90 days only, so a seasonal SKU can look very different under the two — that difference is the point.',
       useSheet
         ? `Reorder suggestions cover only the ${sheet.size} SKUs on the Stock Order sheet — MYOB's item list also holds kit components that are never sold separately.${reorderExcludedCount ? ` ${reorderExcludedCount} item(s) off the sheet were below their alert level and excluded; add a SKU to the Stock Order sheet if it should be ordered.` : ''}`
         : 'The Stock Order sheet is empty, so reorder suggestions cover EVERY MYOB item — expect kit components in the list until the sheet is populated.',
@@ -447,6 +582,10 @@ export async function saveSnapshot(rep: EomReport, userId?: string | null): Prom
     dead_180_count: h.dead180Count, dead_180_value: h.dead180Value,
     never_sold_count: h.neverSoldCount, never_sold_value: h.neverSoldValue,
     slow_count: h.slowCount, slow_capital: h.slowCapital,
+    history_from: rep.history.from, history_to: rep.history.to,
+    history_months: rep.history.months,
+    avg_monthly_revenue_ex: rep.history.avgRevenuePerMonth,
+    sales_growth_pct: rep.history.growthPct,
     overstock_count: h.overstockCount, overstock_value: h.overstockValue,
     reorder_count: h.reorderCount, reorder_cost: h.reorderCost,
     payload: rep,
@@ -497,7 +636,7 @@ export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: st
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;max-width:760px;margin:0 auto">
     <div style="border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:14px">
       <div style="font-size:18px;font-weight:700">Just Autos — JAWS Stock, ${esc(rep.monthLabel)}</div>
-      <div style="font-size:12px;color:#666;margin-top:3px">Month-end report · stock read ${esc(rep.generatedAt.slice(0, 10))}</div>
+      <div style="font-size:12px;color:#666;margin-top:3px">Month-end report · stock on hand as at ${esc(rep.generatedAt.slice(0, 10))}${rep.history ? ` · sales history ${esc(rep.history.from)} – ${esc(rep.history.to)}` : ''}</div>
     </div>
 
     <table style="border-collapse:collapse;margin-bottom:6px">
@@ -506,6 +645,8 @@ export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: st
       ${row('Gross margin', `${money(h.monthMargin)} (${pct(h.monthMarginPct)})`, prev?.monthMarginPct != null && h.monthMarginPct != null ? delta(h.monthMarginPct, prev.monthMarginPct) : '')}
       ${row('Stock turn (12m)', h.turnsAnnualised == null ? '—' : `${h.turnsAnnualised.toFixed(2)}× · ${h.daysInventory} days of inventory`)}
       ${row('SKUs sold this month', `${h.activeSkusThisMonth} of ${h.skus}`)}
+      ${rep.history ? row('Average sales / month', `${money(rep.history.avgRevenuePerMonth)} over ${rep.history.months} months (${rep.history.from} – ${rep.history.to})`) : ''}
+      ${rep.history && rep.history.growthPct != null ? row('Growth over that window', `${rep.history.growthPct >= 0 ? '+' : ''}${(rep.history.growthPct * 100).toFixed(1)}% — ${rep.history.secondHalfLabel} vs ${rep.history.firstHalfLabel}`) : ''}
       ${row('Dead stock (no sale 90d)', `${money(h.dead90Value)} across ${h.dead90Count} SKUs`, delta(h.dead90Value, prev?.deadValue))}
       ${row('Slow movers — capital at risk', `${money(h.slowCapital)} across ${h.slowCount} SKUs`)}
       ${row('Overstock (>1yr cover)', `${money(h.overstockValue)} across ${h.overstockCount} SKUs`)}
@@ -515,16 +656,16 @@ export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: st
     </table>
 
     ${listTable('Top movers this month (units)', rep.topByUnits.slice(0, 10).map(i =>
-      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', String(r2(i.monthUnits)), money(i.monthRevenueEx), pct(i.marginPct)]),
-      ['SKU', 'Units', 'Revenue ex', 'Margin'])}
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 32)) + '</span>', String(r2(i.onHand)), String(r2(i.monthUnits)), String(r2(i.avgUnitsPerMonth)), money(i.monthRevenueEx), pct(i.marginPct)]),
+      ['SKU', 'On hand', 'Units', 'Avg/mo', 'Revenue ex', 'Margin'])}
 
     ${listTable('Biggest margin earners this month', rep.topByMargin.slice(0, 10).map(i =>
       [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', money(i.monthMargin), pct(i.marginPct)]),
       ['SKU', 'Margin $', 'Margin %'])}
 
     ${listTable('Slow movers — where the capital is stuck', rep.slowMovers.slice(0, 10).map(i =>
-      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 34)) + '</span>', money(i.capitalAtRisk), money(i.stockValue), esc(i.slowReason), i.unitsSinceMonthEnd ? String(r2(i.unitsSinceMonthEnd)) : '—']),
-      ['SKU', 'Capital at risk', 'Value held', 'Why', 'Sold since'])}
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 30)) + '</span>', money(i.capitalAtRisk), money(i.stockValue), String(r2(i.onHand)), i.monthsCoverAtAvg == null ? '—' : i.monthsCoverAtAvg.toFixed(1), esc(i.slowReason)]),
+      ['SKU', 'Capital at risk', 'Value held', 'On hand', 'Months cover', 'Why'])}
 
     ${listTable(`Reorder suggestions — Stock Order sheet only (${h.reorderSheetSize} SKUs)`, rep.reorder.slice(0, 12).map(i =>
       [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 34)) + '</span>', String(r2(i.suggestQty)), money(i.suggestCost), esc(i.reason)]),
