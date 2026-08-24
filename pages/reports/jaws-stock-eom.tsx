@@ -20,7 +20,7 @@ interface Item {
   avgCost: number; stockValue: number; sellEx: number
   marginPct: number | null; marginDollar: number | null; lastPurchasePrice: number | null
   monthUnits: number; monthRevenueEx: number; monthMargin: number; prevMonthUnits: number
-  units90: number; lastSold: string | null; daysSinceLastSold: number | null
+  units90: number; lastSold: string | null; daysSinceLastSold: number | null; unitsSinceMonthEnd: number
   daysOfCover: number | null
   suggestQty?: number; suggestCost?: number; reason?: string
 }
@@ -203,15 +203,15 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
                 cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Margin $', right: true }, { label: 'Margin %', right: true }, { label: 'Units', right: true }]}
                 rows={report.topByMargin.map(i => [i.sku, i.name.slice(0, 46), money(i.monthMargin), pct(i.marginPct), qty(i.monthUnits)])} />
 
-              <Table title="Slow movers — capital sitting still" hint="Holding stock with no sale in 90 days, worst first by value tied up."
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Last sold' }, { label: 'Days' }]}
-                rows={report.slowMovers.map(i => [i.sku, i.name.slice(0, 44), money(i.stockValue), qty(i.onHand), i.lastSold || 'never', i.daysSinceLastSold ?? '—'])} />
+              <Table title="Slow movers — capital sitting still" hint={`Holding stock with no sale in the 90 days to the end of ${report.monthLabel}, worst first by value tied up. “Sold since” is what has moved after the month closed — a number there means the SKU is waking up, not dead.`}
+                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Last sold' }, { label: 'Days' }, { label: 'Sold since', right: true }]}
+                rows={report.slowMovers.map(i => [i.sku, i.name.slice(0, 44), money(i.stockValue), qty(i.onHand), i.lastSold || 'never', i.daysSinceLastSold ?? '—', i.unitsSinceMonthEnd ? qty(i.unitsSinceMonthEnd) : '—'])} />
 
               <Table title="Never sold" hint="Stock on the shelf that has never been invoiced in the 12 months read. Write-down, clearance or delete candidates."
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Supplier' }]}
-                rows={report.neverSold.map(i => [i.sku, i.name.slice(0, 44), money(i.stockValue), qty(i.onHand), i.supplier || '—'])} />
+                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'Value held', right: true }, { label: 'On hand', right: true }, { label: 'Sold since', right: true }, { label: 'Supplier' }]}
+                rows={report.neverSold.map(i => [i.sku, i.name.slice(0, 44), money(i.stockValue), qty(i.onHand), i.unitsSinceMonthEnd ? qty(i.unitsSinceMonthEnd) : '—', i.supplier || '—'])} />
 
-              <Table title="Reorder suggestions" hint="Below the MYOB alert level, or under 60 days cover on something that moves. Quantity targets 90 days of cover and respects MOQ; cost uses last paid price where MYOB has one."
+              <Table title="Reorder suggestions" hint={`Only the ${h.reorderSheetSize} SKUs on the Stock Order sheet — MYOB's item list also holds kit components that are never sold separately.${h.reorderExcludedCount ? ` ${h.reorderExcludedCount} off-sheet item(s) sat below their alert level and were excluded; add a SKU to the Stock Order sheet if it should be ordered.` : ''} Flagged when below the alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ; cost uses last paid price where MYOB has one.`}
                 cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'On order', right: true }, { label: 'Cover', right: true }, { label: 'Order qty', right: true }, { label: 'Est. cost', right: true }, { label: 'Why' }, { label: 'Supplier' }]}
                 rows={report.reorder.map(i => [i.sku, i.name.slice(0, 34), qty(i.onHand), qty(i.onOrder), i.daysOfCover == null ? '—' : Math.round(i.daysOfCover), qty(i.suggestQty), money(i.suggestCost), i.reason || '', i.supplier || '—'])} />
 

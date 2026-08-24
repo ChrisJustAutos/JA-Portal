@@ -72,6 +72,9 @@ export interface EomItem {
   prevMonthUnits: number
   units90: number; units365: number
   lastSold: string | null; daysSinceLastSold: number | null
+  /** Units invoiced AFTER the reported month ended. A slow mover with sales
+   *  here isn't dead — it just hadn't sold in the window being reported. */
+  unitsSinceMonthEnd: number
   runRatePerDay: number; daysOfCover: number | null
 }
 
@@ -88,6 +91,10 @@ export interface EomReport {
     neverSoldCount: number; neverSoldValue: number
     overstockCount: number; overstockValue: number
     reorderCount: number; reorderCost: number
+    /** SKUs on the Stock Order sheet the reorder list is drawn from. */
+    reorderSheetSize: number
+    /** Below their alert level but NOT on the sheet — kit parts, one-offs. */
+    reorderExcludedCount: number
     activeSkusThisMonth: number
   }
   ageing: Array<{ bucket: string; skus: number; value: number }>
@@ -113,6 +120,15 @@ export async function buildEomReport(month: string): Promise<EomReport> {
   const prev = monthWindow(previousMonthOf(month))
   const now = new Date()
 
+  // The Stock Order sheet (b2b_reorder_items, migration 114) is the curated list
+  // of SKUs Just Autos actually buys. MYOB's item list is much wider and includes
+  // kit components that are never sold separately — they sit below their alert
+  // level permanently and would swamp the reorder list with things nobody can
+  // order (Chris, 2026-08-24). b2b_product_bundles can't be used for this: it
+  // holds a single row, so it identifies nothing.
+  const { data: sheetRows } = await sb().from('b2b_reorder_items').select('sku')
+  const sheet = new Set((sheetRows || []).map(r => String(r.sku || '').trim().toUpperCase()).filter(Boolean))
+
   const [items, sales] = await Promise.all([
     fetchInventoryItems('JAWS'),
     // 13 months back from the START of the reported month gives the month itself,
@@ -130,7 +146,8 @@ export async function buildEomReport(month: string): Promise<EomReport> {
     monthUnits: number; monthRevenueEx: number
     prevUnits: number
     units90: number; units365: number; revenue365Ex: number
-    lastSold: Date | null
+    lastSold: Date | null          // bounded to <= month end, see below
+    unitsAfter: number             // invoiced after the month end
     monthly: Record<string, { units: number; revEx: number }>
   }
   const per = new Map<string, Agg>()
@@ -145,13 +162,18 @@ export async function buildEomReport(month: string): Promise<EomReport> {
     const qty = num(line.ShipQuantity)
     const ex = lineExGst(num(line.Total), meta.isTaxInclusive, line.TaxCodeCode)
     let a = per.get(sku)
-    if (!a) { a = { monthUnits: 0, monthRevenueEx: 0, prevUnits: 0, units90: 0, units365: 0, revenue365Ex: 0, lastSold: null, monthly: {} }; per.set(sku, a) }
+    if (!a) { a = { monthUnits: 0, monthRevenueEx: 0, prevUnits: 0, units90: 0, units365: 0, revenue365Ex: 0, lastSold: null, unitsAfter: 0, monthly: {} }; per.set(sku, a) }
     const d = meta.date
     if (d >= start && d <= end) { a.monthUnits += qty; a.monthRevenueEx += ex }
     if (d >= prev.start && d <= prev.end) a.prevUnits += qty
     if (d >= d90 && d <= end) a.units90 += qty
     if (d >= d365 && d <= end) { a.units365 += qty; a.revenue365Ex += ex }
-    if (!a.lastSold || d > a.lastSold) a.lastSold = d
+    // ⚠ Bound to the reported month. The fetch runs to TODAY, so without this an
+    // item sold after month end gave a lastSold beyond `end` and a NEGATIVE
+    // "days since last sold" (Chris spotted -11 on a July report, 2026-08-24).
+    // A month-end snapshot must only know what it could have known then.
+    if (d <= end && (!a.lastSold || d > a.lastSold)) a.lastSold = d
+    if (d > end) a.unitsAfter += qty
     const mk = monthKey(d)
     const m = a.monthly[mk] || { units: 0, revEx: 0 }
     m.units += qty; m.revEx += ex
@@ -187,7 +209,8 @@ export async function buildEomReport(month: string): Promise<EomReport> {
       prevMonthUnits: a ? a.prevUnits : 0,
       units90, units365: a ? a.units365 : 0,
       lastSold: lastSold ? lastSold.toISOString().slice(0, 10) : null,
-      daysSinceLastSold: lastSold ? Math.round((end.getTime() - lastSold.getTime()) / 86400000) : null,
+      daysSinceLastSold: lastSold ? Math.max(0, Math.round((end.getTime() - lastSold.getTime()) / 86400000)) : null,
+      unitsSinceMonthEnd: a ? a.unitsAfter : 0,
       runRatePerDay,
       daysOfCover: runRatePerDay > 0 ? onHand / runRatePerDay : null,
     }
@@ -207,7 +230,19 @@ export async function buildEomReport(month: string): Promise<EomReport> {
 
   // Reorder: below the alert level, or cover under 60 days on something that
   // actually moves. Quantity respects MOQ where MYOB has one.
-  const reorder = enriched
+  // An empty sheet would silently produce an empty reorder list, which reads as
+  // "nothing to buy" — the worst possible failure. Fall back to every item and
+  // say so in the notes instead.
+  const useSheet = sheet.size > 0
+  const orderable = useSheet ? enriched.filter(i => sheet.has(i.sku.trim().toUpperCase())) : enriched
+
+  const candidate = (i: EomItem) =>
+    (i.reorderLevel > 0 && i.onHand <= i.reorderLevel) || (i.daysOfCover !== null && i.daysOfCover < 60 && i.units90 > 0)
+  const reorderExcludedCount = useSheet
+    ? enriched.filter(i => !sheet.has(i.sku.trim().toUpperCase()) && candidate(i)).length
+    : 0
+
+  const reorder = orderable
     .map(i => {
       const belowLevel = i.reorderLevel > 0 && i.onHand <= i.reorderLevel
       const thinCover = i.daysOfCover !== null && i.daysOfCover < 60 && i.units90 > 0
@@ -313,6 +348,7 @@ export async function buildEomReport(month: string): Promise<EomReport> {
       neverSoldCount: neverSold.length, neverSoldValue: r2(neverSold.reduce((s, i) => s + i.stockValue, 0)),
       overstockCount: overstock.length, overstockValue: r2(overstock.reduce((s, i) => s + i.stockValue, 0)),
       reorderCount: reorder.length, reorderCost: r2(reorder.reduce((s, i) => s + i.suggestCost, 0)),
+      reorderSheetSize: sheet.size, reorderExcludedCount,
       activeSkusThisMonth: enriched.filter(i => i.monthUnits > 0).length,
     },
     ageing,
@@ -336,7 +372,11 @@ export async function buildEomReport(month: string): Promise<EomReport> {
       `On-hand quantities read from MYOB at ${now.toISOString().slice(0, 16).replace('T', ' ')} UTC — "as at now", not the last instant of ${label}. AccountRight exposes no historical quantity.`,
       'COGS and margin use units × current average cost. Invoice lines carry no cost of sale, so these figures rank SKUs reliably but are not the P&L.',
       `Stock turn = trailing 12-month COGS ÷ current stock value. Overstock = more than ${OVERSTOCK_DAYS} days of cover at the 90-day run rate.`,
+      'Every sales figure is as at the end of the reported month — sales made after it are excluded, so a re-run of an old month gives the same answer. "Sold since" shows what has moved since, so a slow mover that has started selling again is obvious.',
       'Revenue is ex-GST, normalised per invoice using the parent tax-inclusive flag and the line tax code (lib/gst).',
+      useSheet
+        ? `Reorder suggestions cover only the ${sheet.size} SKUs on the Stock Order sheet — MYOB's item list also holds kit components that are never sold separately.${reorderExcludedCount ? ` ${reorderExcludedCount} item(s) off the sheet were below their alert level and excluded; add a SKU to the Stock Order sheet if it should be ordered.` : ''}`
+        : 'The Stock Order sheet is empty, so reorder suggestions cover EVERY MYOB item — expect kit components in the list until the sheet is populated.',
     ],
   }
 }
@@ -432,11 +472,11 @@ export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: st
       [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', money(i.monthMargin), pct(i.marginPct)]),
       ['SKU', 'Margin $', 'Margin %'])}
 
-    ${listTable('Capital sitting still — no sale in 90 days', rep.slowMovers.slice(0, 10).map(i =>
-      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', money(i.stockValue), i.lastSold ? esc(i.lastSold) : 'never']),
-      ['SKU', 'Value held', 'Last sold'])}
+    ${listTable('Capital sitting still — no sale in the 90 days to month end', rep.slowMovers.slice(0, 10).map(i =>
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', money(i.stockValue), i.lastSold ? esc(i.lastSold) : 'never', i.unitsSinceMonthEnd ? String(r2(i.unitsSinceMonthEnd)) : '—']),
+      ['SKU', 'Value held', 'Last sold', 'Sold since'])}
 
-    ${listTable('Reorder suggestions', rep.reorder.slice(0, 12).map(i =>
+    ${listTable(`Reorder suggestions — Stock Order sheet only (${h.reorderSheetSize} SKUs)`, rep.reorder.slice(0, 12).map(i =>
       [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 34)) + '</span>', String(r2(i.suggestQty)), money(i.suggestCost), esc(i.reason)]),
       ['SKU', 'Qty', 'Est. cost', 'Why'])}
 

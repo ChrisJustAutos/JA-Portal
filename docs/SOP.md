@@ -387,7 +387,7 @@ This is not the same as **Stock & Inventory** (`/stock`), which shows *today* on
 | Top movers (units) and Biggest margin earners | What shifted, and what paid. These are usually *different* SKUs | Keep the margin list stocked first |
 | Where the money is sitting | Held value grouped by how recently it last sold | The **Never sold** row is the argument worth having each month |
 | Slow movers / Never sold | Capital doing nothing, worst first | Clearance, write-down, or stop reordering |
-| **Reorder suggestions** | Below the MYOB alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ; cost uses last price paid | This is the month's buy list — cross-check against the Stock Order sheet before ordering |
+| **Reorder suggestions** | **Only SKUs on the Stock Order sheet** — kit components that aren't sold separately are deliberately left out. Flagged when below the MYOB alert level, or under 60 days cover on something that moves. Quantity targets 90 days and respects MOQ; cost uses last price paid | This is the month's buy list. If something you order isn't listed, add it to the Stock Order sheet — the report only suggests what's on there, and it tells you how many off-sheet items it skipped |
 | Sold while out of stock | Demand you couldn't fill on the spot | Raise the alert level on those SKUs |
 | Sold below cost | Selling price ex GST is under average cost | Fix the price, or find out why it was discounted |
 | **Cost creep** | Last paid is more than 10% above average cost — the buy price moved and the sell price probably didn't | The price-review list. Quietly the most valuable table in the report |
@@ -398,6 +398,7 @@ This is not the same as **Stock & Inventory** (`/stock`), which shows *today* on
 **Two things to know before quoting any of it**
 
 - **The on-hand figures are read when the report runs, not at midnight on the last day of the month.** MYOB can't give a historical quantity. The 2nd-of-the-month timing keeps the gap small, and the report prints the exact read time on its face.
+- **Everything is measured as at the end of the reported month.** Sales made after it don't count, so re-running an old month always gives the same answer. The **Sold since** column on the slow-mover and never-sold lists shows what has moved *since* the month closed — so a part that looks like dead capital but has a number in that column is selling again, and can be left alone.
 - **Margin is indicative, not the P&L.** It's units multiplied by *current* average cost, because invoice lines don't carry the cost of sale. It ranks SKUs honestly and finds leakage — but don't reconcile it to the accounts and don't expect it to match the year-end figures.
 
 **Who can see it.** Admins and managers with stock access. It carries costs, margins and supplier pricing, so a reports-only login can't open it — that's deliberate, not a bug.

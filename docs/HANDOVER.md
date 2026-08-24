@@ -618,6 +618,10 @@ Month-end stock report for the **JAWS** company file. Built 2026-08-24 (migratio
 
 **Reuse, deliberately.** It calls the same `fetchInventoryItems` / `fetchSaleInvoicesWithLines` readers and the same `lineExGst` normalisation as `/stock`, so the two surfaces reconcile instead of becoming a second, subtly different truth.
 
+**Reorder scope.** Suggestions are drawn **only from the Stock Order sheet** (`b2b_reorder_items`, migration `114`) — the curated list of SKUs the business actually buys. MYOB's item list is far wider and includes **kit components that are never sold separately**; those sit below their alert level permanently and swamped the list on first use (Chris, 2026-08-24). `b2b_product_bundles` cannot be used to identify them — it holds one row. Off-sheet items below their alert level are counted (`reorderExcludedCount`) and the count is shown, so a SKU that *should* be ordered is still visible as a number; the fix is to add it to the Stock Order sheet. If the sheet is ever empty the report falls back to every item and says so in its notes, rather than silently reporting "nothing to buy".
+
+**⚠ Sales figures are bounded to the reported month.** `lastSold`, the 90/365-day windows and days-since-last-sold all stop at month end, so re-running an old month gives the same answer. This was a real bug on first use: the MYOB fetch runs to *today*, so an item sold after the month closed produced a last-sold date beyond the month end and a **negative** "days since last sold" (−11 on a July report). Each item also carries `unitsSinceMonthEnd`, surfaced as a **Sold since** column on the slow-mover and never-sold tables — a slow mover that has started selling again is then obvious instead of looking dead.
+
 **⚠ Two approximations, printed on the report itself:**
 - **On-hand is "as at generation time", not the last instant of the month.** Unavoidable — see above. The cron runs early on the 2nd to keep the gap small.
 - **COGS = units × current average cost.** Invoice lines carry no cost of sale and average cost drifts, so margin ranks SKUs reliably but is *not* the P&L. Don't reconcile it to the accounts.
