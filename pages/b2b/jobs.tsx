@@ -275,7 +275,7 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: 12.5, color: T.text2 }}>
         {job.vin && <span>VIN <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, color: T.text }}>{job.vin}</span></span>}
         {job.invoice_number && <span>Invoice {job.invoice_number}</span>}
-        {job.amount != null && <span style={{ fontVariantNumeric: 'tabular-nums' }}>${Number(job.amount).toFixed(2)}</span>}
+        {job.amount != null && <span style={{ fontVariantNumeric: 'tabular-nums' }}>${Number(job.amount).toFixed(2)} paid</span>}
         {job.invoice_url && (
           <a href={job.invoice_url} target="_blank" rel="noreferrer" style={{ color: A.accent, textDecoration: 'none', fontWeight: 600 }}>
             View invoice

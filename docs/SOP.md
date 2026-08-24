@@ -125,6 +125,12 @@ When a distributor pays, the portal already: marks the order paid, empties their
 
 So the order that lands in front of you is already invoiced into MYOB as a **sale order** and picked out on paper.
 
+### 4.1a What distributors see for pricing
+
+**Every price in the distributor portal is GST-inclusive** — catalogue, cart, freight options, order history and the order emails. If a distributor rings and quotes a figure at you, it already has GST in it.
+
+Two deliberate exceptions: the **tax invoice** shows the ex-GST subtotal, the GST and the total, because that is what a tax invoice must show; and the **staff-side admin screens** (freight zones, dropship calibration, catalogue export) are ex-GST, because that is how costing is done. Those are labelled.
+
 ### 4.2 Pick, pack and despatch
 
 **⚠ This changed on 20 August 2026.** Booking freight and despatching are now two separate steps. Booking no longer sends anything to the carrier and no longer raises the tax invoice.
@@ -354,9 +360,21 @@ The change percentages are worked out from the turnover figures themselves, not 
 
 **⚠** Vehicle Trend counts **every** invoice and quote, while the map tabs show one dot per customer per month. Its totals are legitimately higher — they are not disagreeing with each other, they are counting different things.
 
+**Export PDF** (top right, next to the FY buttons) downloads the whole financial year **month by month** — jobs, revenue, quotes, quoted value, quotes won and conversion for each month, then quotes/jobs/quote-value broken down by vehicle series per month, conversion by vehicle, a state split and the top locations by revenue. It serves the same cached pull the screen shows, so it comes back in about a second and never triggers a MechanicDesk sync.
+
+**The month strip does not change the PDF** — the export is always the full year, because month-by-month is the point of it. The **vehicle** and **state** filters *do* carry through, and the file is named accordingly (`workshop-map-FY2026-70-qld.pdf`). Filter to one vehicle or state and the booking-deposit figures drop out, because deposits carry neither a vehicle nor a postcode.
+
+**⚠ Revenue columns cover mapped records only.** A job that never geocoded has no location and no amount in the payload, so it is missing from every revenue figure — but it *is* in the job and quote counts. The PDF states the coverage on its last page (e.g. 1,300 of 1,333 job records). Don't reconcile these revenue totals against MYOB.
+
 ### 8.6 Distributor Map
 
 Quotes near each distributor against bookings they actually confirmed — the "are they converting the leads we send them" view.
+
+**Export PDF** (top right of the controls row) downloads every month of the financial year for every distributor: a combined month-by-month table, an FY table per distributor ranked by quotes in their area, quotes / bookings / booking-value matrices with a column per month, and then a small month-by-month table for each distributor on its own — that last section is the one to take into a distributor conversation.
+
+The **radius** you have selected carries into the PDF and into its filename (`distributor-map-FY2026-100km.pdf`), because the radius decides which quotes count as being in whose area. Unlike the Workshop Map export this one recomputes against Monday live, so give it a few seconds.
+
+**⚠ Capture rate is geography, not a tracked hand-off.** "Quotes" are our own workshop quotes that happen to fall within the radius of a distributor; "Bookings" are confirmed rows on the Monday Distributor - Booking board. A low capture rate means quotes near them that they didn't book — it does **not** mean a specific quote was sent to them and lost. A distributor whose Monday label doesn't match a distributor record by name shows zero bookings; "Hunter Mechanical" deliberately stays unmatched because it matches both branches.
 
 ### 8.7 Distributors report — grouping
 

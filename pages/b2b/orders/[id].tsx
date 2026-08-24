@@ -121,6 +121,15 @@ export default function OrderDetailPage({ b2bUser }: Props) {
     return () => clearTimeout(t)
   }, [order, justReturnedFromStripe, pollCount])
 
+  // Totals are presented inc GST (see the totals block). Freight is folded into
+  // subtotal_ex_gst at checkout, so recover it as the remainder: items inc +
+  // freight inc == subtotal_ex_gst + gst, no matter what tax code each line
+  // carries. Deriving it beats re-taxing freight_cost_ex_gst by a fixed 10%.
+  const itemsInc = (order?.lines || []).reduce((t, l) => t + Number(l.line_total_inc || 0), 0)
+  const freightInc = order
+    ? Math.round((Number(order.subtotal_ex_gst) + Number(order.gst) - itemsInc) * 100) / 100
+    : 0
+
   const terminal = order && (order.status === 'cancelled' || order.status === 'refunded')
   const inTransit = order && order.status === 'shipped'
   const trackingUrl = order?.shipping?.tracking_url || null
@@ -231,10 +240,20 @@ export default function OrderDetailPage({ b2bUser }: Props) {
                   ))}
                 </div>
                 <div style={{padding:'12px 20px 16px',borderTop:`1px solid ${T.border2}`}}>
-                  <Row label="Subtotal (ex GST)" value={`$${Number(order.subtotal_ex_gst).toFixed(2)}`} muted/>
-                  <Row label="GST" value={`$${Number(order.gst).toFixed(2)}`} muted/>
+                  {/* Inc GST throughout, matching the catalogue and the cart —
+                      the portal quotes distributors GST-inclusive prices, so an
+                      ex-GST subtotal here read like a different (cheaper) order.
+                      Freight is folded into subtotal_ex_gst at checkout, so it
+                      is recovered as the remainder rather than re-taxed: items
+                      inc + freight inc == subtotal_ex_gst + gst, whatever tax
+                      code the individual lines carry. */}
+                  <Row label="Items (inc GST)" value={`$${itemsInc.toFixed(2)}`} muted/>
+                  {freightInc > 0.005 && <Row label="Freight (inc GST)" value={`$${freightInc.toFixed(2)}`} muted/>}
                   {Number(order.card_fee_inc) > 0 && <Row label="Card surcharge" value={`$${Number(order.card_fee_inc).toFixed(2)}`} muted/>}
                   <Row label="Total paid" value={`$${Number(order.total_inc).toFixed(2)}`} large/>
+                  <div style={{fontSize:12,color:T.text3,marginTop:2,textAlign:'right'}}>
+                    Includes ${Number(order.gst).toFixed(2)} GST
+                  </div>
                 </div>
               </Card>
 

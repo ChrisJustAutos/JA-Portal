@@ -381,7 +381,7 @@ MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,U
 
 ## 7. Modules & SOPs
 
-Full route-by-route inventory: 115 page routes (433 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
+Full route-by-route inventory: 115 page routes (435 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
 
 ### 7.1 Dashboards (`/dashboard`, `/overview`, `/home`)
 
@@ -417,6 +417,8 @@ What the portal *does* provide around MD, all of it in daily use:
 ### 7.3 B2B — distributor portal (`/b2b/*`)
 
 Distributor experience: Shop → Cart (PO number required, ≤20 chars — MYOB limit) → Stripe Checkout (card+surcharge / PayTo / BECS) → Orders (status timeline + freight tracking) → Jobs (tune receipts to fill in) → Resources → Training → Team → Settings. Design language: the Alloy kit (`components/b2b/ui.tsx`) — distributor portal refreshed 2026-08-12, staff admin brought onto the same kit 2026-08-20.
+
+**Pricing is GST-INCLUSIVE on every distributor-facing surface** — catalogue tiles, cart lines, cart totals, freight options, order list, order detail and the order emails. Prices are *stored* ex-GST (`unit_price_ex_gst`, `trade_price_ex_gst`, `price_ex_gst`) and converted for display by a local `incGst(ex, taxable)` helper in `catalogue.tsx` and `cart.tsx` — taxable items +10%, FRE items as-is, which is why the flag matters and a blanket ×1.1 would be wrong. Audited end to end 2026-08-25; the one surface that still led with an ex-GST figure (the order-detail totals block, "Subtotal (ex GST)") now reads *Items (inc GST)* / *Freight (inc GST)* / *Total paid* with an "Includes $X GST" line, matching the cart. **Freight is folded into `subtotal_ex_gst` at checkout**, so the order detail recovers it as the remainder — `items inc + freight inc == subtotal_ex_gst + gst` — rather than re-taxing `freight_cost_ex_gst` at a fixed 10%, which would be wrong for any non-taxable line. Staff-facing admin surfaces (freight zones, dropship calibration, catalogue audit/export) deliberately stay ex-GST: that is how the costing is done, and they are labelled. The **tax invoice PDF** also stays ex + GST + total, as an ATO tax invoice must.
 
 **What happens automatically on payment** (`lib/b2b-order-pipeline.ts`): order → paid; cart cleared; MYOB invoice written cent-exact inc-GST; consignment-first pick list printed; for drop-ship items a supplier PO is created and emailed; Slack notification; freight bookable via MachShip (admin button or login-less email link). **The tax invoice is NOT raised at booking** — see Freight & despatch below.
 
@@ -470,7 +472,22 @@ CDR list with audio, transcripts, coaching analysis (per-call-type rubrics), Sen
 
 Sub-tabs: Reports · Sales Report · Sales Dashboard · Management Dashboard · Forecast · Workshop Map · Distributor Map · **Stock EOM** (§7.18, `view:stock`) · Distributors.
 
-Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it reported over the portal workshop tables, which stay empty while MechanicDesk is the system of record) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings) · **Sales Dashboard** (daily/monthly/total sales taken, plus a quote-pipeline view — see below) · **Forecast** (admin+manager; portal rebuild of the Monday "Forecast Dashboard - Includes JAWS" — see below). Per-user report-tab allowlists control who sees what.
+Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it reported over the portal workshop tables, which stay empty while MechanicDesk is the system of record) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings). Both maps export the full FY month by month as a PDF — see below · **Sales Dashboard** (daily/monthly/total sales taken, plus a quote-pipeline view — see below) · **Forecast** (admin+manager; portal rebuild of the Monday "Forecast Dashboard - Includes JAWS" — see below). Per-user report-tab allowlists control who sees what.
+
+**Map PDF exports** (added 2026-08-25). Both map reports have an **Export PDF** button that prints the whole FY month by month — the screen shows one month at a time and there was no way to take a year off it.
+
+| | Workshop Map | Distributor Map |
+|---|---|---|
+| Renderer | `lib/workshop-map-pdf.tsx` | `lib/distributor-map-pdf.tsx` |
+| Route | `GET /api/workshop/map/pdf?fy=&cat=&state=` | `GET /api/reports/distributor-map-pdf?fy=&radius=` |
+| Data | the cached `md_workshop_map_cache` payload — same one the screen reads, so it returns in ~1s and never triggers an MD pull | recomputes via `computeDistributorMap` (Monday is live), ~seconds, `maxDuration` 120 |
+| Gate | `view:reports` | `view:reports` |
+
+Both follow the house `@react-pdf/renderer` style of `lib/jaws-stock-eom-pdf.tsx` (A4, Helvetica, `fixed` table headers that repeat on page breaks, `wrap={false}` rows). Neither is month-filtered by design — the month strip narrows the screen, not the export; the vehicle/state (workshop) and radius (distributor) filters *do* carry through, into the content and the filename.
+
+**Two populations in the workshop PDF, and they are not interchangeable.** Counts come from `payload.conv` (every deduped record in the FY); revenue comes from `payload.*.points` (geocoded records only — an ungeocoded job carries no amount in the payload at all). Every table says which it is using and the last page prints the coverage. A "total revenue" that mixed them would be wrong, which is why they are kept apart rather than added.
+
+`pcState()` (postcode → state) moved out of `WorkshopMapDashboard` into `lib/workshop-map/postcode-state.ts` so the dashboard and the PDF classify identically — they previously would have held separate copies.
 
 **Weekly Quotes & Jobs Map Report** (`lib/workshop-map-weekly-report.ts`, cron `/api/cron/workshop-map-weekly`, Mon 07:10). Aggregates the previous 7 days of `md_quotes` / `md_invoices` by locality and vehicle group against a prior-4-week baseline, has Claude write the “what it means / where to market” read, and emails Matt (cc Ryan, Chris). `?dry=1` returns the JSON without sending; `?days=N` widens the window.
 
