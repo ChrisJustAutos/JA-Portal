@@ -143,7 +143,58 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
       return res.status(200).json({ ok: true, warning, units: plan })
     }
 
-    return res.status(400).json({ error: 'Unknown action — use "combine" or "reset".' })
+    // Change the box ONE consignment ships in, without combining anything.
+    // The cartonizer picks the smallest box an item fits, which is often not
+    // the box the warehouse actually uses — and its dimensions are what
+    // MachShip prices and what the carrier bills. This is the "edit the boxes"
+    // control: pick a different standard box, or "" to fall back to the item's
+    // own packaging at its own dimensions.
+    //
+    // Weight is carried over untouched: re-boxing changes what it travels in,
+    // not what is in it.
+    if (action === 'setbox') {
+      const index = Number(req.body?.index)
+      const boxName: string = String(req.body?.box || '').trim()
+
+      const eff = await effectiveUnits(c, order)
+      if ('error' in eff) return res.status(eff.httpStatus).json({ error: eff.error, detail: eff.detail })
+      const units = eff.units
+      if (!Number.isInteger(index) || index < 0 || index >= units.length) {
+        return res.status(400).json({ error: `Invalid consignment index ${req.body?.index}.` })
+      }
+      const target = units[index]
+      if (target.quantity > 1) {
+        return res.status(400).json({ error: 'A grouped pallet unit can’t be re-boxed — switch pack mode instead.' })
+      }
+
+      let replacement: PackedUnit
+      let warning: string | null = null
+      if (boxName) {
+        const { data: box } = await c.from('b2b_freight_boxes')
+          .select('name, length_mm, width_mm, height_mm, max_weight_g')
+          .eq('is_active', true).eq('name', boxName).maybeSingle()
+        if (!box) return res.status(400).json({ error: `Box "${boxName}" not found in the configured boxes.` })
+        if (target.weight_g > Number(box.max_weight_g)) {
+          warning = `${(target.weight_g / 1000).toFixed(1)} kg exceeds ${box.name}'s ${(Number(box.max_weight_g) / 1000).toFixed(1)} kg limit — make sure the box (and whoever lifts it) can take it.`
+        }
+        replacement = {
+          itemType: target.itemType, name: box.name, quantity: 1, weight_g: target.weight_g,
+          length_mm: Number(box.length_mm), width_mm: Number(box.width_mm), height_mm: Number(box.height_mm),
+          contents: target.contents,
+        }
+      } else {
+        // Back to its own packaging — keep the unit's existing dimensions and
+        // just stop claiming it's in one of our standard boxes.
+        replacement = { ...target, name: target.contents?.[0]?.name || target.name, ownPackaging: true, quantity: 1 }
+      }
+
+      const plan = units.map((u, i) => (i === index ? replacement : u))
+      const { error: uErr } = await c.from('b2b_orders').update({ freight_pack_plan: plan }).eq('id', orderId)
+      if (uErr) return res.status(500).json({ error: uErr.message })
+      return res.status(200).json({ ok: true, warning, units: plan })
+    }
+
+    return res.status(400).json({ error: 'Unknown action — use "combine", "setbox" or "reset".' })
   }
 
   res.setHeader('Allow', 'GET, POST')

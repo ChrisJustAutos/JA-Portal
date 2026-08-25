@@ -1065,6 +1065,28 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
     }
   }
 
+  // Re-box ONE consignment. The cartonizer picks the smallest box an item
+  // fits, which is often not the box the warehouse actually reaches for — and
+  // the box's dimensions are what MachShip prices and the carrier bills.
+  async function setPlanUnitBox(index: number, box: string) {
+    if (planBusy) return
+    setPlanBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/pack-plan`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'setbox', index, box }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      if (j.warning) toast(j.warning, 'error')
+      onFlash('Box changed — reprint the pick list so the warehouse packs the new plan')
+      await loadPlan()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+      setPlanBusy(false)
+    }
+  }
+
   async function resetPlan() {
     if (planBusy) return
     if (!(await confirmDialog({ title: 'Reset to automatic packing?', message: 'Removes the manual consignment plan — booking and the pick list go back to the cartonizer’s plan.' }))) return
@@ -1249,7 +1271,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
           <button onClick={() => { const v = !planOpen; setPlanOpen(v); if (v && planUnits === null) loadPlan() }}
             className="al-press al-focus"
             style={{background:'none', border:'none', padding:0, color:A.accent, fontSize:12.5, fontWeight:550, cursor:'pointer', fontFamily:'inherit'}}>
-            {planOpen ? '▾' : '▸'} Combine consignments{planOverridden ? ' — manual plan set' : ''}
+            {planOpen ? '▾' : '▸'} Boxes and consignments{planOverridden ? ' — manual plan set' : ''}
           </button>
           {planOpen && (
             <div style={{marginTop:8, borderRadius:RADIUS.sm, padding:'10px 12px', background:T.bg3}}>
@@ -1259,7 +1281,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                   <div style={{fontSize:12, color:T.text3, marginBottom:8, lineHeight:1.5}}>
                     {planOverridden
                       ? 'Manual plan — freight books and the pick list print exactly these consignments.'
-                      : 'Automatic plan (what the cartonizer will book). Tick the consignments to merge into one box — e.g. oil + sump together to save a consignment.'}
+                      : 'Automatic plan (what the cartonizer will book). Change the box on any consignment, or tick two or more to merge them into one box — e.g. oil + sump together to save a consignment.'}
                   </div>
                   {(() => { let n = 0; return planUnits.map((u, i) => {
                     const qty = Math.max(1, u.quantity)
@@ -1278,6 +1300,27 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                           {(u.contents || []).length > 0 && (
                             <span style={{display:'block', fontSize:12, color:T.text2}}>
                               {(u.contents || []).map(cl => `${cl.qty}× ${cl.name}`).join(' · ')}
+                            </span>
+                          )}
+                          {/* Change the box this one consignment ships in.
+                              Grouped pallet units can't be re-boxed — pack
+                              mode decides those. */}
+                          {selectable && (
+                            <span style={{display:'flex', alignItems:'center', gap:6, marginTop:4}}
+                              onClick={e => e.preventDefault()}>
+                              <span style={{fontSize:11.5, color:T.text3}}>ships in</span>
+                              <select
+                                value={u.ownPackaging ? '' : u.name}
+                                disabled={planBusy}
+                                onChange={e => setPlanUnitBox(i, e.target.value)}
+                                className="al-focus"
+                                style={{background:T.bg2, border:'1px solid transparent', color:T.text, borderRadius:RADIUS.sm, padding:'4px 7px', fontSize:11.5, outline:'none', fontFamily:'inherit', maxWidth:340}}>
+                                {planBoxes.some(b => b.name === u.name) ? null : <option value={u.name}>{u.name} (current)</option>}
+                                {planBoxes.map(b => (
+                                  <option key={b.name} value={b.name}>{b.name} ({Math.round(b.length_mm)}×{Math.round(b.width_mm)}×{Math.round(b.height_mm)} mm, max {(b.max_weight_g / 1000).toFixed(0)} kg)</option>
+                                ))}
+                                <option value="">Own packaging (no standard box)</option>
+                              </select>
                             </span>
                           )}
                         </span>

@@ -211,9 +211,18 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   }
   const firstBook = !order.machship_consignment_id
   if (firstBook) {
-    update.shipped_at = new Date().toISOString()
-    update.shipped_by = opts.actorId || null
-    update.status = 'shipped'
+    // Record the carrier — that IS decided now — but do NOT touch status,
+    // shipped_at or shipped_by.
+    //
+    // Booking used to manifest straight away, so marking the order shipped
+    // here was true. The 2026-08-20 split made booking a preparation step
+    // (see the note below): the consignment is left Unmanifested, nothing
+    // reaches the carrier, and the goods sit on the bench until someone
+    // presses Ship Now. The status stamp was never updated to match, so every
+    // booked order has been reporting itself shipped — to us on the orders
+    // list, and to the distributor in their portal — while still in the
+    // building. shipNowForOrders() sets shipped_at/status when the goods
+    // actually leave, which is where it belongs.
     update.carrier = order.freight_service_label || consignment.status?.name || 'MachShip'
   }
   // The consignment now EXISTS in MachShip — losing this update means the
@@ -258,7 +267,8 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     await c.from('b2b_order_events').insert({
       order_id: orderId, event_type: firstBook ? 'freight_booked' : 'freight_rebooked',
       actor_type: opts.actorId ? 'admin' : 'system', actor_id: opts.actorId || null,
-      to_status: firstBook ? 'shipped' : null,
+      // Booking no longer moves the order's status — Ship Now does.
+      to_status: null,
       metadata: { consignment_id: consignment.id, consignment_number: consignment.consignmentNumber, tracking_number: consignment.carrierConsignmentId, carrier_service: order.freight_service_label, label_warning: labelWarning },
     })
   } catch (e: any) { console.error('order_events insert failed (non-fatal):', e?.message) }

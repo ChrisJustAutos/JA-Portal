@@ -169,8 +169,14 @@ While a change is settling, the stepper fades very slightly and the line total d
 **⚠ This changed on 20 August 2026.** Booking freight and despatching are now two separate steps. Booking no longer sends anything to the carrier and no longer raises the tax invoice.
 
 1. **Admin → B2B → Orders**, open the order.
-2. Check the **packing plan**. The portal cartonises automatically. If two consignments should really travel as one box (oil and a sump, say), tick them and **Combine**, then pick the shared box. Reset returns to automatic packing.
-   **⚠** The plan locks once a consignment exists — combine before you book.
+2. Check the **packing plan** (**Boxes and consignments** on the order). The portal cartonises automatically, picking the smallest standard box each item fits - which is often not the box the warehouse actually reaches for, and the box's dimensions are what MachShip prices and the carrier bills.
+   - **Change a box:** use the **ships in** dropdown on any consignment to move it into a different standard box, or to "Own packaging" for an item that travels in its own carton.
+   - **Merge consignments:** tick two or more, choose the shared box, **Combine** - e.g. oil and a sump together to save a consignment.
+   - **Reset** returns the whole order to automatic packing.
+
+   Every change saves against the order, and freight booking and the pick list both use it verbatim, so what MachShip charges is what the warehouse packs. Reprint the pick list after changing anything.
+
+   The plan locks once a consignment exists - set the boxes before you book.
 3. **Book Freight.** This creates the MachShip consignment and prints the pick slip, consignment note and labels. The consignment sits **Unmanifested** — the carrier does not know about it yet.
 4. Pick and pack the order against the paperwork.
 5. **Ship Now.** This is the step that actually despatches: it manifests the consignment with the carrier, converts the MYOB order into a tax invoice, receipts the payment against it, prints the A4 tax invoice and emails the distributor their tracking.
@@ -178,6 +184,8 @@ While a change is settling, the stepper fades very slightly and the line total d
 **⚠ Ship the run in one action, not one order at a time.** MachShip books a carrier *pickup* when you manifest, so shipping ten orders individually raises ten pickup requests. Select the whole run and ship it once.
 
 **If nothing is reaching the carrier**, the usual answer is that Book Freight was pressed but Ship Now was not.
+
+**An order stays at its current status when you book it.** Until 25 August 2026, Book Freight marked the order **shipped** straight away - a leftover from before the two steps were split - so orders sitting on the bench read as shipped, both on the orders list and in the distributor's own portal. Booking now only records the carrier; **Ship Now** is what marks it shipped, which is what it always should have been.
 
 ### 4.2a Matching an order to its MYOB invoice
 
