@@ -1196,6 +1196,117 @@ export async function sendTuneJobReminders(): Promise<{ distributors: number; jo
   return { distributors: notified, jobs: due.length }
 }
 
+// ── Internal recap after the reminders go out (Chris 2026-08-26) ────────
+//
+// The distributor reminders tell each distributor about their own jobs.
+// Nobody here saw the whole picture, so there was no way to know whether the
+// backlog was clearing week to week or just sitting there. This sends ONE
+// email to Matt after the Friday run with every distributor's outstanding
+// count, oldest job and dollar value.
+//
+// Sent whenever the reminder pass runs, including a manual ?remind=1 or the
+// admin "Send reminders now" button - if you trigger a chase, you get the
+// resulting picture. Reports EVERY distributor with jobs outstanding, not just
+// the ones that were emailed, because a distributor who receives nothing
+// (nobody has logged in) is the one most worth knowing about.
+
+const TUNE_RECAP_EMAIL = process.env.TUNE_JOBS_RECAP_EMAIL || 'matt.h@justautosmechanical.com.au'
+
+export interface TuneRecapRow {
+  distributor: string
+  jobs: number
+  oldestDays: number
+  value: number
+  reminded: boolean
+}
+
+/** The per-distributor outstanding picture. Exported so it can be checked without sending. */
+export async function tuneJobRecapRows(): Promise<TuneRecapRow[]> {
+  const c = sb()
+  const { data: jobs } = await c.from('b2b_tune_jobs')
+    .select('id, distributor_id, amount, created_at, email_received_at, last_reminder_at')
+    .eq('status', 'awaiting_details')
+    .not('distributor_id', 'is', null)
+
+  // Same visibility rule the reminders use, so the recap can't report a job
+  // the distributor has not been shown yet.
+  const live = (jobs || []).filter(j => tuneJobVisible(j))
+  const byDist = new Map<string, any[]>()
+  for (const j of live) {
+    const g = byDist.get(j.distributor_id) || []
+    g.push(j); byDist.set(j.distributor_id, g)
+  }
+  if (byDist.size === 0) return []
+
+  const { data: dists } = await c.from('b2b_distributors').select('id, display_name')
+  const nameOf = new Map((dists || []).map(d => [d.id, d.display_name as string]))
+
+  const rows: TuneRecapRow[] = []
+  for (const [distId, djobs] of Array.from(byDist.entries())) {
+    const emails = await distributorNotifiableEmails(distId)
+    const oldest = djobs.reduce((min, j) => {
+      const t = new Date(j.email_received_at || j.created_at).getTime()
+      return Number.isFinite(t) && t < min ? t : min
+    }, Date.now())
+    rows.push({
+      distributor: nameOf.get(distId) || '(unknown distributor)',
+      jobs: djobs.length,
+      oldestDays: Math.max(0, Math.floor((Date.now() - oldest) / 86400_000)),
+      value: Math.round(djobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0)),
+      reminded: emails.length > 0,
+    })
+  }
+  // Worst first: most jobs, then oldest.
+  rows.sort((a, b) => b.jobs - a.jobs || b.oldestDays - a.oldestDays)
+  return rows
+}
+
+export async function sendTuneJobRecap(sent: { distributors: number; jobs: number }): Promise<{ sent: boolean; rows: number }> {
+  const rows = await tuneJobRecapRows()
+  const { getFromMailbox } = await import('./b2b-settings')
+
+  const money = (n: number) => '$' + n.toLocaleString('en-AU')
+  const totalJobs = rows.reduce((s, r) => s + r.jobs, 0)
+  const totalValue = rows.reduce((s, r) => s + r.value, 0)
+  const silent = rows.filter(r => !r.reminded)
+
+  const body = rows.length === 0
+    ? '<p><b>Nothing outstanding</b> — every tune job has its customer details in. Good week.</p>'
+    : `<table cellpadding="7" cellspacing="0" style="border-collapse:collapse;font-size:14px">
+        <thead><tr style="background:#f3f4f6;text-align:left">
+          <th>Distributor</th><th style="text-align:right">Jobs</th>
+          <th style="text-align:right">Oldest</th><th style="text-align:right">Value</th><th>Chased?</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `<tr style="border-bottom:1px solid #e5e7eb">
+          <td>${r.distributor}</td>
+          <td style="text-align:right">${r.jobs}</td>
+          <td style="text-align:right">${r.oldestDays}d</td>
+          <td style="text-align:right">${money(r.value)}</td>
+          <td>${r.reminded ? 'yes' : '<b style="color:#b45309">no — nobody has logged in</b>'}</td>
+        </tr>`).join('')}</tbody>
+        <tfoot><tr style="border-top:2px solid #111;font-weight:700">
+          <td>Total</td><td style="text-align:right">${totalJobs}</td>
+          <td></td><td style="text-align:right">${money(totalValue)}</td><td></td>
+        </tr></tfoot>
+      </table>`
+
+  const note = silent.length > 0
+    ? `<p style="color:#b45309"><b>${silent.length} distributor${silent.length === 1 ? '' : 's'} received no reminder</b> — ${silent.map(r => r.distributor).join(', ')}. Reminders only go to distributors with at least one portal login, so these will not chase themselves.</p>`
+    : ''
+
+  await sendMail(await getFromMailbox(), {
+    to: [TUNE_RECAP_EMAIL],
+    subject: `Tune jobs still to reconcile — ${totalJobs} across ${rows.length} distributor${rows.length === 1 ? '' : 's'}`,
+    html: `<p>Reminders have just gone out: <b>${sent.jobs}</b> job${sent.jobs === 1 ? '' : 's'} chased across <b>${sent.distributors}</b> distributor${sent.distributors === 1 ? '' : 's'}.</p>
+           <p>Still waiting on customer details:</p>
+           ${body}
+           ${note}
+           <p style="margin:18px 0"><a href="https://justautos.app/admin/b2b/tune-jobs" style="background:#4f8ef7;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">Open Tune Jobs</a></p>
+           <p style="font-size:12px;color:#888">Sent automatically after the weekly tune-job reminder run. "Oldest" is days since the Stripe receipt arrived.</p>`,
+  })
+  return { sent: true, rows: rows.length }
+}
+
 // ── Escalation ladder (Chris 2026-07-24) ────────────────────────────────
 // Email first (weekly reminder stamps first_reminded_at) →
 //   7 days unfilled → ONE SMS per distributor (business hours, Brisbane) →

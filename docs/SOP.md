@@ -244,6 +244,16 @@ Since 25 August the portal splits that field itself and mails every address in i
 - **Unmatched** - a receipt arrived whose company name matched no distributor. It has never happened, but if the matcher ever misses, this is where the job waits.
 - **Submitted** - the distributor has filled the details in and the job is queued for MechanicDesk. It passes through in seconds, so you will normally never see it. **If jobs start piling up here, the MD sync worker has stopped** - that is exactly when you need the tab, so it must not be deleted for being empty in good times.
 
+### 4.1f Tune-job reminders: who gets what, and when
+
+**Distributors are chased every Friday, about 8:20am Brisbane.** One email per distributor listing their own outstanding jobs, plus a portal push. A job is only included once it is past the 3-day visibility delay, so nobody is chased for a tune they cannot see yet, and a distributor is only emailed once a week.
+
+**Matt gets a recap immediately afterwards** (added 26 August 2026) - one email covering **every** distributor with jobs outstanding: how many, how old the oldest is, what it is worth, and whether they were actually chased. Distributors who received nothing are called out at the bottom in amber.
+
+**⚠ A reminder only goes to a distributor with at least one portal login.** That gate is deliberate - nothing emails a distributor who has never used the portal - but it means a distributor who never signs in never gets chased and never appears to be a problem. That is why the recap lists them separately: they are the ones needing a phone call, not another email.
+
+**To run it early:** Admin > B2B > Tune Jobs > **Send reminders now**. That fires the distributor reminders and the recap to Matt, exactly as Friday would.
+
 ### 4.2 Pick, pack and despatch
 
 **⚠ This changed on 20 August 2026.** Booking freight and despatching are now two separate steps. Booking no longer sends anything to the carrier and no longer raises the tax invoice.

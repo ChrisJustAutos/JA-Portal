@@ -6,7 +6,7 @@
 // Auth: Bearer CRON_SECRET, with the vercel-cron user-agent fallback.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { ingestTuneJobEmails, sendTuneJobReminders, escalateTuneJobs, sweepTuneFollowupLetters, sendDelayedTuneJobNotices, requeueBrokenTuneLetters, backfillTuneAddressColumns } from '../../../lib/b2b-tune-jobs'
+import { ingestTuneJobEmails, sendTuneJobReminders, sendTuneJobRecap, escalateTuneJobs, sweepTuneFollowupLetters, sendDelayedTuneJobNotices, requeueBrokenTuneLetters, backfillTuneAddressColumns } from '../../../lib/b2b-tune-jobs'
 
 export const config = { maxDuration: 300 }
 
@@ -41,8 +41,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let reminders: { distributors: number; jobs: number } | null = null
   const bris = new Date(Date.now() + 10 * 3600_000)
   const isFridayMorning = bris.getUTCDay() === 5 && bris.getUTCHours() === 8
+  let recap: { sent: boolean; rows: number } | null = null
   if (isFridayMorning || req.query.remind === '1') {
     reminders = await sendTuneJobReminders()
+    // Internal wrap-up to Matt once the chasing is done: every distributor's
+    // outstanding count, oldest job and value, including the ones that were
+    // NOT chased because nobody there has logged in. Never fails the run - a
+    // recap that doesn't send must not cost us the reminders that did.
+    recap = await sendTuneJobRecap(reminders).catch(e => {
+      console.error('tune-job recap email failed (non-fatal):', e?.message || e)
+      return null
+    })
   }
 
   // Escalation ladder (SMS → Ryan) stays behind TUNE_JOBS_REMINDERS_AUTO —
@@ -54,5 +63,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Address column and marks the call done, the letter automation fires.
   const letterSweep = await sweepTuneFollowupLetters().catch(e => ({ checked: 0, lettersQueued: 0, errors: [String(e?.message || e)] }))
 
-  return res.status(200).json({ ok: true, ingest, letterRepair, addressBackfill, delayedNotices, reminders, escalation, autoChase, letterSweep })
+  return res.status(200).json({ ok: true, ingest, letterRepair, addressBackfill, delayedNotices, reminders, recap, escalation, autoChase, letterSweep })
 }
