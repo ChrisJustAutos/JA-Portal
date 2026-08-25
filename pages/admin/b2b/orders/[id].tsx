@@ -133,7 +133,7 @@ interface OrderDetail {
 // Per-status labels for transitions + the timeline (Picking vs Packed must
 // stay distinct there); the header status pill uses the kit's vocabulary.
 const STATUS_LABEL: Record<string, string> = {
-  pending_payment: 'Awaiting payment',
+  pending_payment: 'Checkout not finished',
   paid: 'Paid', picking: 'Picking', packed: 'Packed',
   shipped: 'Shipped', delivered: 'Delivered',
   cancelled: 'Cancelled', refunded: 'Refunded',

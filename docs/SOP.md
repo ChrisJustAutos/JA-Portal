@@ -164,6 +164,18 @@ The quantity box in the cart and on the catalogue tile is **typed as well as ste
 
 While a change is settling, the stepper fades very slightly and the line total dims. The dimmed figure is the **last confirmed** price, not the new one — it snaps to the real total a moment later. That is deliberate: volume-break pricing is worked out on the server, so the portal will not guess at a price it hasn't been given.
 
+### 4.1c Orders that were never paid for
+
+**A checkout that was started and abandoned no longer appears on the Orders page.**
+
+The order row has to exist before the distributor is sent to Stripe - its id is the reference the payment session is keyed on - so someone who reaches the payment screen and backs out leaves a row behind. Those used to sit on the Orders page reading **Awaiting payment**, indistinguishable from a real order owing money. Weirys did exactly this on 25 August: B2B-2026-000051 showed $8,081.26 unpaid while the same cart went through 27 minutes later as B2B-2026-000052.
+
+They are now hidden from the list and left out of its value total. Nothing is deleted - the **Checkout not finished** tile still counts them, and clicking it lists them. The status is also renamed from "Awaiting payment" to **Checkout not finished**, because that is what it means.
+
+**Bank-transfer and PayTo orders are NOT affected.** Those are genuinely paid orders awaiting settlement; they show as **Paid** and stay on the list where you can see them. Only an unfinished Stripe checkout hides.
+
+**⚠ Don't chase one for payment.** If a distributor tells you they were charged but the order looks unfinished, don't assume - check Stripe. The payment either completed (and there will be a second, paid order) or it didn't.
+
 ### 4.2 Pick, pack and despatch
 
 **⚠ This changed on 20 August 2026.** Booking freight and despatching are now two separate steps. Booking no longer sends anything to the carrier and no longer raises the tax invoice.

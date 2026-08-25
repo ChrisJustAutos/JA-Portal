@@ -355,7 +355,7 @@ export function orderStatusColor(status: string): string {
 }
 
 export function orderStatusLabel(status: string): string {
-  if (status === 'pending_payment') return 'Awaiting payment'
+  if (status === 'pending_payment') return 'Checkout not finished'
   if (status === 'picking' || status === 'packed') return 'Being prepared'
   return status.charAt(0).toUpperCase() + status.slice(1)
 }

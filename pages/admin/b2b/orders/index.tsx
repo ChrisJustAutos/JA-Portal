@@ -68,7 +68,10 @@ const STATUS_ORDER = ['pending_payment', 'paid', 'picking', 'packed', 'shipped',
 // Tile labels stay per-status (Picking vs Packed are separate filter buckets);
 // row pills use the kit's orderStatusLabel vocabulary.
 const STATUS_LABEL: Record<string, string> = {
-  pending_payment: 'Awaiting payment',
+  // Not 'Awaiting payment' - that reads as a real order owing money. It is a
+  // checkout that was started and never finished, and it is hidden from the
+  // list unless you pick this tile.
+  pending_payment: 'Checkout not finished',
   paid: 'Paid',
   picking: 'Picking',
   packed: 'Packed',

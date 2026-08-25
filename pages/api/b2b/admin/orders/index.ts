@@ -65,7 +65,17 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
     distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( id, display_name )
   `, { count: 'exact' })
 
+  // A pending_payment order is a checkout that was STARTED, not an order.
+  // The row has to exist before the Stripe redirect (its id is the session's
+  // reference), so a distributor who backs out at the payment screen leaves one
+  // behind - and it looked exactly like a real unpaid order on this page.
+  // Weirys did this on 2026-08-25: B2B-2026-000051 sat here at $8,081.26 while
+  // the same cart went through 27 minutes later as B2B-2026-000052.
+  //
+  // They are hidden unless you ASK for them by filtering to Awaiting payment,
+  // so nothing is lost - the tile is still there and still counts them.
   if (statuses.length > 0) q = q.in('status', statuses)
+  else q = q.neq('status', 'pending_payment')
   if (distributorId)       q = q.eq('distributor_id', distributorId)
   if (dateFrom)            q = q.gte('created_at', `${dateFrom}T00:00:00`)
   if (dateTo)              q = q.lte('created_at', `${dateTo}T23:59:59`)
@@ -88,7 +98,10 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
     // Exclude test orders from revenue totals so they never inflate the numbers
     // (they still appear in the list, badged [TEST]).
     let agg = c.from('b2b_orders').select('total_inc, status').eq('is_test', false)
+    // Same exclusion, so the value shown over the list matches the list. An
+    // abandoned checkout was adding its full value to the totals.
     if (statuses.length > 0) agg = agg.in('status', statuses)
+    else agg = agg.neq('status', 'pending_payment')
     if (distributorId)       agg = agg.eq('distributor_id', distributorId)
     if (dateFrom)            agg = agg.gte('created_at', `${dateFrom}T00:00:00`)
     if (dateTo)              agg = agg.lte('created_at', `${dateTo}T23:59:59`)
@@ -117,7 +130,9 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
   if (statusRows) {
     for (const r of statusRows) statusCounts[(r as any).status] = (statusCounts[(r as any).status] || 0) + 1
   }
-  statusCounts['_all'] = statusRows?.length || 0
+  // The All tile must agree with what All actually lists, so it excludes the
+  // started-but-abandoned checkouts too. Their own tile still counts them.
+  statusCounts['_all'] = (statusRows || []).filter(r => (r as any).status !== 'pending_payment').length
 
   // Distributor list (for the filter select)
   const { data: dists } = await c
