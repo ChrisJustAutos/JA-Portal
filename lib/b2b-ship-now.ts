@@ -82,21 +82,11 @@ type OrderRow = {
 }
 
 /** An order is manifestable once a consignment exists and hasn't been manifested. */
-// Pre-despatch carrier states. ANYTHING else means the freight has left —
-// including consignments manifested outside the portal, where our own
-// machship_manifest_id stays null forever. Checking only that id let
-// B2B-2026-000047 offer Ship Now on a consignment TNT had already delivered,
-// which would have re-manifested it and raised the tax invoice a second time.
-//
-// ⚠ Kept in step with the same rule in pages/admin/b2b/orders/[id].tsx, which
-// decides whether the button is shown at all. This one decides whether it
-// WORKS — change both or the button lies.
-const PRE_DESPATCH_STATES = new Set(['', 'unmanifested', 'pending', 'pending_manifest'])
-
-export function isManifested(o: { freight_status: string | null; machship_manifest_id: string | null }): boolean {
-  if (o.machship_manifest_id) return true
-  return !PRE_DESPATCH_STATES.has((o.freight_status || '').toLowerCase())
-}
+// The despatch rule lives in lib/b2b-despatch-state so the two admin screens
+// and this guard cannot drift apart again. Imported for use below and
+// re-exported because callers already reach for it on this module.
+import { isManifested } from './b2b-despatch-state'
+export { isManifested }
 
 /**
  * Everything that depends on the goods actually leaving. Best-effort throughout:
@@ -298,6 +288,20 @@ export async function shipNowForOrders(
       const m = Array.isArray(mRes) ? mRes[0] : mRes
       const raw = m?.id ?? m?.manifestId ?? null
       manifestId = raw != null ? String(raw) : null
+      // No order in production has ever had machship_manifest_id set, so this
+      // extraction has never matched MachShip's actual manifest response. It
+      // isn't fatal — freight_status is set to 'manifested' either way — but
+      // that marker is later OVERWRITTEN by the carrier's own status on the
+      // next poll, so the manifest leaves no trace at all. Log the envelope's
+      // shape (keys only, no payload) so the right field can be picked with
+      // evidence rather than guessed at.
+      if (!manifestId) {
+        console.warn(
+          '[ship-now] manifest returned no id — response keys:',
+          m && typeof m === 'object' ? Object.keys(m).join(',') : typeof m,
+          '| top-level:', mRes && typeof mRes === 'object' && !Array.isArray(mRes) ? Object.keys(mRes).join(',') : (Array.isArray(mRes) ? 'array' : typeof mRes),
+        )
+      }
     } catch (e: any) {
       const msg = e instanceof MachShipApiError ? e.message : (e?.message || String(e))
       console.error(`ship-now: manifest failed for consignments ${consignmentIds.join(',')}:`, msg)

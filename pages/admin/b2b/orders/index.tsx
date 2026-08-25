@@ -18,6 +18,7 @@ import { SkeletonRows } from '../../../../components/ui'
 import { useToast, useConfirm } from '../../../../components/ui/Feedback'
 import { T, alpha } from '../../../../lib/ui/theme'
 import { A, RADIUS, btnStyle, cardStyle, Banner, PageTitle, StatusPill as Pill, orderStatusColor, orderStatusLabel } from '../../../../components/b2b/ui'
+import { awaitingDespatch } from '../../../../lib/b2b-despatch-state'
 
 interface Props {
   user: {
@@ -61,15 +62,6 @@ interface ListResponse {
   totals: { total_inc_sum: number; paid_sum: number }
   status_counts: Record<string, number>
   distributors: { id: string; display_name: string }[]
-}
-
-// Booked but not yet manifested = sitting on the bench waiting for "Ship now".
-// Mirrors isManifested() in lib/b2b-ship-now.ts — keep the two in step.
-function awaitingDespatch(o: OrderRow): boolean {
-  if (!o.machship_consignment_id) return false
-  if (o.machship_manifest_id) return false
-  const fs = (o.freight_status || '').toLowerCase()
-  return fs !== 'manifested' && fs !== 'consignment_missing'
 }
 
 const STATUS_ORDER = ['pending_payment', 'paid', 'picking', 'packed', 'shipped', 'delivered', 'cancelled', 'refunded'] as const

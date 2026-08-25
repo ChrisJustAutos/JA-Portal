@@ -17,6 +17,7 @@ import { useIsMobile } from '../../../../lib/useIsMobile'
 import { useConfirm, useToast } from '../../../../components/ui/Feedback'
 import { T, alpha } from '../../../../lib/ui/theme'
 import { A, RADIUS, SHADOW, cardStyle, Banner, StatusPill as Pill, orderStatusColor, orderStatusLabel } from '../../../../components/b2b/ui'
+import { awaitingDespatch as awaitingDespatchFor } from '../../../../lib/b2b-despatch-state'
 
 interface Props {
   user: {
@@ -905,21 +906,10 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   // Booking now leaves the consignment Unmanifested — nothing reaches the
   // carrier and no tax invoice is raised until "Ship Now" (Chris 2026-08-20).
   //
-  // "Manifested" can't be read off our own manifest id alone. When a
-  // consignment is manifested outside the portal — someone re-creating and
-  // despatching it in MachShip — machship_manifest_id stays null forever while
-  // the carrier reports the freight moving and then finishing. B2B-2026-000047
-  // was showing "Awaiting despatch" with a Ship Now button on a consignment TNT
-  // had already delivered; pressing it would have re-manifested the shipment
-  // and raised the tax invoice a second time.
-  //
-  // So: anything the carrier reports that ISN'T one of the pre-despatch states
-  // means it has left, whoever pressed the button. consignment_missing counts
-  // as past it too — the id is unresolvable, so Ship Now can't work anyway.
-  const PRE_DESPATCH = new Set(['', 'unmanifested', 'pending', 'pending_manifest'])
-  const freightState    = (order.freight_status || '').toLowerCase()
-  const isManifested    = !!order.machship_manifest_id || !PRE_DESPATCH.has(freightState)
-  const awaitingDespatch = hasConsignment && !isManifested
+  // Whether the freight has left is decided in lib/b2b-despatch-state, shared
+  // with the orders list and with the Ship Now guard itself — see that file for
+  // why our own manifest id is not enough to go on.
+  const awaitingDespatch = awaitingDespatchFor(order)
   const [shipNowBusy,  setShipNowBusy]  = useState(false)
   const [bookingBusy,  setBookingBusy]  = useState(false)
   const [refreshBusy,  setRefreshBusy]  = useState(false)
