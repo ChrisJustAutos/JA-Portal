@@ -178,7 +178,7 @@ While a change is settling, the stepper fades very slightly and the line total d
 
    **Where it is:** inside the **Shipping** card, as a collapsed link - click **Boxes and consignments** to open it. Until 25 August 2026 that link was hidden entirely once freight was booked, and never appeared at all on orders using static or satchel freight, which is why it may look new.
 
-   **Once freight is booked the plan is read-only.** The consignment is lodged with MachShip at those exact dimensions - that is what was priced and what the label says - so the boxes can still be *seen* but not changed. To change them, rebook the freight. Set the boxes **before** you book.
+   **You can still change the boxes after booking, until the order is manifested.** A booked consignment exists in MachShip, but nothing has reached the carrier and no label is in anyone's hands - so re-boxing then is normal packing work. Change the boxes, press **Re-book freight**, then reprint the pick list and labels. Once the order has been manifested by **Ship Now** the boxes are fixed and the panel goes read-only: the carrier has been told exactly what is coming.
 3. **Book Freight.** This creates the MachShip consignment and prints the pick slip, consignment note and labels. The consignment sits **Unmanifested** — the carrier does not know about it yet.
 4. Pick and pack the order against the paperwork.
 5. **Ship Now.** This is the step that actually despatches: it manifests the consignment with the carrier, converts the MYOB order into a tax invoice, receipts the payment against it, prints the A4 tax invoice and emails the distributor their tracking.

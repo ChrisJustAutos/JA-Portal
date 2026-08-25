@@ -15,6 +15,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../../lib/authServer'
 import { loadOrderPackInput } from '../../../../../../lib/b2b-freight-book'
 import { packOrderUnits, parsePackPlanUnits } from '../../../../../../lib/b2b-freight'
+import { isManifested } from '../../../../../../lib/b2b-despatch-state'
 import type { PackedUnit, PackedContent } from '../../../../../../lib/b2b-cartonizer'
 
 let _sb: SupabaseClient | null = null
@@ -60,7 +61,7 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
   const c = svc()
 
   const { data: order, error: oErr } = await c.from('b2b_orders')
-    .select('id, order_number, status, machship_consignment_id, freight_pack_mode, freight_pack_plan')
+    .select('id, order_number, status, machship_consignment_id, machship_manifest_id, freight_status, freight_pack_mode, freight_pack_plan')
     .eq('id', orderId).maybeSingle()
   if (oErr) return res.status(500).json({ error: oErr.message })
   if (!order) return res.status(404).json({ error: 'Order not found' })
@@ -78,22 +79,20 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
   }
 
   if (req.method === 'POST') {
-    if (order.machship_consignment_id) {
-      return res.status(400).json({ error: 'Freight is already booked for this order — the consignment plan is locked.' })
-    }
-    const action = String(req.body?.action || '')
-
-    // Once the consignment exists in MachShip it has been lodged with those
-    // exact dimensions — that's what was priced and what the label says. The
-    // UI shows the plan read-only from this point, but the API has to refuse
-    // as well: a saved plan that no longer matches the lodged consignment
-    // would send the warehouse a pick list for boxes the carrier isn't
-    // expecting. Rebooking is the way to change it.
-    if (order.machship_consignment_id) {
+    // MANIFESTED is the lock, not merely booked.
+    //
+    // A booked-but-unmanifested consignment exists in MachShip, but nothing has
+    // reached the carrier and no label is in anyone's hands yet - re-boxing at
+    // that point is a normal part of packing, and "Re-book freight" applies it.
+    // Once the consignment is manifested the carrier has been told exactly what
+    // is coming, and a changed plan would print the warehouse a pick list for
+    // boxes nobody is expecting. That is where it stops.
+    if (isManifested(order as any)) {
       return res.status(409).json({
-        error: 'Freight is already booked for this order — the consignment is lodged with MachShip at these dimensions. Rebook the freight to change the boxes.',
+        error: 'This consignment has already been manifested with the carrier, so the boxes are fixed. Cancel and rebook the freight if the packing has to change.',
       })
     }
+    const action = String(req.body?.action || '')
 
     if (action === 'reset') {
       const { error: uErr } = await c.from('b2b_orders').update({ freight_pack_plan: null }).eq('id', orderId)

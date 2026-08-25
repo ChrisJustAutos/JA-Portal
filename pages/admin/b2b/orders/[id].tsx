@@ -17,7 +17,7 @@ import { useIsMobile } from '../../../../lib/useIsMobile'
 import { useConfirm, useToast } from '../../../../components/ui/Feedback'
 import { T, alpha } from '../../../../lib/ui/theme'
 import { A, RADIUS, SHADOW, cardStyle, Banner, StatusPill as Pill, orderStatusColor, orderStatusLabel } from '../../../../components/b2b/ui'
-import { awaitingDespatch as awaitingDespatchFor } from '../../../../lib/b2b-despatch-state'
+import { awaitingDespatch as awaitingDespatchFor, isManifested as isManifestedFor } from '../../../../lib/b2b-despatch-state'
 
 interface Props {
   user: {
@@ -910,6 +910,10 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   // with the orders list and with the Ship Now guard itself — see that file for
   // why our own manifest id is not enough to go on.
   const awaitingDespatch = awaitingDespatchFor(order)
+  // The pack plan is editable right up until the consignment is MANIFESTED.
+  // Booked-but-unmanifested still has nothing with the carrier, so re-boxing
+  // then is normal packing work - it just needs a Re-book to apply.
+  const planLocked = isManifestedFor(order)
   const [shipNowBusy,  setShipNowBusy]  = useState(false)
   const [bookingBusy,  setBookingBusy]  = useState(false)
   const [refreshBusy,  setRefreshBusy]  = useState(false)
@@ -1047,7 +1051,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   }
 
   async function combinePlan() {
-    if (planBusy || hasConsignment || planSel.length < 2) return
+    if (planBusy || planLocked || planSel.length < 2) return
     setPlanBusy(true); setActionError(null)
     try {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/pack-plan`, {
@@ -1069,7 +1073,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   // fits, which is often not the box the warehouse actually reaches for — and
   // the box's dimensions are what MachShip prices and the carrier bills.
   async function setPlanUnitBox(index: number, box: string) {
-    if (planBusy || hasConsignment) return
+    if (planBusy || planLocked) return
     setPlanBusy(true); setActionError(null)
     try {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/pack-plan`, {
@@ -1284,8 +1288,10 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
               {planUnits !== null && (
                 <>
                   <div style={{fontSize:12, color:T.text3, marginBottom:8, lineHeight:1.5}}>
-                    {hasConsignment
-                      ? 'Freight is booked, so this is what the order actually ships in - lodged with MachShip at these dimensions. To change a box, rebook the freight.'
+                    {planLocked
+                      ? 'Manifested with the carrier - these are the boxes the order ships in, and they can no longer be changed.'
+                      : hasConsignment
+                      ? 'Freight is already booked, but nothing has reached the carrier yet - you can still change the boxes. Press Re-book freight afterwards to lodge the new plan, then reprint the pick list and labels.'
                       : planOverridden
                       ? 'Manual plan - freight books and the pick list print exactly these consignments.'
                       : 'Automatic plan (what the cartonizer will book). Change the box on any consignment, or tick two or more to merge them into one box - e.g. oil and a sump together to save a consignment.'}
@@ -1298,7 +1304,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                     const checked = planSel.includes(i)
                     return (
                       <label key={i} style={{display:'flex', alignItems:'flex-start', gap:8, padding:'6px 4px', borderTop: i > 0 ? `1px dashed ${T.border}` : 'none', cursor: selectable ? 'pointer' : 'default', opacity: selectable ? 1 : 0.6}}>
-                        <input type="checkbox" disabled={!selectable || hasConsignment} checked={checked}
+                        <input type="checkbox" disabled={!selectable || planLocked} checked={checked}
                           onChange={() => setPlanSel(s => checked ? s.filter(x => x !== i) : [...s, i])}
                           style={{marginTop:2, accentColor:A.accent}}/>
                         <span style={{fontSize:12, lineHeight:1.5}}>
@@ -1318,7 +1324,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                               <span style={{fontSize:11.5, color:T.text3}}>ships in</span>
                               <select
                                 value={u.ownPackaging ? '' : u.name}
-                                disabled={planBusy || hasConsignment}
+                                disabled={planBusy || planLocked}
                                 onChange={e => setPlanUnitBox(i, e.target.value)}
                                 className="al-focus"
                                 style={{background:T.bg2, border:'1px solid transparent', color:T.text, borderRadius:RADIUS.sm, padding:'4px 7px', fontSize:11.5, outline:'none', fontFamily:'inherit', maxWidth:340}}>
@@ -1334,7 +1340,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                       </label>
                     )
                   }) })()}
-                  {!hasConsignment && (
+                  {!planLocked && (
                   <div style={{display:'flex', alignItems:'center', gap:8, marginTop:10, flexWrap:'wrap'}}>
                     <span style={{fontSize:12, color:T.text3}}>into</span>
                     <select value={planBox} onChange={e => setPlanBox(e.target.value)}
