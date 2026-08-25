@@ -1047,7 +1047,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   }
 
   async function combinePlan() {
-    if (planBusy || planSel.length < 2) return
+    if (planBusy || hasConsignment || planSel.length < 2) return
     setPlanBusy(true); setActionError(null)
     try {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/pack-plan`, {
@@ -1069,7 +1069,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   // fits, which is often not the box the warehouse actually reaches for — and
   // the box's dimensions are what MachShip prices and the carrier bills.
   async function setPlanUnitBox(index: number, box: string) {
-    if (planBusy) return
+    if (planBusy || hasConsignment) return
     setPlanBusy(true); setActionError(null)
     try {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/pack-plan`, {
@@ -1264,9 +1264,14 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
         </div>
       )}
 
-      {/* Combine consignments — manual pack plan. Tick 2+ consignments, pick
-          the box they'll share, Combine. Booking + pick list use the plan. */}
-      {hasLiveQuote && !hasConsignment && (
+      {/* Boxes and consignments - the pack plan. Shown ALWAYS, because you need
+          to be able to SEE what an order ships in even after it's booked; it
+          goes read-only at that point because the consignment is already
+          lodged with MachShip at those dimensions (the API refuses edits too).
+          Not gated on having a live MachShip quote either: the cartonizer
+          packs lines into boxes regardless of which carrier was chosen, and
+          hiding the plan from static/satchel orders hid it from most of them. */}
+      {(
         <div style={{marginBottom:10}}>
           <button onClick={() => { const v = !planOpen; setPlanOpen(v); if (v && planUnits === null) loadPlan() }}
             className="al-press al-focus"
@@ -1279,9 +1284,11 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
               {planUnits !== null && (
                 <>
                   <div style={{fontSize:12, color:T.text3, marginBottom:8, lineHeight:1.5}}>
-                    {planOverridden
-                      ? 'Manual plan — freight books and the pick list print exactly these consignments.'
-                      : 'Automatic plan (what the cartonizer will book). Change the box on any consignment, or tick two or more to merge them into one box — e.g. oil + sump together to save a consignment.'}
+                    {hasConsignment
+                      ? 'Freight is booked, so this is what the order actually ships in - lodged with MachShip at these dimensions. To change a box, rebook the freight.'
+                      : planOverridden
+                      ? 'Manual plan - freight books and the pick list print exactly these consignments.'
+                      : 'Automatic plan (what the cartonizer will book). Change the box on any consignment, or tick two or more to merge them into one box - e.g. oil and a sump together to save a consignment.'}
                   </div>
                   {(() => { let n = 0; return planUnits.map((u, i) => {
                     const qty = Math.max(1, u.quantity)
@@ -1291,7 +1298,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                     const checked = planSel.includes(i)
                     return (
                       <label key={i} style={{display:'flex', alignItems:'flex-start', gap:8, padding:'6px 4px', borderTop: i > 0 ? `1px dashed ${T.border}` : 'none', cursor: selectable ? 'pointer' : 'default', opacity: selectable ? 1 : 0.6}}>
-                        <input type="checkbox" disabled={!selectable} checked={checked}
+                        <input type="checkbox" disabled={!selectable || hasConsignment} checked={checked}
                           onChange={() => setPlanSel(s => checked ? s.filter(x => x !== i) : [...s, i])}
                           style={{marginTop:2, accentColor:A.accent}}/>
                         <span style={{fontSize:12, lineHeight:1.5}}>
@@ -1311,7 +1318,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                               <span style={{fontSize:11.5, color:T.text3}}>ships in</span>
                               <select
                                 value={u.ownPackaging ? '' : u.name}
-                                disabled={planBusy}
+                                disabled={planBusy || hasConsignment}
                                 onChange={e => setPlanUnitBox(i, e.target.value)}
                                 className="al-focus"
                                 style={{background:T.bg2, border:'1px solid transparent', color:T.text, borderRadius:RADIUS.sm, padding:'4px 7px', fontSize:11.5, outline:'none', fontFamily:'inherit', maxWidth:340}}>
@@ -1327,6 +1334,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                       </label>
                     )
                   }) })()}
+                  {!hasConsignment && (
                   <div style={{display:'flex', alignItems:'center', gap:8, marginTop:10, flexWrap:'wrap'}}>
                     <span style={{fontSize:12, color:T.text3}}>into</span>
                     <select value={planBox} onChange={e => setPlanBox(e.target.value)}
@@ -1350,6 +1358,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                       </button>
                     )}
                   </div>
+                  )}
                   {planOverridden && (
                     <div style={{fontSize:12, color:A.warn, marginTop:8}}>Reprint the pick list after changing the plan so the warehouse packs it the same way.</div>
                   )}

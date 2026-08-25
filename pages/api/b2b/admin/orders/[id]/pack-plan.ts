@@ -83,6 +83,18 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
     }
     const action = String(req.body?.action || '')
 
+    // Once the consignment exists in MachShip it has been lodged with those
+    // exact dimensions — that's what was priced and what the label says. The
+    // UI shows the plan read-only from this point, but the API has to refuse
+    // as well: a saved plan that no longer matches the lodged consignment
+    // would send the warehouse a pick list for boxes the carrier isn't
+    // expecting. Rebooking is the way to change it.
+    if (order.machship_consignment_id) {
+      return res.status(409).json({
+        error: 'Freight is already booked for this order — the consignment is lodged with MachShip at these dimensions. Rebook the freight to change the boxes.',
+      })
+    }
+
     if (action === 'reset') {
       const { error: uErr } = await c.from('b2b_orders').update({ freight_pack_plan: null }).eq('id', orderId)
       if (uErr) return res.status(500).json({ error: uErr.message })
