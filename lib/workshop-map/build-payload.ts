@@ -62,7 +62,8 @@ export interface MapQuoteRow {
 
 // Point keys are intentionally short (payload size): la/ln lat/lng, pc postcode,
 // l locality, m month index, g group, c customer, a amount, j job-type label,
-// i invoice/quote number, x inferred flag (jobs), w won flag (quotes).
+// i invoice/quote number, d issue/quote date (YYYY-MM-DD), x inferred flag
+// (jobs), w won flag (quotes).
 export interface MapPayload {
   fy: number
   months: { k: string; label: string }[]
@@ -138,6 +139,7 @@ export function buildFyPayload(fy: number, invoices: MapInvoiceRow[], quotes: Ma
       la: r.lat, ln: r.lng, pc: r.postcode || '', l: r.locality || r.suburb || '',
       m: r.monthIndex, g: r.group, c: r.customerName || '', a: r2(g.amount),
       j: (r.jobTypeText || '').slice(0, 38), i: r.invoiceNumber,
+      d: r.issueDate || g.firstDate || '',
     }
     if (r.inferred) p.x = 1
     return p
@@ -153,7 +155,7 @@ export function buildFyPayload(fy: number, invoices: MapInvoiceRow[], quotes: Ma
     const p: any = {
       la: r.lat, ln: r.lng, pc: r.postcode || '', l: r.locality || r.suburb || '',
       m: r.monthIndex, g: r.group, c: r.customerName || '', a: r2(r.totalAmount),
-      i: r.quoteNumber,
+      i: r.quoteNumber, d: r.quoteDate || '',
     }
     if (r.won) p.w = 1
     if (r.inferred) p.x = 1

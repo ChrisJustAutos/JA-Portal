@@ -385,6 +385,12 @@ The change percentages are worked out from the turnover figures themselves, not 
 
 **⚠** Vehicle Trend counts **every** invoice and quote, while the map tabs show one dot per customer per month. Its totals are legitimately higher — they are not disagreeing with each other, they are counting different things.
 
+**Exporting the list behind one dot (CSV).** On the Jobs Map and Quotes Map, click a location bubble and the popup now has a **⬇ CSV** button in its header. It downloads every customer behind that dot as a spreadsheet — date, month, customer, vehicle series, job type (jobs) or won/not-won (quotes), the **MechanicDesk invoice or quote number**, amount inc GST, suburb, postcode and state. The popup itself only lists the 40 largest; the CSV has the lot, and says so when there are more.
+
+The export honours whatever the screen is showing — month strip, vehicle chips and state pill — so filter first, then click the dot. The file names itself after the tab, FY and location (`workshop-quotes-FY2026-buderim-4556.csv`).
+
+**⚠ One row per customer per month, not one row per quote.** These are the map's dots, so a customer who was quoted three times in a month appears once, at the largest quote, and a customer with three invoices in a month appears once at their combined spend with the largest invoice's number. It is a call list, not an accounting extract — for every individual record use the Vehicle Trend tab or MechanicDesk itself.
+
 **Export PDF** (top right, next to the FY buttons) downloads the whole financial year **month by month** — jobs, revenue, quotes, quoted value, quotes won and conversion for each month, then quotes/jobs/quote-value broken down by vehicle series per month, conversion by vehicle, a state split and the top locations by revenue. It serves the same cached pull the screen shows, so it comes back in about a second and never triggers a MechanicDesk sync.
 
 **The month strip does not change the PDF** — the export is always the full year, because month-by-month is the point of it. The **vehicle** and **state** filters *do* carry through, and the file is named accordingly (`workshop-map-FY2026-70-qld.pdf`). Filter to one vehicle or state and the booking-deposit figures drop out, because deposits carry neither a vehicle nor a postcode.

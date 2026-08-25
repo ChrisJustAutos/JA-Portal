@@ -17,7 +17,7 @@ import { pcState } from '../../lib/workshop-map/postcode-state'
 
 type ViewKey = 'jobs' | 'quotes' | 'conv' | 'state' | 'trend'
 
-interface Pt { la: number; ln: number; pc: string; l: string; m: number; g: string; c: string; a: number; j?: string; i?: string; x?: number; w?: number }
+interface Pt { la: number; ln: number; pc: string; l: string; m: number; g: string; c: string; a: number; j?: string; i?: string; d?: string; x?: number; w?: number }
 interface Payload {
   fy: number
   months: { k: string; label: string }[]
@@ -39,6 +39,8 @@ interface ApiResp {
 
 const fmt = (n: number) => '$' + Math.round(n).toLocaleString('en-AU')
 const fmtK = (n: number) => n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1000 ? '$' + (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'k' : '$' + Math.round(n)
+// YYYY-MM-DD → DD/MM/YY for the popup rows (CSV keeps the ISO date so it sorts).
+const dmy = (d: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || ''); return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : '' }
 const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 const CK = ['70', '200', '300', 'HILUX', 'PRADO']
@@ -114,6 +116,39 @@ export default function WorkshopMapDashboard() {
   const COL = useMemo(() => Object.fromEntries((P?.cats || []).map(c => [c.k, c.col])), [P])
   const NAME = useMemo(() => Object.fromEntries((P?.cats || []).map(c => [c.k, c.n])), [P])
 
+  // ── Export one location's list to CSV ──────────────────────────────────
+  // Wired to the ⬇ CSV button in every map popup. Exports every row behind the
+  // dot (the popup itself only renders the top 40), with the MechanicDesk
+  // invoice/quote number and the issue date. `d` only exists in payloads built
+  // after 2026-08-25 — older cached payloads fall back to the FY month label.
+  const exportLoc = useCallback((loc: string, pc: string, rows: Pt[]) => {
+    if (!rows.length) return
+    const isJobs = view === 'jobs'
+    const mLabel = (m: number) => P?.months[m]?.label || ''
+    const head = isJobs
+      ? ['Date', 'Month', 'Customer', 'Vehicle', 'Job type', 'Invoice #', 'Amount inc GST', 'Suburb', 'Postcode', 'State']
+      : ['Date', 'Month', 'Customer', 'Vehicle', 'Quote #', 'Won', 'Amount inc GST', 'Suburb', 'Postcode', 'State']
+    const body = [...rows]
+      .sort((a, b) => (a.d || '').localeCompare(b.d || '') || a.m - b.m || b.a - a.a)
+      .map(v => isJobs
+        ? [v.d || '', mLabel(v.m), v.c, NAME[v.g] || v.g, v.j || '', v.i || '', v.a.toFixed(2), v.l, v.pc, pcState(v.pc)]
+        : [v.d || '', mLabel(v.m), v.c, NAME[v.g] || v.g, v.i || '', v.w ? 'Yes' : 'No', v.a.toFixed(2), v.l, v.pc, pcState(v.pc)])
+    const cell = (x: any) => {
+      const t = String(x ?? '')
+      return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t
+    }
+    const csv = [head, ...body].map(r => r.map(cell).join(',')).join('\r\n')
+    const slug = (loc || pc || 'area').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    // BOM so Excel reads the UTF-8 (customer names carry accents/dashes).
+    const url = URL.createObjectURL(new Blob([String.fromCharCode(0xfeff), csv], { type: 'text/csv;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `workshop-${isJobs ? 'jobs' : 'quotes'}-FY${data?.fy || ''}-${slug}${pc ? '-' + pc : ''}.csv`
+    document.body.appendChild(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 4000)
+    toast(`${rows.length} ${isJobs ? 'job' : 'quote'}${rows.length === 1 ? '' : 's'} exported`, 'success')
+  }, [view, P, NAME, data?.fy, toast])
+
   // ── Map bootstrap (once the payload exists so the div is mounted) ──────
   useEffect(() => {
     if (!P || !mapDivRef.current || mapRef.current) return
@@ -172,18 +207,26 @@ export default function WorkshopMapDashboard() {
       const mk = L.circleMarker([o.la, o.ln], { radius: rad(o.t), color: col, weight: 1.5, fillColor: col, fillOpacity: .48 })
       const veh = Object.entries(o.byg).sort((a, b) => b[1].t - a[1].t)
         .map(([k, v]) => `<div class="pvtag"><i style="background:${COL[k]}"></i>${NAME[k]} <b>${v.n}</b> ${fmtK(v.t)}</div>`).join('')
-      const rows = [...o.inv].sort((a, b) => b.a - a.a).slice(0, 40)
-        .map(v => `<div class="pop-row"><div><div class="cn"><span class="vdot" style="background:${COL[v.g]}"></span>${esc(v.c)}${v.x ? ' <span class="inf" title="Series inferred">≈</span>' : ''}${v.w ? ' <span class="won">✓ WON</span>' : ''}</div>${v.j ? `<div class="jt">${esc(v.j)} <span class="pop-inv">#${esc(v.i || '')}</span></div>` : ''}</div><div class="am" style="color:${amColor}">${fmtK(v.a)}</div></div>`).join('')
+      const CAP = 40
+      const rows = [...o.inv].sort((a, b) => b.a - a.a).slice(0, CAP)
+        .map(v => `<div class="pop-row"><div><div class="cn"><span class="vdot" style="background:${COL[v.g]}"></span>${esc(v.c)}${v.x ? ' <span class="inf" title="Series inferred">≈</span>' : ''}${v.w ? ' <span class="won">✓ WON</span>' : ''}</div>${v.j || v.i ? `<div class="jt">${esc(v.j || '')}${v.j && v.i ? ' ' : ''}${v.i ? `<span class="pop-inv">#${esc(v.i)}${v.d ? ' · ' + esc(dmy(v.d)) : ''}</span>` : ''}</div>` : ''}</div><div class="am" style="color:${amColor}">${fmtK(v.a)}</div></div>`).join('')
       const wonS = view === 'quotes' ? `<div><b>${o.won}</b><span>Won</span></div>` : ''
+      const moreS = o.inv.length > CAP ? `<div class="pop-more">Showing the ${CAP} largest of ${o.inv.length} — export for the full list</div>` : ''
       mk.bindPopup(
-        `<div class="pop-h">${esc(o.l)}<span class="pc">${esc(o.pc)}</span></div><div class="pop-s"><div><b>${fmtK(o.t)}</b><span>${view === 'jobs' ? 'Revenue' : 'Quoted'}</span></div><div><b>${o.n}</b><span>${view === 'jobs' ? 'Job' : 'Quote'}${o.n > 1 ? 's' : ''}</span></div>${wonS}</div><div class="pop-veh">${veh}</div><div class="pop-list">${rows}</div>`,
+        `<div class="pop-h"><span>${esc(o.l)}<span class="pc">${esc(o.pc)}</span></span><button type="button" class="pop-exp" title="Download this list as CSV">⬇ CSV</button></div><div class="pop-s"><div><b>${fmtK(o.t)}</b><span>${view === 'jobs' ? 'Revenue' : 'Quoted'}</span></div><div><b>${o.n}</b><span>${view === 'jobs' ? 'Job' : 'Quote'}${o.n > 1 ? 's' : ''}</span></div>${wonS}</div><div class="pop-veh">${veh}</div><div class="pop-list">${rows}</div>${moreS}`,
         { maxWidth: 330, minWidth: 260 },
       )
+      // Popup content is a raw HTML string, so the export button is wired on
+      // open — Leaflet rebuilds the node each time the popup is shown.
+      mk.on('popupopen', (e: any) => {
+        const btn = (e.popup.getElement() as HTMLElement | null)?.querySelector('.pop-exp') as HTMLButtonElement | null
+        if (btn) btn.onclick = ev => { ev.stopPropagation(); exportLoc(o.l, o.pc, o.inv) }
+      })
       mk.on('mouseover', function (this: L.CircleMarker) { this.setStyle({ fillOpacity: .8 }) })
       mk.on('mouseout', function (this: L.CircleMarker) { this.setStyle({ fillOpacity: .48 }) })
       mk.addTo(layer)
     })
-  }, [selPoints, view, cat, P, COL, NAME])
+  }, [selPoints, view, cat, P, COL, NAME, exportLoc])
 
   // Fix tile layout when switching back from a non-map view.
   useEffect(() => {
@@ -915,7 +958,10 @@ const CSS = `
 .wm-dash .leaflet-popup-content-wrapper{background:var(--wm-panel);color:var(--wm-txt);border:1px solid var(--wm-line);border-radius:9px}
 .wm-dash .leaflet-popup-tip{background:var(--wm-panel);border:1px solid var(--wm-line)}
 .wm-dash .leaflet-popup-content{margin:12px 14px;font-family:'Barlow'}
-.wm-dash .pop-h{font-family:'Barlow Condensed';font-weight:800;font-size:18px;text-transform:uppercase}
+.wm-dash .pop-h{display:flex;align-items:center;justify-content:space-between;gap:10px;font-family:'Barlow Condensed';font-weight:800;font-size:18px;text-transform:uppercase}
+.wm-dash .pop-exp{flex:0 0 auto;font-family:'Space Mono';font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--wm-blue);background:var(--wm-panel2);border:1px solid var(--wm-line);border-radius:6px;padding:4px 8px;cursor:pointer;text-transform:none}
+.wm-dash .pop-exp:hover{color:#04141c;background:var(--wm-blue);border-color:var(--wm-blue)}
+.wm-dash .pop-more{font-size:10px;color:var(--wm-muted2);padding-top:6px}
 .wm-dash .pop-h .pc{font-family:'Space Mono';font-size:12px;color:var(--wm-blue);font-weight:700;margin-left:6px}
 .wm-dash .pop-s{display:flex;gap:16px;margin:6px 0 8px;padding-bottom:8px;border-bottom:1px solid var(--wm-line)}
 .wm-dash .pop-s b{font-family:'Space Mono';color:var(--wm-blue);font-size:15px}

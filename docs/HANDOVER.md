@@ -486,6 +486,10 @@ Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it 
 
 Geometry worth knowing: the nearest distributor to Burnside is ~390 km (Banana Coast, Coffs Harbour), and the radius selector offers 50/100/150/250 km — so below 250 km the new entity cannot take a quote from anyone; at 250 km the areas overlap and quotes nearer the workshop move to it. The pre-existing `DISTRIBUTOR_MAP_EXCLUDE` filter (default `just autos`) still guards the `b2b_distributors` query; there is no JA row there today, so it is defensive only and unrelated to this entity.
 
+**Per-location CSV export** (added 2026-08-25). Every Jobs/Quotes map popup carries a **⬇ CSV** button (`exportLoc` in `components/workshop/WorkshopMapDashboard.tsx`) that downloads all points behind that dot — the popup renders only the 40 largest. Client-side only: it serialises the already-loaded payload points, so there is no route and no gate beyond the page's own `view:reports`. Popup content is an HTML string, so the handler is attached on `popupopen` (Leaflet rebuilds the node each open), and the blob is written with a UTF-8 BOM so Excel doesn't mangle customer names.
+
+The point date needed for it is a new `d` key (`YYYY-MM-DD`) on payload points in `lib/workshop-map/build-payload.ts` — the rep invoice's issue date for jobs, the quote date for quotes. **Payloads cached before 2026-08-25 have no `d`**, so the Date column stays blank until the nightly `md-workshop-map` pull rebuilds them (or someone hits "Pull from MechanicDesk now"); the Month column is populated either way. The `i` key was already the MechanicDesk *display* number, not the internal id — `withDisplay()` in `scripts/pull-md-workshop-map.ts` swaps it in before the payload is built.
+
 **Map PDF exports** (added 2026-08-25). Both map reports have an **Export PDF** button that prints the whole FY month by month — the screen shows one month at a time and there was no way to take a year off it.
 
 | | Workshop Map | Distributor Map |
