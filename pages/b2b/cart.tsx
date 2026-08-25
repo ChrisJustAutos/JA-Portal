@@ -14,7 +14,7 @@
 // Look: Alloy kit — payment method as a segmented control, freight as
 // tappable rows, the PayTo/BECS explainers behind a disclosure.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import type { GetServerSideProps } from 'next'
@@ -168,9 +168,37 @@ export default function B2BCartPage({ b2bUser }: Props) {
   }
   useEffect(() => { load() }, [])
 
-  async function setLineQty(line: CartLine, qty: number) {
+  // Quantity changes are shown instantly and written once you stop.
+  //
+  // This used to POST and then `await load()` on EVERY press, with the row
+  // disabled throughout — so holding + through five presses meant five
+  // sequential full cart reloads (pricing, stock, volume breaks, freight) and
+  // a stepper that fought back. Now the new qty renders immediately from
+  // `pendingQty` and only the last value in a burst is sent.
+  //
+  // The reload after the write is still needed and still deliberate: volume
+  // breaks, caps and freight are all server-computed, so the line total and
+  // the summary can't be derived here without quietly inventing prices.
+  const COMMIT_DELAY_MS = 450
+  const [pendingQty, setPendingQty] = useState<Record<string, number>>({})
+  const commitTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+
+  // Drop any timer still armed when the page goes away, so a pending write
+  // can't fire against an unmounted component.
+  useEffect(() => () => {
+    for (const t of Object.values(commitTimers.current)) clearTimeout(t)
+  }, [])
+
+  function setLineQty(line: CartLine, qty: number) {
     if (!line.catalogue_id) return
-    setBusyLineId(line.id)
+    const id = line.id
+    setPendingQty(prev => ({ ...prev, [id]: qty }))
+    if (commitTimers.current[id]) clearTimeout(commitTimers.current[id])
+    commitTimers.current[id] = setTimeout(() => { void commitLineQty(line, qty) }, COMMIT_DELAY_MS)
+  }
+
+  async function commitLineQty(line: CartLine, qty: number) {
+    delete commitTimers.current[line.id]
     try {
       const r = await fetch('/api/b2b/cart/items', {
         method: 'POST',
@@ -183,8 +211,13 @@ export default function B2BCartPage({ b2bUser }: Props) {
       await load()
     } catch (e: any) {
       toast(e?.message || 'Could not update cart', 'error')
+      await load()   // failed write — snap back to what the server actually has
     } finally {
-      setBusyLineId(null)
+      // Only release the optimistic value if nothing newer was typed while
+      // this write was in flight; otherwise the qty would jump backwards.
+      setPendingQty(prev => (prev[line.id] === qty
+        ? Object.fromEntries(Object.entries(prev).filter(([k]) => k !== line.id))
+        : prev))
     }
   }
 
@@ -360,6 +393,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
                   key={line.id}
                   line={line}
                   busy={busyLineId === line.id}
+                  pendingQty={pendingQty[line.id]}
                   isFirst={i === 0}
                   isMobile={isMobile}
                   onChangeQty={qty => setLineQty(line, qty)}
@@ -405,10 +439,14 @@ export default function B2BCartPage({ b2bUser }: Props) {
 
 // ─── Line row ──────────────────────────────────────────────────────────
 function CartLineRow({
-  line, busy, isFirst, isMobile, onChangeQty, onRemove,
+  line, busy, pendingQty, isFirst, isMobile, onChangeQty, onRemove,
 }: {
   line: CartLine
   busy: boolean
+  /** Set while a qty change is typed/stepped but not yet written. The stepper
+   *  shows this so + responds instantly; the money still comes from the
+   *  server, so the line total dims until the real figure arrives. */
+  pendingQty?: number
   isFirst: boolean
   isMobile: boolean
   onChangeQty: (qty: number) => void
@@ -527,8 +565,15 @@ function CartLineRow({
       </div>
 
       <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:7,flexShrink:0}}>
-        <Stepper qty={line.qty} max={line.effective_cap ?? null} onChange={onChangeQty} compact={!isMobile}/>
-        <div style={{fontSize:15,color:T.text,fontWeight:650,fontVariantNumeric:'tabular-nums',letterSpacing:'-0.01em'}}>
+        <Stepper qty={pendingQty ?? line.qty} max={line.effective_cap ?? null}
+          onChange={onChangeQty} compact={!isMobile} pending={pendingQty != null}/>
+        <div style={{
+          fontSize:15,color:T.text,fontWeight:650,fontVariantNumeric:'tabular-nums',letterSpacing:'-0.01em',
+          // Volume breaks and caps are priced on the server, so while a change
+          // is pending this is last-known, not current. Dim it rather than
+          // multiplying it out here and risking a figure that never existed.
+          opacity: pendingQty != null ? 0.45 : 1, transition:'opacity 140ms ease',
+        }}>
           ${Number(line.line_total_inc_gst).toFixed(2)}
         </div>
         <button onClick={onRemove} aria-label={`Remove ${line.name}`} className="al-press al-ghost al-focus"

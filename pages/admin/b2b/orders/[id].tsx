@@ -416,6 +416,19 @@ export default function AdminOrderDetailPage({ user }: Props) {
 
                 {/* Order summary header */}
                 <Card title="Summary">
+                  {/* The MYOB invoice number is what accounts, the distributor
+                      and MYOB itself all quote — "Cutlers JAWSB2B0055". It used
+                      to live only in the MYOB diagnostics card down the right
+                      rail, so the order you were looking at and the invoice
+                      someone was asking about had nothing visibly in common.
+                      It leads the summary now, above the PO. */}
+                  <KV label="MYOB invoice"
+                      value={data.myob.order_number || 'Not written to MYOB yet'}
+                      mono={!!data.myob.order_number}
+                      valueColor={data.myob.order_number ? undefined : A.warn}/>
+                  {data.myob.order_number && data.myob.written_at && (
+                    <KV label="Invoiced" value={fullDate(data.myob.written_at)} mono small/>
+                  )}
                   <KV label="Distributor"    value={data.distributor?.display_name || '—'}/>
                   <KV label="Customer PO"    value={data.customer_po || '—'} mono/>
                   {(() => {

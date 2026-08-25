@@ -133,9 +133,39 @@ export function DotLine({ color, halo = true, children }: { color: string; halo?
 }
 
 // ── Quantity stepper (44px pill) ─────────────────────────────────────────
-export function Stepper({ qty, onChange, max, min = 0, compact }: {
-  qty: number; onChange: (q: number) => void; max?: number | null; min?: number; compact?: boolean
+// Quantity stepper.
+//
+// The box is a real typed input: type 24, press Enter or click away, done —
+// you don't have to press + twenty-four times. That means it must NOT commit
+// on every keystroke, which is why there's a draft:
+//   · while focused, the field holds whatever you've typed (including empty,
+//     mid-edit) and nothing is sent
+//   · Enter / blur commits the clamped value; Escape or an empty field reverts
+//   · + and − commit straight away, since there's nothing ambiguous about them
+// Committing per keystroke is what made typing "10" briefly set qty 1 — and,
+// worse, clearing the field to retype parsed as 0 and removed the line.
+//
+// Callers should debounce the network write, not this component: + must feel
+// instant, so onChange fires immediately and the page decides when to POST.
+export function Stepper({ qty, onChange, max, min = 0, compact, pending }: {
+  qty: number; onChange: (q: number) => void
+  max?: number | null; min?: number; compact?: boolean
+  /** true while the page has an unsaved change in flight — shown as a soft
+   *  pulse, never by disabling: a disabled stepper is what "lag" feels like. */
+  pending?: boolean
 }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const clamp = (v: number) => Math.max(min, max != null ? Math.min(v, max) : v)
+
+  const commitDraft = () => {
+    if (draft == null) return
+    const v = parseInt(draft, 10)
+    setDraft(null)
+    if (!isFinite(v)) return                 // empty or junk → keep what we had
+    if (clamp(v) !== qty) onChange(clamp(v))
+  }
+  const step = (delta: number) => { setDraft(null); onChange(clamp(qty + delta)) }
+
   const atMax = max != null && qty >= max
   const atMin = qty <= min
   const h = compact ? 38 : 44
@@ -146,20 +176,34 @@ export function Stepper({ qty, onChange, max, min = 0, compact }: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   })
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', background: T.bg3, borderRadius: RADIUS.pill }}>
-      <button className="al-press al-focus" onClick={() => onChange(qty - 1)} disabled={atMin} aria-label="Decrease quantity" style={btn(atMin)}>−</button>
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', background: T.bg3, borderRadius: RADIUS.pill,
+      transition: 'opacity 140ms ease', opacity: pending ? 0.72 : 1,
+    }}>
+      <button className="al-press al-focus" onClick={() => step(-1)} disabled={atMin} aria-label="Decrease quantity" style={btn(atMin)}>−</button>
       <input
-        type="number" className="al-nospin" value={qty} min={min} max={max ?? undefined}
-        onChange={e => {
-          const v = parseInt(e.target.value || '0', 10)
-          if (isFinite(v) && v >= min) onChange(max != null ? Math.min(v, max) : v)
+        type="number" inputMode="numeric" className="al-nospin al-focus"
+        value={draft ?? String(qty)} min={min} max={max ?? undefined}
+        aria-label="Quantity"
+        onFocus={e => { setDraft(String(qty)); e.currentTarget.select() }}
+        onChange={e => setDraft(e.target.value.replace(/[^\d]/g, ''))}
+        onBlur={commitDraft}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); commitDraft(); e.currentTarget.blur() }
+          else if (e.key === 'Escape') { e.preventDefault(); setDraft(null); e.currentTarget.blur() }
+          // Let the arrow keys step by one without going through the browser's
+          // own number spinner, so they clamp the same way the buttons do.
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setDraft(null); onChange(clamp(qty + 1)) }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); setDraft(null); onChange(clamp(qty - 1)) }
         }}
         style={{
-          width: 40, textAlign: 'center', background: 'transparent', border: 'none',
+          // Wide enough for three digits — a 40px box made a typed quantity
+          // look like it wasn't meant to be typed in.
+          width: 54, textAlign: 'center', background: 'transparent', border: 'none',
           color: T.text, fontSize: 15, fontWeight: 600, outline: 'none', fontFamily: 'inherit',
           fontVariantNumeric: 'tabular-nums', MozAppearance: 'textfield' as any, padding: 0,
         }}/>
-      <button className="al-press al-focus" onClick={() => onChange(qty + 1)} disabled={atMax} aria-label="Increase quantity" style={btn(atMax)}>+</button>
+      <button className="al-press al-focus" onClick={() => step(1)} disabled={atMax} aria-label="Increase quantity" style={btn(atMax)}>+</button>
     </div>
   )
 }

@@ -140,6 +140,16 @@ So the order that lands in front of you is already invoiced into MYOB as a **sal
 
 Two deliberate exceptions: the **tax invoice** shows the ex-GST subtotal, the GST and the total, because that is what a tax invoice must show; and the **staff-side admin screens** (freight zones, dropship calibration, catalogue export) are ex-GST, because that is how costing is done. Those are labelled.
 
+**⚠ If a distributor says a line is "a cent out", they are probably right, and it is not a bug in the cart.** Prices are stored **ex-GST**, and most of ours were set by taking a round inc-GST price and dividing by 1.1 — which does not divide evenly. The 20 L oil is stored at $163.64, and $163.64 × 1.1 is $180.004, not $180.00. One shows $180.00; two show $360.01, not $360.00. Only prices whose ex-GST cents end in 0 are immune, and **42 of our 50 priced items are not**.
+
+Nothing is being overcharged at random — the line total is the honest GST on the real ex-GST price, and it is what MYOB will invoice. But the "each" figure is rounded per bottle and the line total is rounded once, so the two disagree by a cent or two on bigger quantities. Say that plainly to the distributor; don't adjust the invoice to match the multiplication. If you want a price to be exactly round including GST, it has to be set so the ex-GST cents end in 0 (e.g. $163.60 ex = $179.96 inc) — tell Chris rather than editing around it.
+
+### 4.1b Changing quantities
+
+The quantity box in the cart and on the catalogue tile is **typed as well as stepped** — click it, type `24`, press Enter. You no longer have to press **+** twenty-four times, and holding + no longer lags: presses are collected and written once you stop, about half a second later.
+
+While a change is settling, the stepper fades very slightly and the line total dims. The dimmed figure is the **last confirmed** price, not the new one — it snaps to the real total a moment later. That is deliberate: volume-break pricing is worked out on the server, so the portal will not guess at a price it hasn't been given.
+
 ### 4.2 Pick, pack and despatch
 
 **⚠ This changed on 20 August 2026.** Booking freight and despatching are now two separate steps. Booking no longer sends anything to the carrier and no longer raises the tax invoice.
@@ -154,6 +164,12 @@ Two deliberate exceptions: the **tax invoice** shows the ex-GST subtotal, the GS
 **⚠ Ship the run in one action, not one order at a time.** MachShip books a carrier *pickup* when you manifest, so shipping ten orders individually raises ten pickup requests. Select the whole run and ship it once.
 
 **If nothing is reaching the carrier**, the usual answer is that Book Freight was pressed but Ship Now was not.
+
+### 4.2a Matching an order to its MYOB invoice
+
+**Admin → B2B → Orders → open the order.** The **Summary** card now leads with the **MYOB invoice** number — `JAWSB2B0055` — above the distributor and the customer PO, with the date it was invoiced beneath it. That is the number MYOB, accounts and the distributor all quote, so when someone rings about "Cutlers JAWSB2B0055" you can match it without hunting.
+
+Until the invoice is written it reads **"Not written to MYOB yet"** in amber. The MYOB card further down the right-hand rail still carries the diagnostics — company file, write attempts, and the error if a write failed.
 
 ### 4.3 Freight problems
 

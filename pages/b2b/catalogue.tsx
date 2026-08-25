@@ -9,7 +9,7 @@
 // Look: Alloy kit (components/b2b/ui) — calm cards, one accent, fitment as a
 // sentence instead of a chip wall, promo as a single flag on the image.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
@@ -248,7 +248,20 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
     })
   }, [filtered, groupBy])
 
-  async function setQty(catalogueId: string, qty: number) {
+  // One write per burst, not one per press.
+  //
+  // The optimistic update below always ran, but every press also fired its own
+  // POST and then patched the line from that response — so a fast + + + could
+  // settle on whichever reply landed last, and the count appeared to stick or
+  // jump back. Now presses coalesce: the qty on screen is ours, and only the
+  // final value is sent.
+  const QTY_COMMIT_MS = 400
+  const qtyTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  useEffect(() => () => {
+    for (const t of Object.values(qtyTimers.current)) clearTimeout(t)
+  }, [])
+
+  function setQty(catalogueId: string, qty: number) {
     // Optimistic update
     setCartLines(prev => {
       const existing = prev.find(l => l.catalogue_id === catalogueId)
@@ -261,6 +274,12 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
       // tmp id until server returns
       return [...prev, { id: `tmp-${catalogueId}`, catalogue_id: catalogueId, qty }]
     })
+    if (qtyTimers.current[catalogueId]) clearTimeout(qtyTimers.current[catalogueId])
+    qtyTimers.current[catalogueId] = setTimeout(() => { void commitQty(catalogueId, qty) }, QTY_COMMIT_MS)
+  }
+
+  async function commitQty(catalogueId: string, qty: number) {
+    delete qtyTimers.current[catalogueId]
     try {
       const r = await fetch('/api/b2b/cart/items', {
         method: 'POST',
@@ -270,10 +289,12 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
       })
       const j = await r.json()
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-      // Patch the temp id with the real one if we got a line back
+      // Adopt the real line id, but KEEP our qty. Taking j.line.qty here is
+      // what let a slow reply overwrite a newer press — and it can only ever
+      // be the value we just sent anyway.
       if (j.line && j.line.id) {
         setCartLines(prev => prev.map(l =>
-          l.catalogue_id === catalogueId ? { id: j.line.id, catalogue_id: catalogueId, qty: j.line.qty } : l
+          l.catalogue_id === catalogueId ? { ...l, id: j.line.id } : l
         ))
       }
     } catch (e: any) {
