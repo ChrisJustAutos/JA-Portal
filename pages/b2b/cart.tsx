@@ -60,6 +60,7 @@ interface CartLine {
   // Available right now = MYOB qty − in-flight commitments. null = unlimited.
   available_qty: number | null
   max_order_qty: number | null
+  min_order_qty: number | null
   // min(available_qty, max_order_qty) — used as the stepper ceiling
   effective_cap: number | null
   call_for_availability: boolean
@@ -483,6 +484,7 @@ function CartLineRow({
   const noticeBits: Array<{ text: string; color: string }> = []
   if (!line.currently_visible)       noticeBits.push({ text: 'No longer in the catalogue', color: A.warn })
   if (line.price_changed)            noticeBits.push({ text: 'Price changed since added', color: A.warn })
+  if (line.min_order_qty && line.min_order_qty > 1) noticeBits.push({ text: `Minimum order ${line.min_order_qty}`, color: T.text3 })
   if (line.needs_quote)              noticeBits.push({ text: `Needs a quote${line.over_limit_qty != null ? ` over ${line.over_limit_qty} units` : ''}`, color: A.warn })
   if (line.call_for_availability)    noticeBits.push({ text: 'Call for availability', color: A.warn })
   else if (line.stock_state === 'out_of_stock' && !line.is_drop_ship) noticeBits.push({ text: 'Out of stock', color: A.bad })
@@ -565,7 +567,11 @@ function CartLineRow({
       </div>
 
       <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:7,flexShrink:0}}>
+        {/* Floor the stepper at the item's minimum so - can't drop below it.
+            0 stays reachable via Remove, which is explicit and confirmed —
+            a minimum must never trap a line in the cart. */}
         <Stepper qty={pendingQty ?? line.qty} max={line.effective_cap ?? null}
+          min={line.min_order_qty && line.min_order_qty > 1 ? line.min_order_qty : 0}
           onChange={onChangeQty} compact={!isMobile} pending={pendingQty != null}/>
         <div style={{
           fontSize:15,color:T.text,fontWeight:650,fontVariantNumeric:'tabular-nums',letterSpacing:'-0.01em',

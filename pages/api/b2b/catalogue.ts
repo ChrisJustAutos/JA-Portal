@@ -52,6 +52,7 @@ interface PublicCatalogueItem {
   instructions_url: string | null
   instructions_url_2: string | null
   max_order_qty: number | null
+  min_order_qty: number | null
   stock: {
     state: StockState
     qty_available: number | null  // null = unlimited
@@ -79,7 +80,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, _us
       trade_price_ex_gst, rrp_ex_gst, is_taxable,
       primary_image_url,
       promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks,
-      is_special_order, is_drop_ship, instructions_url, instructions_url_2, max_order_qty,
+      is_special_order, is_drop_ship, instructions_url, instructions_url_2, max_order_qty, min_order_qty,
       call_for_availability_below_qty, call_for_availability_when_zero,
       model:b2b_models!b2b_catalogue_model_id_fkey ( id, name ),
       model_links:b2b_catalogue_models ( b2b_models ( id, name ) ),
@@ -163,6 +164,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, _us
       instructions_url:   it.instructions_url || null,
       instructions_url_2: it.instructions_url_2 || null,
       max_order_qty:      it.max_order_qty != null ? Number(it.max_order_qty) : null,
+      min_order_qty:      it.min_order_qty != null ? Number(it.min_order_qty) : null,
       stock: {
         state:                  stockState(s),
         qty_available:          qtyAvail,

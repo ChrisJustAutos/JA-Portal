@@ -54,6 +54,7 @@ export const CATALOGUE_COLUMNS: CatColumn[] = [
   { header: 'Inbound Freight Cost ex GST', field: 'inbound_freight_cost_ex_gst',     kind: 'number' },
   { header: 'Below Stock Call For Order',  field: 'call_for_availability_below_qty', kind: 'int' },
   { header: 'Call For Order When Zero',    field: 'call_for_availability_when_zero', kind: 'bool' },
+  { header: 'Min Order QTY',               field: 'min_order_qty',                   kind: 'int' },
   { header: 'Max Order QTY',               field: 'max_order_qty',                   kind: 'int' },
   { header: 'Over Limit QTY',              field: 'over_limit_qty',                  kind: 'int' },
   { header: 'Over Limit Action',           field: 'over_limit_action',               kind: 'enum', enumValues: ['quote', 'dropship'] },

@@ -144,6 +144,20 @@ Two deliberate exceptions: the **tax invoice** shows the ex-GST subtotal, the GS
 
 Nothing is being overcharged at random — the line total is the honest GST on the real ex-GST price, and it is what MYOB will invoice. But the "each" figure is rounded per bottle and the line total is rounded once, so the two disagree by a cent or two on bigger quantities. Say that plainly to the distributor; don't adjust the invoice to match the multiplication. If you want a price to be exactly round including GST, it has to be set so the ex-GST cents end in 0 (e.g. $163.60 ex = $179.96 inc) — tell Chris rather than editing around it.
 
+### 4.1aa Minimum order quantity
+
+Some items only make sense sold in a minimum — a carton, a set of four, a length nobody wants one metre of. **Admin → B2B → Catalogue → open the item → Order limits → Min qty per order.**
+
+Leave it blank for no minimum. Once set:
+
+- The catalogue tile reads **"Minimum order 4"** and its button says **Add 4 to Cart** — a distributor lands on a valid quantity rather than discovering the rule at checkout.
+- The cart stepper won't go below it. **Remove** still works, and always will — a minimum must never trap a line in someone's cart.
+- It's enforced again when the cart is saved and once more at checkout, so a cart built before you set the minimum can't slip through.
+
+**⚠ The minimum can't be higher than the max qty per order** — that combination makes the item impossible to order, and the portal refuses to save it. If a minimum is higher than what's currently in stock the tile says **"Need 4 — only 2 available"** instead of offering an Add button that would fail.
+
+Both limits are in the catalogue CSV export/import as **Min Order QTY** and **Max Order QTY**, so a batch of items can be set in one go.
+
 ### 4.1b Changing quantities
 
 The quantity box in the cart and on the catalogue tile is **typed as well as stepped** — click it, type `24`, press Enter. You no longer have to press **+** twenty-four times, and holding + no longer lags: presses are collected and written once you stop, about half a second later.

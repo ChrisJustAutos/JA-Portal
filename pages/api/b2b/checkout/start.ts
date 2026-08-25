@@ -129,7 +129,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         id, myob_item_uid, sku, name,
         trade_price_ex_gst, is_taxable, b2b_visible, is_drop_ship,
         promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks,
-        max_order_qty, over_limit_qty, over_limit_action
+        max_order_qty, min_order_qty, over_limit_qty, over_limit_action
       )
     `)
     .eq('cart_id', cart.id)
@@ -182,6 +182,13 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     const maxOrderQty = cat.max_order_qty != null ? Number(cat.max_order_qty) : null
     if (maxOrderQty != null && ln.qty > maxOrderQty) {
       issues.push(`"${cat.name}" — max ${maxOrderQty} per order (cart has ${ln.qty})`)
+      continue
+    }
+    // Re-check the minimum here too: a line can predate the minimum being set,
+    // so an old cart could otherwise carry a now-invalid quantity to checkout.
+    const minOrderQty = cat.min_order_qty != null ? Number(cat.min_order_qty) : null
+    if (minOrderQty != null && ln.qty < minOrderQty) {
+      issues.push(`"${cat.name}" — minimum order is ${minOrderQty} (cart has ${ln.qty})`)
       continue
     }
     // Large-order handling. Over the soft threshold, a 'quote' item can't

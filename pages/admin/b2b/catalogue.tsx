@@ -62,6 +62,7 @@ interface CatalogueItem {
   b2b_visible: boolean
   barcode: string | null
   max_order_qty: number | null
+  min_order_qty: number | null
   freight_length_mm: number | null
   freight_width_mm: number | null
   freight_height_mm: number | null
@@ -1213,6 +1214,14 @@ function EditDrawer({
 
           {/* Order limits */}
           <Section title="Order limits">
+            <FieldInt
+              label="Min qty per order"
+              hint="Distributors can't order fewer than this — for items only sold by the carton or in a set. Leave blank for no minimum. The Add to Cart button starts here."
+              suffix="units"
+              min={1}
+              value={item.min_order_qty}
+              onSave={async v => { try { await patch({ min_order_qty: v }) } catch {} }}
+            />
             <FieldInt
               label="Max qty per order"
               hint="Hard cap — distributors can't order more than this. Leave blank for no cap."

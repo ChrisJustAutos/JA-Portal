@@ -60,6 +60,7 @@ interface CatalogueItem {
   instructions_url: string | null
   instructions_url_2: string | null
   max_order_qty: number | null
+  min_order_qty: number | null
   stock: {
     state: 'in_stock' | 'low_stock' | 'out_of_stock'
     qty_available: number | null
@@ -511,6 +512,11 @@ function CatalogueCard({
     : item.stock.state !== 'out_of_stock'
   // Stepper cap: drop-ship = max-order-qty only; otherwise prefer available
   // stock, then per-item max-order-qty.
+  // Minimum order quantity: the "Add to Cart" button jumps straight to it and
+  // the stepper floors there, so a distributor can never be left holding an
+  // invalid line. Never above the cap — an item whose minimum exceeds what's
+  // available would otherwise be unaddable with no explanation.
+  const minQty = Math.max(1, item.min_order_qty ?? 1)
   const stepperMax: number | undefined = (() => {
     if (item.is_drop_ship) return item.max_order_qty ?? undefined
     if (!item.stock.is_inventoried) return item.max_order_qty ?? undefined
@@ -518,6 +524,9 @@ function CatalogueCard({
     if (avail == null) return item.max_order_qty ?? undefined
     return item.max_order_qty != null ? Math.min(avail, item.max_order_qty) : avail
   })()
+  // Minimum higher than the ceiling = genuinely unorderable right now. Say so
+  // on the button rather than presenting an Add that always fails.
+  const belowMinimum = stepperMax != null && minQty > stepperMax
 
   const models = item.models && item.models.length ? item.models : (item.model ? [item.model] : [])
   const priceInc = incGst(item.unit_price_ex_gst, item.is_taxable)
@@ -528,6 +537,7 @@ function CatalogueCard({
 
   // Quiet exceptions line — only what's true, as words, not chips.
   const notes: string[] = []
+  if (item.min_order_qty && item.min_order_qty > 1) notes.push(`Minimum order ${item.min_order_qty}`)
   if (item.is_special_order) notes.push('Special order')
   if (item.is_drop_ship && !dropShipNoStock) notes.push('Ships from the supplier')
   if (item.has_volume_breaks && item.volume_breaks.length > 0) notes.push(`Volume pricing from ${Math.min(...item.volume_breaks.map(b => b.min_qty))}+`)
@@ -616,11 +626,14 @@ function CatalogueCard({
             </a>
           ) : qtyInCart > 0 ? (
             <div style={{display:'flex',justifyContent:'center'}}>
-              <Stepper qty={qtyInCart} max={stepperMax ?? null} onChange={onSetQty}/>
+              <Stepper qty={qtyInCart} min={minQty} max={stepperMax ?? null} onChange={onSetQty}/>
             </div>
           ) : (
-            <Btn full disabled={!canAdd} onClick={() => onSetQty(1)}>
-              {canAdd ? 'Add to Cart' : 'Out of stock'}
+            <Btn full disabled={!canAdd || belowMinimum} onClick={() => onSetQty(minQty)}>
+              {!canAdd ? 'Out of stock'
+                : belowMinimum ? `Need ${minQty} — only ${stepperMax} available`
+                : minQty > 1 ? `Add ${minQty} to Cart`
+                : 'Add to Cart'}
             </Btn>
           )}
         </div>

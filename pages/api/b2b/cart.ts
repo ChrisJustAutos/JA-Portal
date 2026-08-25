@@ -49,7 +49,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         trade_price_ex_gst, is_taxable, b2b_visible,
         promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks,
         is_special_order, is_drop_ship, instructions_url,
-        max_order_qty, over_limit_qty, over_limit_action,
+        max_order_qty, min_order_qty, over_limit_qty, over_limit_action,
         call_for_availability_below_qty, call_for_availability_when_zero,
         freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging,
         manual_handling, inbound_freight_cost_ex_gst
@@ -113,6 +113,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     }
 
     const maxOrderQty = cat?.max_order_qty != null ? Number(cat.max_order_qty) : null
+    const minOrderQty = cat?.min_order_qty != null ? Number(cat.min_order_qty) : null
     // Large-order handling. A supplier-shipped line (catalogue drop-ship OR
     // over-limit drop-ship) isn't bound by our stock, so it has no stock cap —
     // only the hard max-order-qty still applies. A 'quote' line over its
@@ -148,6 +149,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       // True ceiling — null = unlimited / non-inventoried + no max-order-qty
       available_qty: availIncludingMine,
       max_order_qty: maxOrderQty,
+      min_order_qty: minOrderQty,
       effective_cap: effectiveCap,
       call_for_availability: callForAvail,
       is_special_order: cat?.is_special_order === true,
@@ -205,6 +207,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
           stock_qty_available: null,
           available_qty: null,
           max_order_qty: null,
+          min_order_qty: null,
           effective_cap: null,
           call_for_availability: false,
           is_special_order: false,

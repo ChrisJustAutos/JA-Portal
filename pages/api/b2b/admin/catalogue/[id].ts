@@ -10,6 +10,7 @@
 //   - product_type_id                     uuid | null
 //   - barcode                             string | null
 //   - max_order_qty                       int >= 1 | null
+//   - min_order_qty                       int >= 1 | null, and <= max_order_qty
 //   - freight_length_mm/width_mm/height_mm int >= 0 | null
 //   - freight_weight_g                    int >= 0 | null
 //   - freight_packaging                   'box' | 'pallet' | 'other' | 'unboxed' | null
@@ -47,6 +48,7 @@ const EDITABLE_FIELDS = [
   'product_type_id',
   'barcode',
   'max_order_qty',
+  'min_order_qty',
   'freight_length_mm',
   'freight_width_mm',
   'freight_height_mm',
@@ -69,6 +71,7 @@ const EDITABLE_FIELDS = [
 const NULLABLE_STRING_FIELDS = ['description', 'primary_image_url', 'barcode', 'instructions_url', 'instructions_url_2'] as const
 const NULLABLE_INT_FIELDS = [
   'max_order_qty',
+  'min_order_qty',
   'freight_length_mm', 'freight_width_mm', 'freight_height_mm', 'freight_weight_g',
   'call_for_availability_below_qty',
   'over_limit_qty',
@@ -160,6 +163,9 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
         if (k === 'max_order_qty' && v < 1) {
           return res.status(400).json({ error: 'max_order_qty must be >= 1 or null' })
         }
+        if (k === 'min_order_qty' && v < 1) {
+          return res.status(400).json({ error: 'min_order_qty must be >= 1 or null' })
+        }
         if (k === 'over_limit_qty' && v < 1) {
           return res.status(400).json({ error: 'over_limit_qty must be >= 1 or null' })
         }
@@ -236,6 +242,16 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
     .single()
 
   if (error) {
+    // A minimum above the maximum makes the item unorderable — the cart would
+    // refuse every quantity. The database refuses the combination outright
+    // (migration 203); turn that into something an admin can act on rather
+    // than a raw constraint name.
+    if (/b2b_catalogue_min_not_above_max/.test(error.message || '')) {
+      return res.status(400).json({ error: 'Minimum order qty cannot be higher than the maximum — the item would be impossible to order.' })
+    }
+    if (/b2b_catalogue_min_order_qty_positive/.test(error.message || '')) {
+      return res.status(400).json({ error: 'Minimum order qty must be 1 or more, or left blank for no minimum.' })
+    }
     return res.status(500).json({ error: error.message })
   }
   if (!data) {

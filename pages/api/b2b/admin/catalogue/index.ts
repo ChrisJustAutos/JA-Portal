@@ -49,6 +49,7 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
       promo_starts_at,
       promo_ends_at,
       max_order_qty,
+      min_order_qty,
       freight_length_mm,
       freight_width_mm,
       freight_height_mm,

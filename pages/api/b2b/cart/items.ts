@@ -49,7 +49,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     .from('b2b_catalogue')
     .select(`
       id, myob_item_uid, sku, name, trade_price_ex_gst, b2b_visible,
-      max_order_qty, over_limit_qty, over_limit_action, is_drop_ship,
+      max_order_qty, min_order_qty, over_limit_qty, over_limit_action, is_drop_ship,
       promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks
     `)
     .eq('id', catalogueId)
@@ -65,6 +65,18 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     return res.status(409).json({
       error: `"${cat.name}" — max ${maxOrderQty} per order (you asked for ${qty})`,
       available: maxOrderQty,
+    })
+  }
+
+  // Per-item MINIMUM. qty 0 is exempt on purpose — that's "remove from cart",
+  // and a minimum must never trap a line in the cart. The UI starts and floors
+  // the stepper at this value, so reaching here means a hand-typed quantity or
+  // a direct API call.
+  const minOrderQty: number | null = cat.min_order_qty != null ? Number(cat.min_order_qty) : null
+  if (qty > 0 && minOrderQty != null && qty < minOrderQty) {
+    return res.status(409).json({
+      error: `"${cat.name}" — minimum order is ${minOrderQty} (you asked for ${qty})`,
+      minimum: minOrderQty,
     })
   }
 
