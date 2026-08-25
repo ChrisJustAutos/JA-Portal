@@ -17,7 +17,7 @@ import type { UserRole } from '../../../../lib/permissions'
 import { SkeletonRows } from '../../../../components/ui'
 import { useToast, useConfirm } from '../../../../components/ui/Feedback'
 import { T, alpha } from '../../../../lib/ui/theme'
-import { A, RADIUS, btnStyle, cardStyle, Banner, PageTitle, StatusPill as Pill, orderStatusColor, orderStatusLabel } from '../../../../components/b2b/ui'
+import { A, RADIUS, btnStyle, cardStyle, Banner, PageTitle, StatusPill as Pill, orderStatusColor } from '../../../../components/b2b/ui'
 import { awaitingDespatch } from '../../../../lib/b2b-despatch-state'
 
 interface Props {
@@ -44,7 +44,10 @@ interface OrderRow {
   created_at: string
   paid_at: string | null
   shipped_at: string | null
+  delivered_at: string | null
   cancelled_at: string | null
+  payment_method: 'card' | 'becs' | 'payto' | null
+  payment_settled_at: string | null
   myob_invoice_uid: string | null
   myob_invoice_number: string | null
   myob_write_error: string | null
@@ -66,7 +69,7 @@ interface ListResponse {
 
 const STATUS_ORDER = ['pending_payment', 'paid', 'picking', 'packed', 'shipped', 'delivered', 'cancelled', 'refunded'] as const
 // Tile labels stay per-status (Picking vs Packed are separate filter buckets);
-// row pills use the kit's orderStatusLabel vocabulary.
+// row pills are now split into Payment / Shipping - see paymentState/shippingState.
 const STATUS_LABEL: Record<string, string> = {
   // Not 'Awaiting payment' - that reads as a real order owing money. It is a
   // checkout that was started and never finished, and it is hidden from the
@@ -89,6 +92,40 @@ const STATUS_ICON: Record<string, string> = {
   delivered: 'check-circle',
   cancelled: 'x-circle',
   refunded: 'refund',
+}
+
+// An order has TWO independent stories - has the money arrived, and have the
+// goods left - and squeezing them into one status pill made "Paid" in green
+// read as "done and gone". These split them, so a paid order that hasn't moved
+// says so.
+//
+// Payment: green only when the money is actually ours. BECS and PayTo mark the
+// order paid the moment the mandate is accepted, but the funds take days to
+// settle, so those sit amber until payment_settled_at lands.
+function paymentState(o: OrderRow): { label: string; color: string } {
+  if (Number(o.refunded_total) > 0) return { label: 'Refunded', color: A.bad }
+  if (o.status === 'pending_payment') return { label: 'Not paid', color: T.text3 }
+  if (o.cancelled_at) return { label: 'Cancelled', color: T.text3 }
+  if (!o.paid_at) return { label: 'Not paid', color: T.text3 }
+  const m = o.payment_method || 'card'
+  if ((m === 'becs' || m === 'payto') && !o.payment_settled_at) {
+    return { label: m === 'becs' ? 'Paid - bank, unsettled' : 'Paid - PayTo, unconfirmed', color: A.warn }
+  }
+  return { label: 'Paid', color: A.good }
+}
+
+// Shipping: reads the carrier's own state, not our paperwork - see
+// lib/b2b-despatch-state for why the manifest id alone can't be trusted.
+function shippingState(o: OrderRow): { label: string; color: string } {
+  if (o.cancelled_at) return { label: '-', color: T.text3 }
+  if (o.delivered_at) return { label: 'Delivered', color: A.good }
+  if (o.shipped_at) return { label: 'Shipped', color: A.accent }
+  if ((o.freight_status || '').toLowerCase() === 'consignment_missing') {
+    return { label: 'Consignment missing', color: A.bad }
+  }
+  if (awaitingDespatch(o)) return { label: 'Booked - press Ship Now', color: A.warn }
+  if (o.machship_consignment_id) return { label: 'Booked', color: A.warn }
+  return { label: 'Not booked', color: T.text3 }
 }
 
 function genGroupId(): string { return 'osg_' + Math.random().toString(36).slice(2, 10) }
@@ -476,7 +513,8 @@ export default function AdminOrdersListPage({ user }: Props) {
                     <th style={th(140)}>Order</th>
                     <th style={th()}>Distributor</th>
                     <th style={th(110)}>Placed</th>
-                    <th style={th(130)}>Status</th>
+                    <th style={th(120)}>Payment</th>
+                    <th style={th(150)}>Shipping</th>
                     <th style={{...th(110),textAlign:'right'}}>Total (inc)</th>
                     <th style={th(120)}>MYOB #</th>
                     <th style={th(60)}></th>
@@ -484,7 +522,7 @@ export default function AdminOrdersListPage({ user }: Props) {
                 </thead>
                 <tbody>
                   {data && data.orders.length === 0 && !loading && (
-                    <tr><td colSpan={8} style={{padding:30,textAlign:'center',color:T.text3,fontSize:13}}>
+                    <tr><td colSpan={9} style={{padding:30,textAlign:'center',color:T.text3,fontSize:13}}>
                       No orders match these filters.
                     </td></tr>
                   )}
@@ -493,7 +531,7 @@ export default function AdminOrdersListPage({ user }: Props) {
                       selectable={awaitingDespatch(o)} checked={selected.has(o.id)} onToggle={toggle}/>
                   ))}
                   {loading && (
-                    <tr><td colSpan={8} style={{padding:0}}><SkeletonRows rows={8}/></td></tr>
+                    <tr><td colSpan={9} style={{padding:0}}><SkeletonRows rows={8}/></td></tr>
                   )}
                 </tbody>
               </table>
@@ -580,13 +618,17 @@ function OrderRowDisplay({ order, isFirst, selectable, checked, onToggle }: {
         <div style={{fontSize:12,color:T.text3,opacity:0.7}}>{placedTime}</div>
       </td>
 
-      <td data-label="Status" style={td()}>
-        <Pill color={orderStatusColor(order.status)}>{orderStatusLabel(order.status)}</Pill>
+      <td data-label="Payment" style={td()}>
+        {(() => { const p = paymentState(order); return <Pill color={p.color}>{p.label}</Pill> })()}
         {Number(order.refunded_total) > 0 && (
           <div style={{fontSize:12,color:A.bad,marginTop:3}}>
             -${money(Number(order.refunded_total))} refunded
           </div>
         )}
+      </td>
+
+      <td data-label="Shipping" style={td()}>
+        {(() => { const sh = shippingState(order); return <Pill color={sh.color}>{sh.label}</Pill> })()}
       </td>
 
       <td data-label="Total (inc)" style={{...td(),textAlign:'right',fontFamily:'monospace',fontVariantNumeric:'tabular-nums'}}>

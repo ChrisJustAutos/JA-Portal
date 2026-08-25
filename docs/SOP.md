@@ -164,6 +164,29 @@ The quantity box in the cart and on the catalogue tile is **typed as well as ste
 
 While a change is settling, the stepper fades very slightly and the line total dims. The dimmed figure is the **last confirmed** price, not the new one — it snaps to the real total a moment later. That is deliberate: volume-break pricing is worked out on the server, so the portal will not guess at a price it hasn't been given.
 
+### 4.1bb Reading the Orders list: two columns, not one
+
+The Orders list used to carry a single **Status** pill. It has been split into **Payment** and **Shipping** (25 August 2026), because an order has two separate stories - has the money arrived, and have the goods left - and one green "Paid" pill made a boxed-up order look like it had already gone.
+
+| Payment | What it means |
+|---|---|
+| **Not paid** | Checkout was never finished. Not an order - see 4.1c. |
+| **Paid** | Card payment, money is ours. |
+| **Paid - bank, unsettled** | Bank Direct Debit accepted, funds still clearing (2-3 business days). |
+| **Paid - PayTo, unconfirmed** | PayTo agreement accepted, not yet confirmed. |
+| **Refunded** | Some or all has been refunded - the amount shows underneath. |
+
+| Shipping | What it means |
+|---|---|
+| **Not booked** | No consignment yet. |
+| **Booked - press Ship Now** | Consignment created, carrier knows nothing, goods still here. |
+| **Booked** | Manifested, on its way. |
+| **Shipped** | Despatched. |
+| **Delivered** | Carrier reports it delivered. |
+| **Consignment missing** | The consignment stopped answering in MachShip - see 4.2b. |
+
+**⚠ Amber in the Payment column means the money is not yet in the bank.** Both `becs` and `payto` mark an order paid the moment the mandate is accepted, and it stays amber until the funds settle. **Shipping an amber order is a credit decision** - Ship Now will warn you and make you approve it. That warning is the point, so read it rather than clicking through.
+
 ### 4.1c Orders that were never paid for
 
 **A checkout that was started and abandoned no longer appears on the Orders page.**
