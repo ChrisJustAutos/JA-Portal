@@ -231,6 +231,8 @@ Since 25 August the portal splits that field itself and mails every address in i
 - **"No email on the MYOB supplier card"** - genuinely blank. Add one, then Re-send.
 - Anything else - the provider rejected it for another reason; tell Chris and quote the message.
 
+**orders@justautoswholesale.com is CC'd on every supplier PO email, raised or re-sent.** That copy is how you confirm it went - the portal sends through a provider, so nothing appears in a Sent folder. Until 26 August a **re-sent** PO went to the supplier alone: no copy for us and replies pointed at the wrong mailbox, so a successful re-send looked like nothing had happened. Both paths now use the identical envelope.
+
 **⚠ Re-send does not re-raise the PO**, so it can't create a duplicate in MYOB. "Re-raise drop-ship PO" is the one that does - only use it if the PO itself is wrong.
 
 ### 4.1e Tune jobs: reading the filters

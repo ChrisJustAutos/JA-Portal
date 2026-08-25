@@ -9,7 +9,7 @@
 // if POs were already raised unless { force }.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { assertCheckoutConfigured, getFromMailbox } from './b2b-settings'
+import { assertCheckoutConfigured } from './b2b-settings'
 import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from './accounting/post-b2b-doc'
 import { sendMail } from './email'
 import { renderEmail, linesTableHtml, addressBlock } from './email-templates'
@@ -266,7 +266,17 @@ export async function resendDropShipPoEmail(orderId: string, supplierUid: string
       await patchRec({ email_status: 'no_email', emailed_to: null, email_error: 'No email on the MYOB supplier card' })
       return { ok: false, email_status: 'no_email', error: 'Supplier has no email on their MYOB card.' }
     }
-    await sendMail(await getFromMailbox(), { to: recipients, subject: rendered.subject, html: rendered.html })
+    // IDENTICAL envelope to the raise path above - same From, same Reply-To,
+    // same CC to the orders inbox. Re-send used to go out bare: supplier only,
+    // no copy for us and replies pointed at the wrong mailbox, so a re-sent PO
+    // was invisible from this end and looked like it hadn't gone (Chris
+    // 2026-08-26). Resend sends never appear in a Sent folder, so that CC is
+    // the ONLY evidence the email left the building.
+    await sendMail(PO_COPY_MAILBOX, {
+      from: PO_FROM_MAILBOX, replyTo: PO_COPY_MAILBOX,
+      to: recipients, cc: [PO_COPY_MAILBOX],
+      subject: rendered.subject, html: rendered.html,
+    })
     await patchRec({ email_status: 'sent', emailed_to: recipients.join(', '), email_error: null })
     try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'dropship_po_emailed', actor_type: actorId ? 'admin' : 'system', actor_id: actorId || null, metadata: { supplier: g.supplierName, to: recipients } }) } catch {}
     return { ok: true, email_status: 'sent', emailed_to: recipients.join(', ') }
