@@ -244,13 +244,23 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
     setBusy('')
   }
 
-  const byStatus = filter === 'all' ? jobs : jobs.filter(j => j.status === filter)
-  const visible = distFilter === 'all' ? byStatus
-    : distFilter === 'unmatched' ? byStatus.filter(j => !j.distributor_id)
-    : byStatus.filter(j => j.distributor_id === distFilter)
-  // Only offer distributors that actually have jobs, with their counts.
+  // The two filters cross-cut, so apply each one to the OTHER's counts.
+  // Previously the status tabs counted every job in the system while the table
+  // below showed one distributor's - so picking Penrith still read "187
+  // awaiting details", and the number on the tab had nothing to do with the
+  // rows underneath it.
+  const byDistributor = distFilter === 'all' ? jobs
+    : distFilter === 'unmatched' ? jobs.filter(j => !j.distributor_id)
+    : jobs.filter(j => j.distributor_id === distFilter)
+  const visible = filter === 'all' ? byDistributor : byDistributor.filter(j => j.status === filter)
+
+  // Status-tab counts, within the chosen distributor.
+  const statusCount = (id: string) => id === 'all' ? byDistributor.length : byDistributor.filter(j => j.status === id).length
+
+  // Distributor counts, within the chosen status.
+  const byStatusForDist = filter === 'all' ? jobs : jobs.filter(j => j.status === filter)
   const distCounts = new Map<string, number>()
-  for (const j of jobs) if (j.distributor_id) distCounts.set(j.distributor_id, (distCounts.get(j.distributor_id) || 0) + 1)
+  for (const j of byStatusForDist) if (j.distributor_id) distCounts.set(j.distributor_id, (distCounts.get(j.distributor_id) || 0) + 1)
 
   return (
     <>
@@ -276,7 +286,14 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
               {FILTERS.map(f => {
                 const on = filter === f.id
-                const count = f.id === 'all' ? jobs.length : jobs.filter(j => j.status === f.id).length
+                const count = statusCount(f.id)
+                // Hide a status with nothing in it, so the strip shows what this
+                // distributor actually has. 'All' and whatever is currently
+                // selected always stay, or picking an empty status would strand
+                // you with no way back. Nothing is removed permanently: a status
+                // reappears the moment a job lands in it - which matters for
+                // Submitted, where a pile-up means the MD sync worker has stopped.
+                if (count === 0 && f.id !== 'all' && !on) return null
                 return (
                   <button key={f.id} onClick={() => setFilter(f.id)} className="al-press al-focus"
                     style={{
@@ -298,8 +315,8 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                   color: distFilter === 'all' ? T.text2 : A.accent, cursor: 'pointer', fontFamily: 'inherit', maxWidth: 220, outline: 'none',
                 }}>
                 <option value="all">All distributors</option>
-                {distributors.filter(d => distCounts.has(d.id)).map(d => (
-                  <option key={d.id} value={d.id}>{d.display_name} ({distCounts.get(d.id)})</option>
+                {distributors.filter(d => distCounts.has(d.id) || d.id === distFilter).map(d => (
+                  <option key={d.id} value={d.id}>{d.display_name} ({distCounts.get(d.id) || 0})</option>
                 ))}
               </select>
               {distFilter !== 'all' && distFilter !== 'unmatched' && (

@@ -233,6 +233,15 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **⚠ Re-send does not re-raise the PO**, so it can't create a duplicate in MYOB. "Re-raise drop-ship PO" is the one that does - only use it if the PO itself is wrong.
 
+### 4.1e Tune jobs: reading the filters
+
+**Admin > B2B > Tune Jobs.** Two filters, and they now cross-cut properly (26 August 2026). Pick a distributor and the status tabs count **that distributor's** jobs; pick a status and the distributor list counts jobs **in that status**. Until now the tabs always counted every job in the system, so selecting Penrith still read "187 awaiting details" while the table below showed only theirs.
+
+**A status tab with nothing in it is hidden.** It comes straight back the moment a job lands in that status. That is deliberate rather than deleting the statuses: **Unmatched** and **Submitted** are empty today but both are real -
+
+- **Unmatched** - a receipt arrived whose company name matched no distributor. It has never happened, but if the matcher ever misses, this is where the job waits.
+- **Submitted** - the distributor has filled the details in and the job is queued for MechanicDesk. It passes through in seconds, so you will normally never see it. **If jobs start piling up here, the MD sync worker has stopped** - that is exactly when you need the tab, so it must not be deleted for being empty in good times.
+
 ### 4.2 Pick, pack and despatch
 
 **⚠ This changed on 20 August 2026.** Booking freight and despatching are now two separate steps. Booking no longer sends anything to the carrier and no longer raises the tax invoice.
