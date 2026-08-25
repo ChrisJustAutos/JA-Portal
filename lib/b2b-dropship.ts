@@ -13,6 +13,7 @@ import { assertCheckoutConfigured, getFromMailbox } from './b2b-settings'
 import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from './accounting/post-b2b-doc'
 import { sendMail } from './email'
 import { renderEmail, linesTableHtml, addressBlock } from './email-templates'
+import { parseEmailList } from './email-recipients'
 
 // Supplier PO emails: only mail.justautos.app is verified in Resend
 // (2026-08-06), so the visible From uses it; replies AND the CC copy go to
@@ -176,12 +177,24 @@ export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?
         if (!rendered.enabled) { emailStatus = 'disabled' }
         else {
           const contact = await getSupplierContact(g.supplierUid)
-          if (contact.email) {
+          // A MYOB Email field can hold several addresses in one box
+          // ("sales@x.com; accounts@x.com"), and Resend 422s the whole send on
+          // anything that isn't a single clean address. Split it and mail all
+          // of them - see lib/email-recipients.
+          const poRecipients = parseEmailList(contact.email)
+          if (poRecipients.length > 0) {
             // From = verified Resend domain; Reply-To + CC = the wholesale
             // orders inbox, so replies land there and staff always have a
             // copy (Resend sends never appear in a Sent folder).
-            await sendMail(PO_COPY_MAILBOX, { from: PO_FROM_MAILBOX, replyTo: PO_COPY_MAILBOX, to: [contact.email], cc: [PO_COPY_MAILBOX], subject: rendered.subject, html: rendered.html })
-            emailStatus = 'sent'; emailedTo = contact.email
+            await sendMail(PO_COPY_MAILBOX, { from: PO_FROM_MAILBOX, replyTo: PO_COPY_MAILBOX, to: poRecipients, cc: [PO_COPY_MAILBOX], subject: rendered.subject, html: rendered.html })
+            emailStatus = 'sent'; emailedTo = poRecipients.join(', ')
+          } else if (String(contact.email || '').trim()) {
+            // There IS something on the card, we just can't mail it. Say what
+            // it holds, or someone hunts for a missing address that isn't missing.
+            emailStatus = 'failed'
+            emailError = `Supplier's MYOB email isn't a usable address: "${String(contact.email).trim().slice(0, 120)}"`
+          } else {
+            emailStatus = 'no_email'
           }
         }
       } catch (e: any) {
@@ -243,14 +256,20 @@ export async function resendDropShipPoEmail(orderId: string, supplierUid: string
       { lines_table: linesTableHtml(g.lines.map(l => ({ description: l.description, qty: l.qty }))), ship_to: addressBlock(shipTo) })
     if (!rendered.enabled) return { ok: false, email_status: 'disabled', error: 'The supplier PO email template is turned off in B2B Settings.' }
     const contact = await getSupplierContact(supplierUid)
-    if (!contact.email) {
+    const recipients = parseEmailList(contact.email)
+    if (recipients.length === 0) {
+      if (String(contact.email || '').trim()) {
+        const msg = `Supplier's MYOB email isn't a usable address: "${String(contact.email).trim().slice(0, 120)}"`
+        await patchRec({ email_status: 'failed', emailed_to: null, email_error: msg })
+        return { ok: false, email_status: 'failed', error: msg }
+      }
       await patchRec({ email_status: 'no_email', emailed_to: null, email_error: 'No email on the MYOB supplier card' })
       return { ok: false, email_status: 'no_email', error: 'Supplier has no email on their MYOB card.' }
     }
-    await sendMail(await getFromMailbox(), { to: [contact.email], subject: rendered.subject, html: rendered.html })
-    await patchRec({ email_status: 'sent', emailed_to: contact.email, email_error: null })
-    try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'dropship_po_emailed', actor_type: actorId ? 'admin' : 'system', actor_id: actorId || null, metadata: { supplier: g.supplierName, to: contact.email } }) } catch {}
-    return { ok: true, email_status: 'sent', emailed_to: contact.email }
+    await sendMail(await getFromMailbox(), { to: recipients, subject: rendered.subject, html: rendered.html })
+    await patchRec({ email_status: 'sent', emailed_to: recipients.join(', '), email_error: null })
+    try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'dropship_po_emailed', actor_type: actorId ? 'admin' : 'system', actor_id: actorId || null, metadata: { supplier: g.supplierName, to: recipients } }) } catch {}
+    return { ok: true, email_status: 'sent', emailed_to: recipients.join(', ') }
   } catch (e: any) {
     const msg = (e?.message || String(e)).slice(0, 300)
     await patchRec({ email_status: 'failed', email_error: msg })

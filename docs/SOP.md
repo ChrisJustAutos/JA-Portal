@@ -219,6 +219,20 @@ They are now hidden from the list and left out of its value total. Nothing is de
 
 **⚠ Don't chase one for payment.** If a distributor tells you they were charged but the order looks unfinished, don't assume - check Stripe. The payment either completed (and there will be a second, paid order) or it didn't.
 
+### 4.1d When a drop-ship PO email says "email failed"
+
+The PO itself is fine - it exists in MYOB. Only the email to the supplier didn't go, and **Re-send** on the order retries it.
+
+The commonest cause is the supplier's **Email field on their MYOB card holding more than one address**, e.g. `sales@x.com; accounts@x.com`. Our mail provider needs one clean address per recipient and rejects the whole send otherwise. That is what stopped MPI AUTOMOTIVE's PO 00001382 on 25 August, having worked fine three weeks earlier - the address was never wrong, the field just had two in it.
+
+Since 25 August the portal splits that field itself and mails every address in it, so multi-address cards work. If a send still fails, the error now **quotes what the card actually holds**, so you can see what to fix rather than guessing:
+
+- **"isn't a usable address: …"** - the MYOB card has something that isn't an email. Fix the card, then Re-send.
+- **"No email on the MYOB supplier card"** - genuinely blank. Add one, then Re-send.
+- Anything else - the provider rejected it for another reason; tell Chris and quote the message.
+
+**⚠ Re-send does not re-raise the PO**, so it can't create a duplicate in MYOB. "Re-raise drop-ship PO" is the one that does - only use it if the PO itself is wrong.
+
 ### 4.2 Pick, pack and despatch
 
 **⚠ This changed on 20 August 2026.** Booking freight and despatching are now two separate steps. Booking no longer sends anything to the carrier and no longer raises the tax invoice.
