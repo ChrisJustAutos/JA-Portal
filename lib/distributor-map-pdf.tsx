@@ -66,6 +66,9 @@ export interface PdfEntity {
   key: string; name: string
   lat: number | null; lng: number | null; suburb: string | null
   monthly: PdfMonthCell[]; totals: PdfMonthCell
+  /** Just Autos' own workshop: quotes in its area only, never any bookings.
+   *  Printed as "—" rather than 0, and kept out of the distributor totals. */
+  quotesOnly?: boolean
 }
 export interface DistributorMapPdfData {
   fy: number
@@ -123,8 +126,15 @@ function DistributorMapDoc({ D }: { D: DistributorMapPdfData }) {
   const M = D.months.length || 12
   const zeros = () => Array(M).fill(0) as number[]
 
+  // Every total and matrix in this document is DISTRIBUTORS only. Just Autos'
+  // own workshop carries quotes with no bookings, so folding it into the
+  // totals would drag the combined capture rate down without any distributor
+  // having done worse. It gets its own section instead.
+  const home = D.entities.find(e => e.quotesOnly) || null
+  const dists = D.entities.filter(e => !e.quotesOnly)
+
   // FY totals across every distributor.
-  const all = D.entities.reduce((acc, e) => ({
+  const all = dists.reduce((acc, e) => ({
     quotes: acc.quotes + e.totals.quotes,
     quotesValue: acc.quotesValue + e.totals.quotesValue,
     bookings: acc.bookings + e.totals.bookings,
@@ -133,7 +143,7 @@ function DistributorMapDoc({ D }: { D: DistributorMapPdfData }) {
 
   // Combined month-by-month.
   const mq = zeros(), mqv = zeros(), mb = zeros(), mbv = zeros()
-  for (const e of D.entities) {
+  for (const e of dists) {
     for (let i = 0; i < M; i++) {
       const c = e.monthly[i]
       if (!c) continue
@@ -142,8 +152,8 @@ function DistributorMapDoc({ D }: { D: DistributorMapPdfData }) {
     }
   }
 
-  const ranked = D.entities.slice().sort((a, b) => b.totals.quotes - a.totals.quotes || b.totals.bookingsValue - a.totals.bookingsValue)
-  const located = D.entities.filter(e => e.lat != null).length
+  const ranked = dists.slice().sort((a, b) => b.totals.quotes - a.totals.quotes || b.totals.bookingsValue - a.totals.bookingsValue)
+  const located = dists.filter(e => e.lat != null).length
   const synced = D.quotesSyncedAt
     ? new Date(D.quotesSyncedAt).toLocaleString('en-AU', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
     : 'unknown'
@@ -180,10 +190,34 @@ function DistributorMapDoc({ D }: { D: DistributorMapPdfData }) {
           </View>
           <View style={s.stat}>
             <Text style={s.statLabel}>Distributors</Text>
-            <Text style={s.statValue}>{num(D.entities.length)}</Text>
+            <Text style={s.statValue}>{num(dists.length)}</Text>
             <Text style={s.statSub}>zero-activity ones already dropped</Text>
           </View>
+          {home ? (
+            <View style={s.stat}>
+              <Text style={s.statLabel}>Our own area</Text>
+              <Text style={s.statValue}>{num(home.totals.quotes)}</Text>
+              <Text style={s.statSub}>{money(home.totals.quotesValue)} quoted within {D.radiusKm} km of the workshop</Text>
+            </View>
+          ) : null}
         </View>
+
+        {home ? (
+          <Table
+            title={`${home.name} — quotes in our own area`}
+            hint={`Our workshop on the map as a pin and radius, like a distributor, so you can see the demand around it. It carries QUOTES ONLY — the Monday board is distributor bookings and Just Autos is not on it, so there is deliberately nothing to convert against and no capture rate. These quotes are excluded from every distributor total in this document.`}
+            cols={[
+              { label: 'Month', width: '34%' },
+              { label: 'Quotes in area', width: '33%', right: true },
+              { label: 'Quote value', width: '33%', right: true },
+            ]}
+            rows={D.months
+              .map((m, i) => ({ m, c: home.monthly[i] }))
+              .filter(x => x.c && x.c.quotes)
+              .map(({ m, c }) => [m.label, num(c.quotes), money(c.quotesValue)])}
+            total={['FY total', num(home.totals.quotes), money(home.totals.quotesValue)]}
+          />
+        ) : null}
 
         <Table
           title="Month by month — all distributors"
@@ -341,6 +375,14 @@ function DistributorMapDoc({ D }: { D: DistributorMapPdfData }) {
           <Text style={s.note}>
             Quote points carry a month but no day, so every figure here is a month snapshot. All amounts ex-GST.
           </Text>
+          {home ? (
+            <Text style={s.note}>
+              {home.name} sits on the map as a pin and radius like a distributor and competes for quotes on the same
+              nearest-within-radius rule, but has no bookings and no capture rate, and is left out of every distributor total.
+              At radii up to 150 km it cannot take a quote from anyone — the nearest distributor is about 390 km away.
+              At 250 km its area starts to overlap the nearest distributor's, and a quote closer to the workshop counts here instead of there.
+            </Text>
+          ) : null}
         </View>
 
         <Text style={s.footer} fixed render={({ pageNumber, totalPages }) =>

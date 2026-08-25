@@ -12,6 +12,19 @@ import postcodes from './workshop-map/au-postcodes.json'
 
 const PC: Record<string, [number, number, string]> = (postcodes as any).pc
 
+// Just Autos' own workshop, shown on the map as a pin and radius like any
+// distributor so you can see the demand around it — 1 Windsor Road, Burnside
+// QLD 4560. It is QUOTES ONLY and never carries bookings: the Monday
+// "Distributor - Booking" board is distributors' work, JA is not on it, and
+// JA's own jobs live in MechanicDesk on a different footing (a distributor's
+// bookings are counted wherever the customer is, JA's would be geographic),
+// so a capture rate for JA would be comparing two different things. Its cells
+// render as "—" rather than 0%, and it is excluded from the distributor totals.
+// Override the location with DISTRIBUTOR_MAP_HOME_POSTCODE if the site moves.
+const HOME_KEY = 'ja:home'
+const HOME_NAME = 'Just Autos (workshop)'
+const HOME_POSTCODE = (process.env.DISTRIBUTOR_MAP_HOME_POSTCODE || '4560').replace(/\D/g, '')
+
 export interface MonthCell { quotes: number; quotesValue: number; bookings: number; bookingsValue: number }
 export interface DistributorEntity {
   key: string
@@ -21,6 +34,10 @@ export interface DistributorEntity {
   suburb: string | null
   monthly: MonthCell[]         // aligned to months[]
   totals: MonthCell
+  /** Just Autos' own workshop — quotes only, never any bookings. Consumers
+   *  must show its capture rate as "—" (not 0%) and leave it out of the
+   *  distributor totals, or the report reads as a distributor booking nothing. */
+  quotesOnly?: boolean
 }
 export interface DistributorMapResult {
   fy: number
@@ -90,6 +107,9 @@ export function distributorAreasForMonth(
   const mi = result.months.findIndex(m => m.k === monthKey)
   if (mi < 0) return null
   const rows = result.entities
+    // Just Autos' workshop is a map pin, not a distributor — it would show in
+    // the weekly recap as a distributor that booked nothing all month.
+    .filter(e => !e.quotesOnly)
     .map(e => ({
       name: e.name, located: e.lat != null,
       quotes: e.monthly[mi].quotes, quotesValue: e.monthly[mi].quotesValue,
@@ -174,6 +194,25 @@ export async function computeDistributorMap(
     }
     ent.monthly[mi].bookings++
     ent.monthly[mi].bookingsValue += b.value
+  }
+
+  // Just Autos' own workshop joins AFTER the booking pass and BEFORE the quote
+  // pass: it must compete for quotes on the same nearest-within-radius rule as
+  // everyone else, but must never pick up a Monday booking. Adding it earlier
+  // would put it in `names` and let matchLabel bind a distributor label to it —
+  // and would shift the indices matchLabel returns.
+  const homeGeo = PC[HOME_POSTCODE]
+  if (homeGeo) {
+    entities.push({
+      key: HOME_KEY,
+      name: HOME_NAME,
+      lat: homeGeo[0],
+      lng: homeGeo[1],
+      suburb: homeGeo[2],
+      monthly: months.map(emptyCell),
+      totals: emptyCell(),
+      quotesOnly: true,
+    })
   }
 
   // Assign each quote point to the nearest distributor within radius.

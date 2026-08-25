@@ -16,6 +16,10 @@ interface MonthCell { quotes: number; quotesValue: number; bookings: number; boo
 interface Dist {
   key: string; name: string; lat: number | null; lng: number | null; suburb: string | null
   monthly: MonthCell[]; totals: MonthCell
+  // Just Autos' own workshop — a pin and radius so you can see the demand
+  // around it. Carries quotes only, never bookings, so its booking figures
+  // must read "—" rather than 0.
+  quotesOnly?: boolean
 }
 interface QuotePoint { la: number; ln: number; m: number; a: number; d: string | null }
 interface ApiResp {
@@ -29,6 +33,9 @@ interface ApiResp {
 
 const BG = '#10151d', PANEL = '#161d27', BORDER = '#26303e', TEXT = '#e8edf4', MUTED = '#8b98a9'
 const GREEN = '#47FFCF', AMBER = '#FFB454', RED = '#e0707a'
+// Just Autos' own workshop pin — deliberately white-ish so it never reads as
+// one of the palette-coloured distributors.
+const HOME_COL = '#f2f5f7'
 const PALETTE = ['#47FFCF', '#FFB454', '#6ea8fe', '#e0707a', '#c792ea', '#9cd326', '#ff5ac4', '#4eccc6', '#ffcb00', '#579bfc', '#fdab3d', '#00c875', '#9d50dd', '#66ccff', '#cab641', '#df2f4a']
 
 const fmt = (n: number) => '$' + Math.round(n).toLocaleString('en-AU')
@@ -67,10 +74,14 @@ export default function DistributorMapDashboard() {
   useEffect(() => { load() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Stable colour per distributor (located ones first, in API order).
+  // Our own workshop keeps one fixed colour off the palette so it reads as
+  // "us" wherever it appears, and never borrows a distributor's colour.
   const colours = useMemo(() => {
     const m = new Map<string, string>()
     let i = 0
-    for (const d of data?.distributors || []) m.set(d.key, PALETTE[i++ % PALETTE.length])
+    for (const d of data?.distributors || []) {
+      m.set(d.key, d.quotesOnly ? HOME_COL : PALETTE[i++ % PALETTE.length])
+    }
     return m
   }, [data])
 
@@ -112,8 +123,17 @@ export default function DistributorMapDashboard() {
         radius: data.radiusKm * 1000, color: col, weight: 1, opacity: 0.5, fillColor: col, fillOpacity: 0.06, interactive: false,
       }).addTo(layer)
       const cell = month >= 0 ? d.monthly[month] : d.totals
-      L.circleMarker([d.lat!, d.lng!], { radius: 9, weight: 2.5, color: '#fff', fillColor: col, fillOpacity: 1 })
-        .bindTooltip(`<b>${esc(d.name)}</b><br>Quotes in area: ${cell.quotes} · ${fmtK(cell.quotesValue)}<br>Booked: ${cell.bookings} · ${fmtK(cell.bookingsValue)}`, { sticky: true })
+      // Our own workshop gets a square-ish heavier pin so it reads as "us",
+      // not another distributor, and says so rather than showing "Booked: 0".
+      L.circleMarker([d.lat!, d.lng!], {
+        radius: d.quotesOnly ? 11 : 9, weight: d.quotesOnly ? 4 : 2.5,
+        color: '#fff', fillColor: col, fillOpacity: 1,
+      })
+        .bindTooltip(
+          `<b>${esc(d.name)}</b><br>Quotes in area: ${cell.quotes} · ${fmtK(cell.quotesValue)}<br>` +
+          (d.quotesOnly ? '<i>our workshop — quotes only, no bookings tracked here</i>'
+                        : `Booked: ${cell.bookings} · ${fmtK(cell.bookingsValue)}`),
+          { sticky: true })
         .on('click', () => setSel(k => k === d.key ? 'all' : d.key))
         .addTo(layer)
     }
@@ -134,7 +154,10 @@ export default function DistributorMapDashboard() {
     return months.map((m, i) => {
       let cell: MonthCell
       if (selDist) cell = selDist.monthly[i]
-      else cell = data.distributors.reduce((acc, d) => ({
+      // "All" means all DISTRIBUTORS. Our own workshop carries quotes and no
+      // bookings, so folding it in would drag the combined conversion rate
+      // down without any distributor having done worse. Select it to see it.
+      else cell = data.distributors.filter(d => !d.quotesOnly).reduce((acc, d) => ({
         quotes: acc.quotes + d.monthly[i].quotes,
         quotesValue: acc.quotesValue + d.monthly[i].quotesValue,
         bookings: acc.bookings + d.monthly[i].bookings,
@@ -225,9 +248,18 @@ export default function DistributorMapDashboard() {
         <button onClick={() => setSel('all')} style={pill(sel === 'all')}>All distributors</button>
         {data.distributors.map(d => (
           <button key={d.key} onClick={() => setSel(k => k === d.key ? 'all' : d.key)}
-            title={d.lat == null ? 'No location on file — bookings only' : (d.suburb || '')}
+            title={d.quotesOnly ? 'Our own workshop — quotes in its area only, no bookings tracked here'
+                                : (d.lat == null ? 'No location on file — bookings only' : (d.suburb || ''))}
             style={pill(sel === d.key, colours.get(d.key))}>
-            {d.name}{d.lat == null ? ' ⚠' : ''} <span style={{ opacity: 0.75 }}>({month >= 0 ? d.monthly[month].bookings : d.totals.bookings})</span>
+            {d.name}{d.lat == null ? ' ⚠' : ''}{' '}
+            {/* The count in brackets is bookings for a distributor; our own
+                workshop has none, so it shows quotes instead — labelled, so
+                the two are never read as the same number. */}
+            <span style={{ opacity: 0.75 }}>
+              {d.quotesOnly
+                ? `(${month >= 0 ? d.monthly[month].quotes : d.totals.quotes} quotes)`
+                : `(${month >= 0 ? d.monthly[month].bookings : d.totals.bookings})`}
+            </span>
           </button>
         ))}
       </div>
@@ -248,7 +280,9 @@ export default function DistributorMapDashboard() {
             {selDist ? selDist.name : 'All distributor areas'} — quotes vs booked
           </div>
           <div style={{ fontSize: 11, color: MUTED, marginBottom: 10 }}>
-            Quotes = JA quotes to customers within {data.radiusKm} km of the distributor · Booked = confirmed bookings on the Monday board
+            {selDist?.quotesOnly
+              ? <>Quotes = JA quotes to customers within {data.radiusKm} km of our own workshop. <b>No bookings are tracked here</b> — the Monday board is distributor work, and our jobs live in MechanicDesk.</>
+              : <>Quotes = JA quotes to customers within {data.radiusKm} km of the distributor · Booked = confirmed bookings on the Monday board{sel === 'all' ? ' · our own workshop is excluded from this total' : ''}</>}
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
@@ -260,14 +294,20 @@ export default function DistributorMapDashboard() {
             </thead>
             <tbody>
               {tableRows.map((r, i) => {
-                const p = conv(r.bookings, r.quotes)
+                // Our own workshop has no bookings by design, so a 0% here
+                // would read as "booked nothing" rather than "not measured".
+                const p = selDist?.quotesOnly ? null : conv(r.bookings, r.quotes)
                 const dim = !r.quotes && !r.bookings
                 return (
                   <tr key={i} style={{ opacity: dim ? 0.4 : 1, background: month === i ? '#1d2734' : 'transparent', cursor: 'pointer' }}
                     onClick={() => setMonth(x => x === i ? -1 : i)}>
                     <td style={{ padding: '7px 8px', borderBottom: `1px solid ${BORDER}`, fontWeight: 600 }}>{r.label}</td>
                     <td style={{ padding: '7px 8px', borderBottom: `1px solid ${BORDER}` }}><b>{r.quotes}</b> <span style={{ color: MUTED }}>{r.quotes ? fmtK(r.quotesValue) : ''}</span></td>
-                    <td style={{ padding: '7px 8px', borderBottom: `1px solid ${BORDER}` }}><b>{r.bookings}</b> <span style={{ color: MUTED }}>{r.bookings ? fmtK(r.bookingsValue) : ''}</span></td>
+                    <td style={{ padding: '7px 8px', borderBottom: `1px solid ${BORDER}` }}>
+                      {selDist?.quotesOnly
+                        ? <span style={{ color: MUTED }}>—</span>
+                        : <><b>{r.bookings}</b> <span style={{ color: MUTED }}>{r.bookings ? fmtK(r.bookingsValue) : ''}</span></>}
+                    </td>
                     <td style={{ padding: '7px 8px', borderBottom: `1px solid ${BORDER}` }}>
                       {p == null ? <span style={{ color: MUTED }}>—</span> : <span style={{ color: convColor(p), fontWeight: 700 }}>{p}%</span>}
                     </td>
@@ -277,9 +317,15 @@ export default function DistributorMapDashboard() {
               <tr style={{ background: '#1a2230' }}>
                 <td style={{ padding: '8px', fontWeight: 800 }}>FY{data.fy}</td>
                 <td style={{ padding: '8px', fontWeight: 800 }}>{grand.quotes} <span style={{ color: MUTED, fontWeight: 500 }}>{fmtK(grand.quotesValue)}</span></td>
-                <td style={{ padding: '8px', fontWeight: 800 }}>{grand.bookings} <span style={{ color: MUTED, fontWeight: 500 }}>{fmtK(grand.bookingsValue)}</span></td>
                 <td style={{ padding: '8px', fontWeight: 800 }}>
-                  {conv(grand.bookings, grand.quotes) == null ? '—' : <span style={{ color: convColor(conv(grand.bookings, grand.quotes)!) }}>{conv(grand.bookings, grand.quotes)}%</span>}
+                  {selDist?.quotesOnly
+                    ? <span style={{ color: MUTED, fontWeight: 500 }}>—</span>
+                    : <>{grand.bookings} <span style={{ color: MUTED, fontWeight: 500 }}>{fmtK(grand.bookingsValue)}</span></>}
+                </td>
+                <td style={{ padding: '8px', fontWeight: 800 }}>
+                  {selDist?.quotesOnly || conv(grand.bookings, grand.quotes) == null
+                    ? <span style={{ color: MUTED, fontWeight: 500 }}>—</span>
+                    : <span style={{ color: convColor(conv(grand.bookings, grand.quotes)!) }}>{conv(grand.bookings, grand.quotes)}%</span>}
                 </td>
               </tr>
             </tbody>

@@ -379,6 +379,12 @@ The change percentages are worked out from the turnover figures themselves, not 
 
 Quotes near each distributor against bookings they actually confirmed — the "are they converting the leads we send them" view.
 
+**Just Autos is on the map too** (added 25 August 2026) — our own workshop at Burnside, as a pin and radius like any distributor, so you can see the demand sitting around us. Its pin is white and slightly larger so it doesn't read as a distributor.
+
+**⚠ It carries quotes only — there is no "booked" figure for it, and that is deliberate, not a gap.** The Monday board is distributor bookings and Just Autos isn't on it, and our own jobs live in Mechanics Desk on a different footing (a distributor's bookings count wherever the customer is; ours would only count near the workshop). Comparing the two would be comparing different things, so the booked and capture columns show **—** rather than 0. For the same reason Just Autos is left out of the **All distributors** totals and out of the weekly sales recap — pick its pill to see it on its own.
+
+At 50, 100 and 150 km our area can't overlap anyone's, because the nearest distributor is about 390 km away. At **250 km** it starts to overlap the nearest distributor's area, and a quote closer to us counts to us instead of them — so a distributor's number can look lower at 250 km than it did before.
+
 **Export PDF** (top right of the controls row) downloads every month of the financial year for every distributor: a combined month-by-month table, an FY table per distributor ranked by quotes in their area, quotes / bookings / booking-value matrices with a column per month, and then a small month-by-month table for each distributor on its own — that last section is the one to take into a distributor conversation.
 
 The **radius** you have selected carries into the PDF and into its filename (`distributor-map-FY2026-100km.pdf`), because the radius decides which quotes count as being in whose area. Unlike the Workshop Map export this one recomputes against Monday live, so give it a few seconds.
