@@ -25,6 +25,14 @@ import { refreshOrderFreight } from '../../../lib/b2b-machship-refresh'
 const POLL_INTERVAL_MIN = 25  // skip rows polled within the last N min
 const DEFAULT_BATCH     = 25
 
+// Orders parked as consignment_missing used to be excluded forever, because
+// nothing could ever un-stick them. refreshOrderFreight can now re-resolve a
+// consignment by its carrier tracking number when it was deleted and
+// re-created in MachShip, so they get a second chance — but slowly, so a
+// genuinely dead consignment isn't re-asked every 30 minutes for months.
+const RETRY_MISSING_HOURS = 6
+const RETRY_MISSING_BATCH = 5
+
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
   if (_sb) return _sb
@@ -62,7 +70,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (error) return res.status(500).json({ ok: false, error: error.message })
 
-  const ids = (orders || []).map((o: any) => o.id as string)
+  // Second, slower pass: parked consignments, in case the shipment is alive in
+  // MachShip under a new id. Kept to its own small batch so a backlog of dead
+  // ones can never crowd out the live orders above.
+  const retryIso = new Date(Date.now() - RETRY_MISSING_HOURS * 3_600_000).toISOString()
+  const { data: parked } = await c
+    .from('b2b_orders')
+    .select('id')
+    .not('machship_consignment_id', 'is', null)
+    .not('status', 'in', '(delivered,cancelled,refunded)')
+    .eq('freight_status', 'consignment_missing')
+    .or(`last_freight_poll_at.is.null,last_freight_poll_at.lt.${retryIso}`)
+    .order('last_freight_poll_at', { ascending: true, nullsFirst: true })
+    .limit(RETRY_MISSING_BATCH)
+
+  const ids = Array.from(new Set([
+    ...(orders || []).map((o: any) => o.id as string),
+    ...(parked || []).map((o: any) => o.id as string),
+  ]))
   if (ids.length === 0) {
     return res.status(200).json({ ok: true, scanned: 0, refreshed: 0, errors: 0 })
   }

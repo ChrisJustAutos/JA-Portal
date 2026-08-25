@@ -13,9 +13,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   getConsignment,
+  findConsignmentsByCarrierConsignmentId,
+  findConsignmentsByReference1,
   MachShipApiError,
   MachShipNotConfiguredError,
 } from './b2b-machship'
+import type { Consignment } from './b2b-machship'
 
 export interface RefreshResult {
   ok:    boolean
@@ -36,10 +39,59 @@ export interface RefreshResult {
 const TERMINAL_DELIVERED = new Set(['delivered'])
 const TERMINAL_CANCELLED = new Set(['cancelled', 'returned'])
 
+// Re-find a consignment whose internal id has stopped resolving.
+//
+// Order of attack, most durable identifier first:
+//   1. the CARRIER tracking number (e.g. TNT "EYA000002055") — printed on the
+//      label, so it survives a delete-and-re-create in MachShip
+//   2. Reference 1 — "<order number> / <customer PO>", exactly what
+//      lib/b2b-freight-book.ts sends as customerReference. Only matches if
+//      whoever re-created it typed the same reference.
+//
+// Note we canNOT look up by our stored MachShip consignment number (MS…):
+// MachShip publishes no endpoint for it, and a re-created consignment gets a
+// new MS number anyway. Where the old number IS still live, the tracking
+// number finds the same record — which is the case this exists for.
+//
+// Returns null on any doubt. A wrong match here would attach an order to
+// someone else's shipment, so a lookup that returns several consignments only
+// counts when exactly one of them matches on tracking number.
+async function reResolveConsignment(order: any): Promise<Consignment | null> {
+  const wantTracking = String(order.tracking_number || '').trim()
+
+  const pick = (list: Consignment[]): Consignment | null => {
+    const live = (list || []).filter(x => x && x.id)
+    if (!live.length) return null
+    if (wantTracking) {
+      const exact = live.filter(x => String(x.carrierConsignmentId || '').trim() === wantTracking)
+      if (exact.length === 1) return exact[0]
+      if (exact.length > 1) return null
+    }
+    return live.length === 1 ? live[0] : null
+  }
+
+  try {
+    if (wantTracking) {
+      const byTracking = pick(await findConsignmentsByCarrierConsignmentId([wantTracking]))
+      if (byTracking) return byTracking
+    }
+    const reference = order.order_number
+      ? order.order_number + (order.customer_po ? ` / ${order.customer_po}` : '')
+      : ''
+    if (reference) {
+      const byRef = pick(await findConsignmentsByReference1([reference]))
+      if (byRef) return byRef
+    }
+  } catch (e: any) {
+    console.error(`[machship] re-resolve failed for order ${order.id}:`, e?.message || e)
+  }
+  return null
+}
+
 export async function refreshOrderFreight(c: SupabaseClient, orderId: string): Promise<RefreshResult> {
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, machship_consignment_id, freight_status, delivered_at, tracking_number')
+    .select('id, status, machship_consignment_id, machship_consignment_number, freight_status, delivered_at, tracking_number, order_number, customer_po')
     .eq('id', orderId)
     .maybeSingle()
   if (oErr)   return { ok: false, status: 500, error: oErr.message }
@@ -59,12 +111,27 @@ export async function refreshOrderFreight(c: SupabaseClient, orderId: string): P
       // with a visible freight_status so the poller stops and the admin page
       // shows WHY there'll be no more tracking updates.
       if (e.status === 404) {
-        await c.from('b2b_orders').update({
-          freight_status: 'consignment_missing',
-          last_freight_poll_at: new Date().toISOString(),
-        }).eq('id', orderId)
-        return { ok: false, status: 404, error: 'Consignment no longer exists in MachShip (deleted/re-created there?) — polling stopped; mark the order delivered manually when it lands.' }
-      }
+        // Before giving up: the shipment is usually still alive in MachShip
+        // under a NEW internal id, because someone deleted and re-created the
+        // consignment there. The carrier tracking number is the durable
+        // anchor — it's the number printed on the label — so re-resolve by
+        // that, then by our Reference 1, and carry on with the id we find.
+        const found = await reResolveConsignment(order)
+        if (found) {
+          await c.from('b2b_orders').update({
+            machship_consignment_id:     String(found.id),
+            machship_consignment_number: found.consignmentNumber || order.machship_consignment_number,
+          }).eq('id', orderId)
+          console.warn(`[machship] order ${orderId}: consignment id re-resolved ${order.machship_consignment_id} → ${found.id} (${found.consignmentNumber})`)
+          consignment = found
+        } else {
+          await c.from('b2b_orders').update({
+            freight_status: 'consignment_missing',
+            last_freight_poll_at: new Date().toISOString(),
+          }).eq('id', orderId)
+          return { ok: false, status: 404, error: 'Consignment no longer exists in MachShip, and no consignment matches this tracking number or order reference either — polling stopped; mark the order delivered manually when it lands.' }
+        }
+      } else
       return { ok: false, status: 502, error: e.message }
     }
     return { ok: false, status: 500, error: `getConsignment failed: ${e?.message || e}` }

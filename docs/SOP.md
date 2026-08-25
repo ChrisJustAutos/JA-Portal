@@ -171,6 +171,18 @@ While a change is settling, the stepper fades very slightly and the line total d
 
 Until the invoice is written it reads **"Not written to MYOB yet"** in amber. The MYOB card further down the right-hand rail still carries the diagnostics — company file, write attempts, and the error if a write failed.
 
+The **Timeline** card shows the **three most recent events** with "N earlier events hidden" above them; **Show all N events** opens the lot. A busy order — drop-ship POs, freight polls, a refund — used to run to a wall of entries, and what you almost always want is what happened last.
+
+### 4.2b "Consignment Missing" on a shipped order
+
+If the freight panel says **Consignment Missing**, the consignment MachShip gave us has stopped answering — nearly always because someone deleted and re-created it in MachShip, which issues a new internal id while the shipment carries on under the same carrier tracking number.
+
+The portal now recovers from this by itself. When the id stops resolving it looks the consignment up again by the **carrier tracking number** (the number on the label, e.g. `EYA000002055`), then by the order reference, and if it finds a single unambiguous match it adopts the new id and resumes tracking. Parked orders are retried every **6 hours**, so an order that stuck earlier can come back on its own — it is no longer a dead end.
+
+**What to do:** press **Refresh from MachShip** on the order to try immediately rather than waiting for the retry. If it still can't find it, the consignment genuinely isn't there under that tracking number and the message will say so — mark the order delivered manually when it lands.
+
+**⚠** It matches on the tracking number, not the `MS…` consignment number. A re-created consignment gets a new `MS…` number, so that one is no help — and if two consignments share a tracking number the portal deliberately refuses to guess rather than risk attaching your order to someone else's shipment.
+
 ### 4.3 Freight problems
 
 | Symptom | What to do |

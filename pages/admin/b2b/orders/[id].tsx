@@ -762,11 +762,39 @@ function StatusPill({ status }: { status: string }) {
   return <Pill color={orderStatusColor(status)}>{orderStatusLabel(status)}</Pill>
 }
 
+// How many of the most recent events to show before you ask for the rest.
+// A busy order (drop-ship + freight polls + refunds) can run to dozens, and
+// the answer you actually want is nearly always "what happened last".
+const TIMELINE_RECENT = 3
+
 function Timeline({ events }: { events: OrderEvent[] }) {
+  const [open, setOpen] = useState(false)
   if (events.length === 0) return <div style={{fontSize:12,color:T.text3}}>No events yet.</div>
+
+  // Events arrive oldest-first, so the recent ones are the tail.
+  const hidden  = Math.max(0, events.length - TIMELINE_RECENT)
+  const shown   = open || hidden === 0 ? events : events.slice(-TIMELINE_RECENT)
+  const toggle  = hidden > 0 ? (
+    <button
+      onClick={() => setOpen(o => !o)}
+      aria-expanded={open}
+      style={{
+        alignSelf:'flex-start', marginTop:2, padding:'4px 10px', minHeight:28,
+        background:'transparent', border:`1px solid ${T.border}`, borderRadius:RADIUS.pill,
+        color:T.text3, fontSize:12, cursor:'pointer', fontFamily:'inherit',
+      }}>
+      {open ? 'Show less' : `Show all ${events.length} events`}
+    </button>
+  ) : null
+
   return (
     <div style={{display:'flex',flexDirection:'column',gap:10}}>
-      {events.map((ev, i) => {
+      {!open && hidden > 0 && (
+        <div style={{fontSize:12,color:T.text3}}>
+          {hidden} earlier {hidden === 1 ? 'event' : 'events'} hidden
+        </div>
+      )}
+      {shown.map((ev, i) => {
         const isStatus = ev.event_type === 'status_changed'
         const color    = isStatus && ev.to_status ? orderStatusColor(ev.to_status) :
                          ev.event_type === 'myob_credit_note_written' ? A.bad :
@@ -802,6 +830,7 @@ function Timeline({ events }: { events: OrderEvent[] }) {
           </div>
         )
       })}
+      {toggle}
     </div>
   )
 }

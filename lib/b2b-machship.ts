@@ -289,6 +289,58 @@ export async function getConsignment(consignmentId: string | number): Promise<Co
   return machshipFetch<Consignment>('GET', `/apiv2/consignments/${encodeURIComponent(String(consignmentId))}`)
 }
 
+// ── Finding a consignment WITHOUT MachShip's internal id ────────────────
+//
+// When a consignment is deleted and re-created in MachShip, our stored
+// machship_consignment_id 404s forever even though the shipment is alive and
+// moving under the same carrier tracking number. These let the poller
+// re-resolve the id instead of parking the order (see b2b-machship-refresh).
+//
+// MachShip documents the PATHS but not the request bodies, and its Swagger is
+// behind auth, so the body shape is NEGOTIATED: we try the plausible shapes in
+// order and keep the first that MachShip accepts. A total failure returns []
+// rather than throwing — the caller then behaves exactly as it did before, so
+// the worst case is no improvement rather than a regression.
+//   docs: https://developers.live.machship.com/api/supporting/tracking-pods
+// Both endpoints are capped at 10 values per request.
+async function lookupConsignments(path: string, key: string, values: string[]): Promise<Consignment[]> {
+  const vals = values.map(v => String(v || '').trim()).filter(Boolean).slice(0, 10)
+  if (!vals.length) return []
+
+  const shapes: any[] = [
+    vals,                    // bare array — matches MachShip's other bulk id endpoints
+    { [key]: vals },         // named property, e.g. { carrierConsignmentIds: [...] }
+    { values: vals },
+  ]
+  for (const body of shapes) {
+    try {
+      const res = await machshipFetch<any>('POST', path, body)
+      const list: any[] = Array.isArray(res) ? res : (res?.consignments || res?.items || [])
+      if (Array.isArray(list)) return list as Consignment[]
+    } catch (e: any) {
+      // 400/415 = wrong shape, try the next one. Anything else (401, 5xx) is a
+      // real failure and there's no point retrying it two more times.
+      const st = e instanceof MachShipApiError ? e.status : 0
+      if (st !== 400 && st !== 415 && st !== 422) {
+        console.error(`[machship] ${path} lookup failed (${st}):`, e?.message || e)
+        return []
+      }
+    }
+  }
+  console.error(`[machship] ${path}: no accepted request shape — lookup skipped`)
+  return []
+}
+
+/** Find consignments by the CARRIER's tracking number (e.g. TNT "EYA000002055"). */
+export async function findConsignmentsByCarrierConsignmentId(ids: string[]): Promise<Consignment[]> {
+  return lookupConsignments('/apiv2/consignments/returnConsignmentsByCarrierConsignmentId', 'carrierConsignmentIds', ids)
+}
+
+/** Find consignments by Reference 1 — we send "<order number> / <customer PO>". */
+export async function findConsignmentsByReference1(refs: string[]): Promise<Consignment[]> {
+  return lookupConsignments('/apiv2/consignments/returnConsignmentsByReference1', 'references', refs)
+}
+
 // MachShip returns label PDFs as base64 inside the response envelope.
 // The caller is responsible for decoding and uploading to storage.
 export interface LabelPdfFileInfo {
