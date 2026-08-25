@@ -32,7 +32,16 @@ function sb(): SupabaseClient {
 
 export class WorkshopStocktakeError extends Error {
   code: 'not_found' | 'bad_status' | 'adjust_account_not_set' | 'no_items' | 'myob_error'
-  constructor(code: WorkshopStocktakeError['code'], message: string) { super(message); this.code = code }
+  constructor(code: WorkshopStocktakeError['code'], message: string) {
+    super(message)
+    // tsconfig targets ES5, where `class X extends Error` loses the
+    // prototype chain and `instanceof X` is always false. Callers gate
+    // their 409/code handling on instanceof, so without this they all
+    // fell through to a generic 500.
+    Object.setPrototypeOf(this, WorkshopStocktakeError.prototype)
+    this.name = 'WorkshopStocktakeError'
+    this.code = code
+  }
 }
 
 export interface StocktakeScope { location?: string; category?: string; supplier?: string; q?: string }

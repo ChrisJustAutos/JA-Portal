@@ -39,7 +39,16 @@ function sb(): SupabaseClient {
 
 export class WorkshopCreditNoteError extends Error {
   code: 'no_source' | 'no_lines' | 'no_amount' | 'over_credit' | 'refund_account_not_set' | 'payment_account_not_set' | 'myob_error'
-  constructor(code: WorkshopCreditNoteError['code'], message: string) { super(message); this.code = code }
+  constructor(code: WorkshopCreditNoteError['code'], message: string) {
+    super(message)
+    // tsconfig targets ES5, where `class X extends Error` loses the
+    // prototype chain and `instanceof X` is always false. Callers gate
+    // their 409/code handling on instanceof, so without this they all
+    // fell through to a generic 500.
+    Object.setPrototypeOf(this, WorkshopCreditNoteError.prototype)
+    this.name = 'WorkshopCreditNoteError'
+    this.code = code
+  }
 }
 
 export interface CreateCreditNoteInput {

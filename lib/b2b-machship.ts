@@ -29,9 +29,17 @@ function sb(): SupabaseClient {
 
 // ── Token resolution ───────────────────────────────────────────────
 
+// ⚠ Object.setPrototypeOf is REQUIRED, not decoration. tsconfig targets ES5,
+// and TypeScript's ES5 downlevel of `class X extends Error` breaks the
+// prototype chain, so `err instanceof X` is ALWAYS FALSE. Every caller here
+// gates on instanceof — b2b-freight-book, b2b-freight, b2b-ship-now and
+// b2b-machship-refresh — so without this a "not configured" error came back
+// as a generic 500, and a 404 never reached the branch that handles a dead
+// consignment. Found 2026-08-25 chasing MS70727168.
 export class MachShipNotConfiguredError extends Error {
   constructor(reason: string) {
     super(`MachShip not configured: ${reason}`)
+    Object.setPrototypeOf(this, MachShipNotConfiguredError.prototype)
     this.name = 'MachShipNotConfiguredError'
   }
 }
@@ -41,6 +49,7 @@ export class MachShipApiError extends Error {
   detail: any
   constructor(message: string, status: number, detail: any) {
     super(message)
+    Object.setPrototypeOf(this, MachShipApiError.prototype)   // see note above — ES5
     this.name = 'MachShipApiError'
     this.status = status
     this.detail = detail

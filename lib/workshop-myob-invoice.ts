@@ -197,7 +197,16 @@ export interface JobInvoiceResult {
 // Sentinel error codes the API surfaces to the UI.
 export class WorkshopInvoiceError extends Error {
   code: 'customer_not_synced' | 'sales_account_not_set' | 'no_lines' | 'myob_error' | 'posting_disabled' | 'not_finalised' | 'payment_posted'
-  constructor(code: WorkshopInvoiceError['code'], message: string) { super(message); this.code = code }
+  constructor(code: WorkshopInvoiceError['code'], message: string) {
+    super(message)
+    // tsconfig targets ES5, where `class X extends Error` loses the
+    // prototype chain and `instanceof X` is always false. Callers gate
+    // their 409/code handling on instanceof, so without this they all
+    // fell through to a generic 500.
+    Object.setPrototypeOf(this, WorkshopInvoiceError.prototype)
+    this.name = 'WorkshopInvoiceError'
+    this.code = code
+  }
 }
 
 export async function createJobInvoiceInMyob(bookingId: string, performedBy: string | null = null): Promise<JobInvoiceResult> {
@@ -509,7 +518,16 @@ export interface JobPaymentResult {
 
 export class WorkshopPaymentError extends Error {
   code: 'no_amount' | 'payment_account_not_set' | 'customer_not_synced' | 'myob_error'
-  constructor(code: WorkshopPaymentError['code'], message: string) { super(message); this.code = code }
+  constructor(code: WorkshopPaymentError['code'], message: string) {
+    super(message)
+    // tsconfig targets ES5, where `class X extends Error` loses the
+    // prototype chain and `instanceof X` is always false. Callers gate
+    // their 409/code handling on instanceof, so without this they all
+    // fell through to a generic 500.
+    Object.setPrototypeOf(this, WorkshopPaymentError.prototype)
+    this.name = 'WorkshopPaymentError'
+    this.code = code
+  }
 }
 
 /**

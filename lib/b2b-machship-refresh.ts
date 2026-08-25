@@ -100,41 +100,38 @@ export async function refreshOrderFreight(c: SupabaseClient, orderId: string): P
     return { ok: false, status: 400, error: 'Order has no MachShip consignment id — book it first.' }
   }
 
-  let consignment
+  // Every failure path below RETURNS. The only way out of this catch is with
+  // `consignment` assigned — a fall-through here previously threw away a
+  // successfully re-resolved consignment and reported "getConsignment failed"
+  // instead of using it.
+  let consignment: Consignment
   try {
     consignment = await getConsignment(order.machship_consignment_id)
   } catch (e: any) {
     if (e instanceof MachShipNotConfiguredError) return { ok: false, status: 503, error: e.message }
-    if (e instanceof MachShipApiError) {
-      // Consignment deleted upstream (e.g. manually re-created in MachShip —
-      // Torrisi MS70068309 404'd every 30 min forever, 2026-08-11): park it
-      // with a visible freight_status so the poller stops and the admin page
-      // shows WHY there'll be no more tracking updates.
-      if (e.status === 404) {
-        // Before giving up: the shipment is usually still alive in MachShip
-        // under a NEW internal id, because someone deleted and re-created the
-        // consignment there. The carrier tracking number is the durable
-        // anchor — it's the number printed on the label — so re-resolve by
-        // that, then by our Reference 1, and carry on with the id we find.
-        const found = await reResolveConsignment(order)
-        if (found) {
-          await c.from('b2b_orders').update({
-            machship_consignment_id:     String(found.id),
-            machship_consignment_number: found.consignmentNumber || order.machship_consignment_number,
-          }).eq('id', orderId)
-          console.warn(`[machship] order ${orderId}: consignment id re-resolved ${order.machship_consignment_id} → ${found.id} (${found.consignmentNumber})`)
-          consignment = found
-        } else {
-          await c.from('b2b_orders').update({
-            freight_status: 'consignment_missing',
-            last_freight_poll_at: new Date().toISOString(),
-          }).eq('id', orderId)
-          return { ok: false, status: 404, error: 'Consignment no longer exists in MachShip, and no consignment matches this tracking number or order reference either — polling stopped; mark the order delivered manually when it lands.' }
-        }
-      } else
-      return { ok: false, status: 502, error: e.message }
+    if (!(e instanceof MachShipApiError)) {
+      return { ok: false, status: 500, error: `getConsignment failed: ${e?.message || e}` }
     }
-    return { ok: false, status: 500, error: `getConsignment failed: ${e?.message || e}` }
+    if (e.status !== 404) return { ok: false, status: 502, error: e.message }
+
+    // 404 — the id is dead. The shipment usually isn't: someone deleted and
+    // re-created the consignment in MachShip, which issues a new internal id
+    // while the carrier tracking number (printed on the label) stays put.
+    // Re-resolve by that, then by our Reference 1, and carry on.
+    const found = await reResolveConsignment(order)
+    if (!found) {
+      await c.from('b2b_orders').update({
+        freight_status: 'consignment_missing',
+        last_freight_poll_at: new Date().toISOString(),
+      }).eq('id', orderId)
+      return { ok: false, status: 404, error: 'Consignment no longer exists in MachShip, and no consignment matches this tracking number or order reference either — polling stopped; mark the order delivered manually when it lands.' }
+    }
+    await c.from('b2b_orders').update({
+      machship_consignment_id:     String(found.id),
+      machship_consignment_number: found.consignmentNumber || order.machship_consignment_number,
+    }).eq('id', orderId)
+    console.warn(`[machship] order ${orderId}: consignment id re-resolved ${order.machship_consignment_id} → ${found.id} (${found.consignmentNumber})`)
+    consignment = found
   }
 
   const nowIso = new Date().toISOString()

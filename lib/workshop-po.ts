@@ -46,7 +46,16 @@ async function resolveGstTaxCode(connId: string, cfId: string): Promise<string> 
 
 export class PoMyobError extends Error {
   code: 'posting_disabled' | 'supplier_not_linked' | 'item_not_linked' | 'no_lines' | 'myob_error'
-  constructor(code: PoMyobError['code'], message: string) { super(message); this.code = code }
+  constructor(code: PoMyobError['code'], message: string) {
+    super(message)
+    // tsconfig targets ES5, where `class X extends Error` loses the
+    // prototype chain and `instanceof X` is always false. Callers gate
+    // their 409/code handling on instanceof, so without this they all
+    // fell through to a generic 500.
+    Object.setPrototypeOf(this, PoMyobError.prototype)
+    this.name = 'PoMyobError'
+    this.code = code
+  }
 }
 
 // Push a received PO to MYOB as a Purchase Bill (Item layout). Idempotent on
