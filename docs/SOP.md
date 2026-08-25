@@ -231,6 +231,8 @@ Since 25 August the portal splits that field itself and mails every address in i
 - **"No email on the MYOB supplier card"** - genuinely blank. Add one, then Re-send.
 - Anything else - the provider rejected it for another reason; tell Chris and quote the message.
 
+**The PO number a supplier sees is our MYOB invoice number** (from 26 August 2026). A drop-ship PO raised against `JAWSB2B0060` is numbered `JAWSB2B0060` in MYOB and on the supplier's email, so when their invoice comes back quoting it, it points straight at the sale it belongs to. Previously MYOB assigned its own sequential number (`00001382`) which matched nothing on either side. Where one order drop-ships from **more than one supplier**, the second and later POs get `-2`, `-3` appended, because MYOB will not allow two purchases with the same number.
+
 **orders@justautoswholesale.com is CC'd on every supplier PO email, raised or re-sent.** That copy is how you confirm it went - the portal sends through a provider, so nothing appears in a Sent folder. Until 26 August a **re-sent** PO went to the supplier alone: no copy for us and replies pointed at the wrong mailbox, so a successful re-send looked like nothing had happened. Both paths now use the identical envelope.
 
 **⚠ Re-send does not re-raise the PO**, so it can't create a duplicate in MYOB. "Re-raise drop-ship PO" is the one that does - only use it if the PO itself is wrong.

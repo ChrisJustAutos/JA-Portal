@@ -126,7 +126,7 @@ export interface DropshipRaiseResult {
 export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean } = {}): Promise<DropshipRaiseResult> {
   const c = svc()
   const { data: order, error: oErr } = await c.from('b2b_orders')
-    .select('id, order_number, customer_po, distributor_id, shipping_address_snapshot, dropship_pos, dropship_po_raised_at')
+    .select('id, order_number, customer_po, distributor_id, shipping_address_snapshot, dropship_pos, dropship_po_raised_at, myob_invoice_number')
     .eq('id', orderId).maybeSingle()
   if (oErr) throw new Error(oErr.message)
   if (!order) return { ok: false, raised: [], failures: [], missingSupplier: [], missingItem: [], error: 'Order not found' }
@@ -160,10 +160,27 @@ export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?
 
   const raised: any[] = []
   const failures: { supplier: string; error: string }[] = []
+  // Stamp OUR MYOB invoice number on the supplier's PO, so the supplier quotes
+  // back the same reference our sale is filed under instead of a MYOB
+  // sequential number that means nothing on either side (Chris 2026-08-26).
+  // The pipeline writes the MYOB order — and so myob_invoice_number — before
+  // it raises drop-ship POs, so it is available here.
+  //
+  // One order can have POs to SEVERAL suppliers and MYOB requires the number
+  // to be unique, so the second and later suppliers get a -2, -3 suffix.
+  // Field cap is 13 characters; if it still clashes, createDropShipPurchaseOrder
+  // falls back to MYOB's own numbering rather than losing the PO.
+  const invoiceNo = String((order as any).myob_invoice_number || '').trim()
+  let poSeq = 0
   for (const g of Array.from(bySupplier.values())) {
+    poSeq++
+    const forcedNumber = invoiceNo
+      ? (poSeq === 1 ? invoiceNo : `${invoiceNo}-${poSeq}`).slice(0, 13)
+      : null
     try {
       const po = await createDropShipPurchaseOrder({
         supplierUid: g.supplierUid, lines: g.lines, shipToAddress: shipTo,
+        number: forcedNumber,
         comment: `Drop ship — deliver direct to customer. JA order ${reference}`,
         journalMemo: `B2B drop-ship; order ${order.order_number}`,
       })

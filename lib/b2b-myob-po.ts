@@ -30,6 +30,11 @@ export interface CreatePOInput {
   shipToAddress: string
   comment?: string
   journalMemo?: string
+  /** Force the PO's human-readable Number. Used to stamp our MYOB sale-invoice
+   *  number on the supplier's PO so both sides quote one reference (Chris
+   *  2026-08-26). Omit and MYOB assigns its own sequential number. MYOB caps
+   *  this field at 13 characters and rejects a duplicate outright. */
+  number?: string | null
 }
 
 export interface CreatePOResult {
@@ -42,7 +47,7 @@ export async function createDropShipPurchaseOrder(input: CreatePOInput): Promise
   if (!conn) throw new Error('MYOB JAWS not connected')
   if (!conn.company_file_id) throw new Error('MYOB JAWS has no company file selected')
 
-  const body = {
+  const body: Record<string, any> = {
     Supplier: { UID: input.supplierUid },
     ShipToAddress: input.shipToAddress.slice(0, 255),
     IsTaxInclusive: false,
@@ -60,9 +65,21 @@ export async function createDropShipPurchaseOrder(input: CreatePOInput): Promise
     Comment: (input.comment || '').slice(0, 255),
     JournalMemo: (input.journalMemo || '').slice(0, 255),
   }
+  // MYOB's Number field is 13 chars and must be unique across purchases.
+  const wanted = String(input.number || '').trim().slice(0, 13)
+  if (wanted) body.Number = wanted
 
   const path = `/accountright/${conn.company_file_id}/Purchase/Order/Item`
-  const result = await myobFetch(conn.id, path, { method: 'POST', body })
+  let result = await myobFetch(conn.id, path, { method: 'POST', body })
+  // A forced Number can be refused - most likely a duplicate, since MYOB
+  // enforces uniqueness across purchases. Losing the whole PO over the
+  // reference we wanted printed on it would be the wrong trade: retry once
+  // letting MYOB assign its own number, and say so in the log.
+  if (result.status >= 400 && wanted) {
+    console.warn(`[myob-po] Number "${wanted}" refused (HTTP ${result.status}: ${extractErr(result)}) - retrying with MYOB's own numbering`)
+    delete body.Number
+    result = await myobFetch(conn.id, path, { method: 'POST', body })
+  }
   if (result.status >= 400) {
     throw new Error(`MYOB rejected the purchase order (HTTP ${result.status}): ${extractErr(result)}`)
   }
