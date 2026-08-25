@@ -82,8 +82,20 @@ type OrderRow = {
 }
 
 /** An order is manifestable once a consignment exists and hasn't been manifested. */
+// Pre-despatch carrier states. ANYTHING else means the freight has left —
+// including consignments manifested outside the portal, where our own
+// machship_manifest_id stays null forever. Checking only that id let
+// B2B-2026-000047 offer Ship Now on a consignment TNT had already delivered,
+// which would have re-manifested it and raised the tax invoice a second time.
+//
+// ⚠ Kept in step with the same rule in pages/admin/b2b/orders/[id].tsx, which
+// decides whether the button is shown at all. This one decides whether it
+// WORKS — change both or the button lies.
+const PRE_DESPATCH_STATES = new Set(['', 'unmanifested', 'pending', 'pending_manifest'])
+
 export function isManifested(o: { freight_status: string | null; machship_manifest_id: string | null }): boolean {
-  return !!o.machship_manifest_id || (o.freight_status || '').toLowerCase() === 'manifested'
+  if (o.machship_manifest_id) return true
+  return !PRE_DESPATCH_STATES.has((o.freight_status || '').toLowerCase())
 }
 
 /**

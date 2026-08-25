@@ -904,8 +904,22 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   const hasConsignment  = !!order.machship_consignment_id
   // Booking now leaves the consignment Unmanifested — nothing reaches the
   // carrier and no tax invoice is raised until "Ship Now" (Chris 2026-08-20).
-  const isManifested    = !!order.machship_manifest_id || (order.freight_status || '').toLowerCase() === 'manifested'
-  const awaitingDespatch = hasConsignment && !isManifested && (order.freight_status || '').toLowerCase() !== 'consignment_missing'
+  //
+  // "Manifested" can't be read off our own manifest id alone. When a
+  // consignment is manifested outside the portal — someone re-creating and
+  // despatching it in MachShip — machship_manifest_id stays null forever while
+  // the carrier reports the freight moving and then finishing. B2B-2026-000047
+  // was showing "Awaiting despatch" with a Ship Now button on a consignment TNT
+  // had already delivered; pressing it would have re-manifested the shipment
+  // and raised the tax invoice a second time.
+  //
+  // So: anything the carrier reports that ISN'T one of the pre-despatch states
+  // means it has left, whoever pressed the button. consignment_missing counts
+  // as past it too — the id is unresolvable, so Ship Now can't work anyway.
+  const PRE_DESPATCH = new Set(['', 'unmanifested', 'pending', 'pending_manifest'])
+  const freightState    = (order.freight_status || '').toLowerCase()
+  const isManifested    = !!order.machship_manifest_id || !PRE_DESPATCH.has(freightState)
+  const awaitingDespatch = hasConsignment && !isManifested
   const [shipNowBusy,  setShipNowBusy]  = useState(false)
   const [bookingBusy,  setBookingBusy]  = useState(false)
   const [refreshBusy,  setRefreshBusy]  = useState(false)
@@ -1161,6 +1175,8 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
             <div style={{ display: 'flex', alignItems: 'center' }}>
               {awaitingDespatch ? (
                 <Pill color={A.warn}>Awaiting despatch — not manifested</Pill>
+              ) : order.delivered_at ? (
+                <Pill color={A.good}>Delivered {fullDate(order.delivered_at)}</Pill>
               ) : isShipped ? (
                 <Pill color={A.accent}>Shipped {order.shipped_at ? fullDate(order.shipped_at) : ''}</Pill>
               ) : (

@@ -36,7 +36,11 @@ export interface RefreshResult {
 
 // Normalised B2B status strings we'll write to freight_status. Keep
 // in sync with whatever the distributor UI displays.
-const TERMINAL_DELIVERED = new Set(['delivered'])
+// MachShip finishes a consignment as "Complete" at least as often as
+// "Delivered" — B2B-2026-000047 (MS70727168) sat on status `shipped` with a
+// null delivered_at for six days after TNT delivered it, because only
+// 'delivered' was listed here. Both mean the freight job is finished.
+const TERMINAL_DELIVERED = new Set(['delivered', 'complete', 'completed'])
 const TERMINAL_CANCELLED = new Set(['cancelled', 'returned'])
 
 // Re-find a consignment whose internal id has stopped resolving.
