@@ -1190,7 +1190,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
           <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center' }}>
               {awaitingDespatch ? (
-                <Pill color={A.warn}>Awaiting despatch — not manifested</Pill>
+                <Pill color={A.warn}>Pending consignment — not manifested</Pill>
               ) : order.delivered_at ? (
                 <Pill color={A.good}>Delivered {fullDate(order.delivered_at)}</Pill>
               ) : isShipped ? (

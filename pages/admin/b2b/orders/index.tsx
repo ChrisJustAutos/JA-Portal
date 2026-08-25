@@ -114,8 +114,17 @@ function paymentState(o: OrderRow): { label: string; color: string } {
   return { label: 'Paid', color: A.good }
 }
 
-// Shipping: reads the carrier's own state, not our paperwork - see
-// lib/b2b-despatch-state for why the manifest id alone can't be trusted.
+// Shipping. The vocabulary matters here, because "booked" was being used for
+// two opposite things.
+//
+// Book Freight creates a PENDING CONSIGNMENT in MachShip and leaves it
+// unmanifested: no carrier has been told anything and no collection exists.
+// Ship Now manifests it, and THAT is what books the collection. Calling the
+// first state "Booked" told the warehouse a truck was coming for a parcel
+// nobody had been asked to collect.
+//
+// Reads the carrier's own state rather than our manifest id - see
+// lib/b2b-despatch-state for why that id cannot be trusted on its own.
 function shippingState(o: OrderRow): { label: string; color: string } {
   if (o.cancelled_at) return { label: '-', color: T.text3 }
   if (o.delivered_at) return { label: 'Delivered', color: A.good }
@@ -123,9 +132,11 @@ function shippingState(o: OrderRow): { label: string; color: string } {
   if ((o.freight_status || '').toLowerCase() === 'consignment_missing') {
     return { label: 'Consignment missing', color: A.bad }
   }
-  if (awaitingDespatch(o)) return { label: 'Booked - press Ship Now', color: A.warn }
-  if (o.machship_consignment_id) return { label: 'Booked', color: A.warn }
-  return { label: 'Not booked', color: T.text3 }
+  // Consignment exists, nothing manifested: still here, still ours.
+  if (awaitingDespatch(o)) return { label: 'Pending consignment', color: A.warn }
+  // Manifested but not yet stamped shipped - the collection IS booked.
+  if (o.machship_consignment_id) return { label: 'Booked for collection', color: A.accent }
+  return { label: 'No consignment', color: T.text3 }
 }
 
 function genGroupId(): string { return 'osg_' + Math.random().toString(36).slice(2, 10) }
@@ -473,7 +484,7 @@ export default function AdminOrdersListPage({ user }: Props) {
               background: alpha(A.warn,'0d'), border:`1px solid ${alpha(A.warn,'33')}`,
             }}>
               <span style={{fontSize:12.5,color:T.text2}}>
-                <b style={{color:A.warn}}>{despatchable.length}</b> booked, awaiting despatch
+                <b style={{color:A.warn}}>{despatchable.length}</b> pending consignments - nothing booked with the carrier until Ship Now
               </span>
               <button
                 onClick={() => setSelected(new Set(despatchable.map(o => o.id)))}

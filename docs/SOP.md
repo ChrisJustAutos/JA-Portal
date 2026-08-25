@@ -178,12 +178,14 @@ The Orders list used to carry a single **Status** pill. It has been split into *
 
 | Shipping | What it means |
 |---|---|
-| **Not booked** | No consignment yet. |
-| **Booked - press Ship Now** | Consignment created, carrier knows nothing, goods still here. |
-| **Booked** | Manifested, on its way. |
+| **No consignment** | Freight hasn't been booked in the portal yet. |
+| **Pending consignment** | A consignment exists in MachShip but is **unmanifested** - no carrier has been told anything, no collection is booked, and the goods are still here. |
+| **Booked for collection** | Manifested. The carrier has been told what is coming and a collection is booked. |
 | **Shipped** | Despatched. |
 | **Delivered** | Carrier reports it delivered. |
 | **Consignment missing** | The consignment stopped answering in MachShip - see 4.2b. |
+
+**⚠ "Book Freight" does not book anything with the carrier.** It creates a *pending consignment* and prints the paperwork. **Ship Now** is what manifests it, and manifesting is what books the collection. The button name is misleading and the column deliberately isn't.
 
 **⚠ Amber in the Payment column means the money is not yet in the bank.** Both `becs` and `payto` mark an order paid the moment the mandate is accepted, and it stays amber until the funds settle. **Shipping an amber order is a credit decision** - Ship Now will warn you and make you approve it. That warning is the point, so read it rather than clicking through.
 
