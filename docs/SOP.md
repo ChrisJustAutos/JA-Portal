@@ -189,6 +189,24 @@ The Orders list used to carry a single **Status** pill. It has been split into *
 
 **⚠ Amber in the Payment column means the money is not yet in the bank.** Both `becs` and `payto` mark an order paid the moment the mandate is accepted, and it stays amber until the funds settle. **Shipping an amber order is a credit decision** - Ship Now will warn you and make you approve it. That warning is the point, so read it rather than clicking through.
 
+### 4.1bc Has the money actually cleared?
+
+**Admin > B2B > Orders > open the order > Summary > "Check if payment cleared".**
+
+Card and PayTo payments settle at checkout. **Bank Direct Debit (BECS) does not** - checkout only accepts the mandate, and the funds land 2-4 business days later. The order shows **Paid - bank, unsettled** until Stripe tells us the money arrived.
+
+That confirmation normally arrives on its own, from Stripe. If it goes missing - a dropped webhook, or one that fired mid-deploy - the order sits unsettled indefinitely: Ship Now keeps warning about credit risk and the payment is never receipted into MYOB. The button asks Stripe directly.
+
+What you get back:
+
+- **"has cleared - the order is now marked settled"** - money is ours. The order flips to settled and, if the tax invoice already exists, the customer payment is receipted into MYOB automatically.
+- **"is 'processing' - not cleared yet"** - the debit is genuinely still in flight. Nothing is changed. Normal for the first few days.
+- **"has NOT cleared and will not"** - the debit failed or was cancelled. **Chase the distributor before shipping anything.**
+
+The button only appears on a paid order that hasn't been confirmed settled, because that is the only time there is anything to find out. Pressing it repeatedly is safe.
+
+**⚠ It reports what Stripe says - it never marks something settled on its own.** If Stripe says not cleared, the answer is no, however long it has been.
+
 ### 4.1c Orders that were never paid for
 
 **A checkout that was started and abandoned no longer appears on the Orders page.**

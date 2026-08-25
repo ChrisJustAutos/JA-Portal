@@ -312,6 +312,32 @@ export default function AdminOrderDetailPage({ user }: Props) {
     }
   }, [orderId, data])
 
+  // Ask Stripe whether the money has actually cleared.
+  //
+  // Settlement normally arrives via the async_payment_succeeded webhook, which
+  // means a missed webhook leaves a BECS order reading "unsettled" forever -
+  // Ship Now keeps warning about credit risk and the MYOB payment is never
+  // receipted. This is the way to ask directly.
+  const [payCheckBusy, setPayCheckBusy] = useState(false)
+  async function checkPayment() {
+    if (payCheckBusy) return
+    setPayCheckBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${orderId}/check-payment`, {
+        method: 'POST', credentials: 'same-origin',
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      // Cleared is good news; still-clearing is neutral, not an error.
+      flashMsg(j.message || 'Checked.')
+      if (j.changed) await load()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+    } finally {
+      setPayCheckBusy(false)
+    }
+  }
+
   // ── Delete order (admin only) — permanent; removes lines/events/print jobs.
   const doDelete = useCallback(async () => {
     if (!data) return
@@ -439,6 +465,23 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     const state = settled ? 'Settled' : (m === 'becs' ? 'Awaiting settlement' : m === 'payto' ? 'Awaiting confirmation' : 'Unsettled')
                     return <KV label="Payment" value={`${label} · ${state}`} valueColor={settled ? A.good : (m === 'card' ? undefined : A.warn)}/>
                   })()}
+                  {/* Only offered while there is something to find out: a paid
+                      order whose funds have not been confirmed cleared. */}
+                  {data.paid_at && !data.payment_settled_at && (
+                    <div style={{display:'flex', justifyContent:'flex-end', padding:'6px 0 2px'}}>
+                      <button onClick={checkPayment} disabled={payCheckBusy}
+                        className="al-press al-focus"
+                        title="Ask Stripe whether the funds have actually cleared, rather than waiting for the webhook"
+                        style={{
+                          padding:'5px 12px', minHeight:30, borderRadius:RADIUS.pill,
+                          border:`1px solid ${alpha(A.warn, '66')}`, background:alpha(A.warn, '14'),
+                          color:A.warn, fontSize:12, fontWeight:600, fontFamily:'inherit',
+                          cursor: payCheckBusy ? 'wait' : 'pointer',
+                        }}>
+                        {payCheckBusy ? 'Checking Stripe…' : 'Check if payment cleared'}
+                      </button>
+                    </div>
+                  )}
                   <KV label="Placed"         value={fullDate(data.placed_at)} mono/>
                   {data.paid_at && <KV label="Paid"      value={fullDate(data.paid_at)}      mono valueColor={A.good}/>}
                   {data.shipped_at && <KV label="Shipped" value={fullDate(data.shipped_at)} mono valueColor={A.accent}/>}
