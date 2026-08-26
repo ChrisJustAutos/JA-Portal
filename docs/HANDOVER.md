@@ -207,6 +207,7 @@ Admin surfaces:
 - **Incoming webhooks** (one env URL per channel): `SLACK_WEBHOOK_URL` plus `SLACK_WEBHOOK_{JAWS_PAYMENTS,VPS_PAYMENTS,JAWS_PAYOUTS,AP_VPS}` and per-tenant B2B order webhook in `b2b_settings`.
 - **Bot** (`lib/slack-bot/*`): env `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_CHANNEL_IDS`, `SLACK_PARTS_ONLY_CHANNEL_IDS` (parts-only channels get exactly one stock-availability answer per top-level message, no thread replies, no clarifying questions), `SLACK_PARTS_CONTACT`. Single endpoint `POST /api/slack/ask` handles events, mentions, `/ask`, and interactive buttons; HMAC verified; acks in <3s then continues via `waitUntil`.
 - The parts bot answers from `md_stock_cache`, refreshed every 30 min by the `md-stock-sync` GitHub Action.
+- **The cache is all-or-nothing.** MechanicDesk allows one session per employee account, so a human (or another worker) logging in mid-run evicts the scraper. `fetchAllStock` therefore re-logs in and retries the same page on a 401, and **throws** if it finishes short of the page count MD reported on page 1 — the run is marked `error` and the previous cache is left alone. Before this (fixed 2026-08-27) a mid-run eviction silently truncated the catalogue and wrote the partial set over a good one: on 2026-08-26 the cache dropped from 856 items to 270 and reported success, leaving the front counter unable to find two-thirds of the catalogue. If the parts bot starts saying "not found" for stock you know exists, check `md_stock_sync_runs.item_count` against recent runs first.
 
 **What we post where.** Slack is the business's alerting surface — most automation reports into it rather than email, so a dead webhook is a silent failure. The channels built so far:
 
@@ -753,7 +754,7 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 
 ---
 
-## 9. Known risks, debt & outstanding items (as of 2026-08-24)
+## 9. Known risks, debt & outstanding items (as of 2026-08-27)
 
 **Security**
 - Supabase `service_role` key was exposed in an April 2026 session and **has never been rotated**. Rotation must update: Vercel env, the FreePBX host workers, the workshop print agent `.env`, and GitHub Actions secrets — all hold it.
@@ -763,7 +764,7 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 
 **Consistency / drift**
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
-- Migrations `148` and `153` are duplicated numbers; latest applied is `202_jaws_stock_eom_history_window`, so next is `203`.
+- Migrations `148` and `153` are duplicated numbers; latest applied is `204_b2b_distributor_addresses`, so next is `205`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.
@@ -772,6 +773,8 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 
 **Operational**
 - MYOB and Xero OAuth tokens need periodic exercise; Xero refresh tokens are single-use (rotation is handled, but never hand-edit the row).
+- **MechanicDesk's single-session limit is a standing hazard for every MD worker.** The four scheduled scrapers (`md-stock-sync`, `mechanicdesk-prepick`, `md-workshop-map`, `mechanicdesk-pull`) now share one `mechanicdesk-session` concurrency group so they can't evict each other, and the stock sync re-logs in mid-run — but a human logging into MD can still interrupt any of them, and the other three do not yet validate completeness the way `fetchAllStock` does. `mechanicdesk-stocktake` is deliberately outside the group (it must not queue behind a catalogue sync while someone is counting) and self-heals only on its push path; its match/recheck/refresh modes still fail outright. The only fix that survives a human login mid-run is a dedicated MD employee account for automation.
+- `scripts/` is excluded from `tsconfig.json`, so **worker scripts are never typechecked** by `npx tsc --noEmit`. A wrong destructure of `loginToMechanicDesk` (it returns `{ client, cookies }`) compiles happily and fails at runtime as a 401 "Please login" — distinct from the eviction message "logged in from a different computer". Typecheck a changed worker explicitly.
 - The FreePBX box is CentOS 7 — camera bridges pinned to Node 16; the whole host is a single point of failure for calls, coaching, and camera alerts. `sip-loss-monitor.sh` may still be running there from the phone-dropout investigation (upstream/FreedomBroadband was the cause) — clean up when resolved.
 - **Queued-then-parked calls report their longest single leg, not the whole conversation.** `classifyCall` picks the longest-billsec `Dial`/`Park` leg with a `dstchannel`; on a queue call the leg carrying the true total has `lastapp='Queue'` and is excluded. Two known cases: 2026-07-20 09:30 shows 14:33 on Kaleb against a real ~30:19, and 2026-08-10 14:50 shows 25:16 on Tyronne against ~32:55. Both duration *and* advisor attribution are affected, so correcting it would move historical coaching numbers — deliberately left alone.
 - **MechanicDesk is staying** (decision 2026-08-20) — the replacement build is paused, so the 9 scheduled MD scrapers are a permanent production dependency rather than a temporary bridge. The portal's workshop module is built but unused; `docs/workshop_md_parity.md` keeps the cutover checklist if it is ever revived.

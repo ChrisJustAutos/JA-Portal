@@ -744,6 +744,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Stock EOM figures look stale or wrong | The report shows a stored snapshot, so it's frozen at whatever time it was generated | Reports → Stock EOM → **Rebuild from MYOB**. If the on-hand looks off by a few days' trading, that's expected — see §8.9 |
 | Dead stock drops sharply between two months | Months before September 2026 counted never-sold kit parts as dead stock; from 25 Aug 2026 they're excluded | Not a data loss — the old month is on the old basis. Reports → Stock EOM → pick that month → **Rebuild from MYOB** restates it so the two compare like for like |
 | The month-end stock email didn't arrive on the 2nd | Either the MYOB connection or the recipient list | Admin → Connections for MYOB health, then Reports → Stock EOM → **Email this report** to send it by hand |
+| The Slack parts bot says it can't find a part you know is in stock | The 30-minute stock sync was interrupted part-way and cached only some of the catalogue | Fixed 2026-08-27 — the sync now refuses to save a partial catalogue and keeps the last good one instead. If it happens again the bot's numbers will be *stale* rather than missing, so check when it last synced and tell Chris. Don't re-count the shelf over it. |
 | Someone can't see a tab | Permissions, working as designed | Ask Chris |
 
 **Where to look first, always:** Admin → Connections. It shows every integration and when it last succeeded.
