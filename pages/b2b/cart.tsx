@@ -115,8 +115,19 @@ interface FreightPayload {
   zone?:    { id: string; name: string } | null
 }
 
+interface ShipAddress {
+  id: string; label: string
+  line1: string | null; line2: string | null
+  suburb: string | null; state: string | null; postcode: string | null
+  contact_name: string | null; contact_phone: string | null
+  is_default: boolean
+}
+
 interface CartResponse {
   cart_id: string
+  // Delivery sites on this account, and the one this cart is quoting against.
+  ship_addresses?: ShipAddress[]
+  ship_address_id?: string | null
   lines: CartLine[]
   line_count: number
   item_count: number
@@ -189,6 +200,29 @@ export default function B2BCartPage({ b2bUser }: Props) {
   useEffect(() => () => {
     for (const t of Object.values(commitTimers.current)) clearTimeout(t)
   }, [])
+
+  // Switching delivery site re-prices freight, so the cart is reloaded rather
+  // than patched — the quote, the satchel options and the blocked reasons all
+  // come from the server for that postcode.
+  const [shipBusy, setShipBusy] = useState(false)
+  async function chooseShipAddress(addressId: string) {
+    if (shipBusy || addressId === data?.ship_address_id) return
+    setShipBusy(true)
+    try {
+      const r = await fetch('/api/b2b/cart/ship-address', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address_id: addressId }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      // The previously chosen freight rate belongs to the OLD postcode.
+      setSelectedFreightId(null)
+      await load()
+      toast(`Shipping to ${j.label}`, 'success')
+    } catch (e: any) { toast(e?.message || 'Could not change the delivery address', 'error') }
+    finally { setShipBusy(false) }
+  }
 
   function setLineQty(line: CartLine, qty: number) {
     if (!line.catalogue_id) return
@@ -426,6 +460,10 @@ export default function B2BCartPage({ b2bUser }: Props) {
                     : null
               }
               freight={data.freight}
+              shipAddresses={data.ship_addresses || []}
+              shipAddressId={data.ship_address_id || null}
+              onChooseShipAddress={chooseShipAddress}
+              shipBusy={shipBusy}
               selectedFreightId={selectedFreightId}
               onSelectFreight={setSelectedFreightId}
             />
@@ -602,7 +640,7 @@ function incGst(ex: number, taxable: boolean): number {
 // ─── Checkout rail ─────────────────────────────────────────────────────
 function CheckoutRail({
   totals, cardFee, customerPo, onCustomerPoChange, paymentMethod, onPaymentMethodChange, onCheckout, checkoutBusy, blockedReason,
-  freight, selectedFreightId, onSelectFreight, isMobile,
+  freight, shipAddresses, shipAddressId, onChooseShipAddress, shipBusy, selectedFreightId, onSelectFreight, isMobile,
 }: {
   totals: CartTotals
   cardFee: { pct: number; fixed: number; note: string }
@@ -616,6 +654,10 @@ function CheckoutRail({
   freight: FreightPayload | null
   selectedFreightId: string | null
   onSelectFreight: (id: string | null) => void
+  shipAddresses: ShipAddress[]
+  shipAddressId: string | null
+  onChooseShipAddress: (id: string) => void
+  shipBusy: boolean
   isMobile: boolean
 }) {
   const applySurcharge = paymentMethod === 'card'
@@ -714,6 +756,34 @@ function CheckoutRail({
           )}
         </div>
       </div>
+
+      {/* Delivery site. Only shown when there is a choice to make - a
+          single-site distributor should not have to look at a dropdown with one
+          option in it. Changing it re-prices freight, so it sits directly above
+          the quote it drives. */}
+      {shipAddresses.length > 1 && (
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:12,color:T.text2,fontWeight:650,marginBottom:5}}>Deliver to</div>
+          <select
+            value={shipAddressId || ''}
+            disabled={shipBusy}
+            onChange={e => onChooseShipAddress(e.target.value)}
+            className="al-focus"
+            style={{
+              width:'100%', minHeight:44, padding:'10px 12px', borderRadius:RADIUS.sm,
+              background:T.bg3, border:`1px solid ${T.border}`, color:T.text,
+              fontSize:14, fontFamily:'inherit', outline:'none',
+              cursor: shipBusy ? 'wait' : 'pointer',
+            }}>
+            {shipAddresses.map(a2 => (
+              <option key={a2.id} value={a2.id}>
+                {a2.label}{a2.suburb ? ` — ${a2.suburb}` : ''}{a2.state ? ` ${a2.state}` : ''}{a2.postcode ? ` ${a2.postcode}` : ''}
+              </option>
+            ))}
+          </select>
+          {shipBusy && <div style={{fontSize:12,color:T.text3,marginTop:4}}>Re-quoting freight…</div>}
+        </div>
+      )}
 
       {/* Freight picker */}
       {freight && (

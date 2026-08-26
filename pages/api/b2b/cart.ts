@@ -269,6 +269,25 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         zone?: { id: string; name: string } | null
       }
 
+  // Where is this cart actually going?
+  //
+  // A distributor can run several stores under one entity (migration 204), and
+  // freight is priced on the destination postcode - so the quote has to follow
+  // the SELECTED site, not the account's head-office address. The cart carries
+  // the choice so the figure on screen is the figure they will be charged.
+  const { data: addressRows } = await c
+    .from('b2b_distributor_addresses')
+    .select('id, label, line1, line2, suburb, state, postcode, contact_name, contact_phone, is_default, sort_order')
+    .eq('distributor_id', user.distributor.id).eq('is_active', true)
+    .order('sort_order', { ascending: true }).order('label', { ascending: true })
+  const addresses = addressRows || []
+  // Fall back to the default, then to whatever is first - never to nothing,
+  // or a distributor mid-setup would see no freight at all.
+  const chosen = addresses.find(a2 => a2.id === cart.ship_address_id)
+    || addresses.find(a2 => a2.is_default)
+    || addresses[0]
+    || null
+
   let freight: FreightPayload = null
   try {
     const { data: dist } = await c
@@ -276,8 +295,8 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       .select('ship_postcode, ship_suburb, bill_postcode, bill_suburb')
       .eq('id', user.distributor.id)
       .maybeSingle()
-    const shipPostcode = dist?.ship_postcode || dist?.bill_postcode || null
-    const shipSuburb   = dist?.ship_suburb   || dist?.bill_suburb   || null
+    const shipPostcode = chosen?.postcode || dist?.ship_postcode || dist?.bill_postcode || null
+    const shipSuburb   = chosen?.suburb   || dist?.ship_suburb   || dist?.bill_suburb   || null
     if (shipPostcode) {
       // Build the live-quote input from cart items + their catalogue
       // freight columns. Empty cart → live returns 'unavailable' and
@@ -344,6 +363,15 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
 
   return res.status(200).json({
     cart_id: cart.id,
+    // The delivery sites this distributor can pick from, and which one this
+    // cart is quoting against.
+    ship_addresses: addresses.map(a2 => ({
+      id: a2.id, label: a2.label, line1: a2.line1, line2: a2.line2,
+      suburb: a2.suburb, state: a2.state, postcode: a2.postcode,
+      contact_name: a2.contact_name, contact_phone: a2.contact_phone,
+      is_default: a2.is_default === true,
+    })),
+    ship_address_id: chosen?.id || null,
     distributor: {
       id: user.distributor.id,
       display_name: user.distributor.displayName,
@@ -369,14 +397,14 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   })
 })
 
-async function getOrCreateCart(c: SupabaseClient, user: B2BUser): Promise<{ id: string }> {
+async function getOrCreateCart(c: SupabaseClient, user: B2BUser): Promise<{ id: string; ship_address_id: string | null }> {
   const { data: existing, error: lookupErr } = await c
     .from('b2b_carts')
-    .select('id')
+    .select('id, ship_address_id')
     .eq('distributor_user_id', user.id)
     .maybeSingle()
   if (lookupErr) throw new Error(`Cart lookup failed: ${lookupErr.message}`)
-  if (existing) return { id: existing.id }
+  if (existing) return { id: existing.id, ship_address_id: existing.ship_address_id ?? null }
 
   const { data: created, error: insertErr } = await c
     .from('b2b_carts')
@@ -387,7 +415,7 @@ async function getOrCreateCart(c: SupabaseClient, user: B2BUser): Promise<{ id: 
     .select('id')
     .single()
   if (insertErr) throw new Error(`Cart create failed: ${insertErr.message}`)
-  return { id: created.id }
+  return { id: created.id, ship_address_id: null }
 }
 
 function round2(n: number): number {

@@ -256,6 +256,20 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **To run it early:** Admin > B2B > Tune Jobs > **Send reminders now**. That fires the distributor reminders and the recap to Matt, exactly as Friday would.
 
+### 4.1h Distributors with more than one store
+
+Some distributors run several branches under **one entity** - same ABN, bank account, MYOB card and trade pricing - and just need the goods sent to whichever branch ordered them. That is now one account with several **delivery sites**, not two accounts (26 August 2026).
+
+**To add a site:** Admin > B2B > Distributors > open the distributor > **Delivery sites** > *Add a delivery site*. Give it a name the distributor will recognise ("Rockingham", "Head office"), the address, and a **postcode - freight is priced on it**. Add the branch's own contact name and phone if you have them; that is who the carrier rings, not head office.
+
+**What the distributor sees:** a **Deliver to** dropdown at the top of the freight section in their cart. It only appears when they have more than one site, so nothing changes for single-site distributors. Changing it **re-quotes freight to that postcode** and clears any rate they had already picked, because the old rate was for the old destination.
+
+Every distributor's existing address was brought across as their **default** site, so nothing changed for anyone until a second one is added.
+
+**⚠ Sites are staff-managed, not self-serve.** Where a distributor's goods may be sent is a credit and fraud decision - their portal only ever picks from the list you set. If a distributor asks for a new delivery address, add it here.
+
+**Removing a site** stops it being selectable but keeps history: past orders keep the address they were actually shipped to, printed on their pick list, labels and tax invoice. You cannot remove the default while other sites exist - make another site the default first.
+
 ### 4.2 Pick, pack and despatch
 
 **⚠ This changed on 20 August 2026.** Booking freight and despatching are now two separate steps. Booking no longer sends anything to the carrier and no longer raises the tax invoice.

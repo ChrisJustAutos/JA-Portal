@@ -209,6 +209,7 @@ export default function DistributorDetailPage({ user }: Props) {
                 dist={dist}
                 onPatch={patchDist}
               />
+              <DeliverySitesSection distributorId={dist.id}/>
               <AddressSection
                 title="Billing address"
                 kind="bill"
@@ -388,6 +389,164 @@ function NotificationEmailsSection({
         </FormRow>
       </FormGrid>
       <div style={{fontSize:12,color:T.text3,marginTop:6}}>Leave blank to fall back to the primary contact email.</div>
+    </Section>
+  )
+}
+
+// ─── Extra delivery sites (migration 204) ──────────────────────────────
+// A distributor running several stores under ONE entity — same ABN, bank
+// account and MYOB card — needs the goods sent to whichever branch ordered
+// them. Staff-managed on purpose: where a distributor's goods may be sent is a
+// credit decision, and their portal only SELECTS from this list.
+//
+// The distributor's own ship_* address above stays the fallback for anything
+// predating this, and was backfilled here as the default site.
+interface DeliverySite {
+  id: string; label: string
+  line1: string | null; line2: string | null
+  suburb: string | null; state: string | null; postcode: string | null
+  contact_name: string | null; contact_phone: string | null
+  is_default: boolean; is_active: boolean; sort_order: number
+}
+
+const SITE_FIELDS: Array<[keyof SiteDraft, string]> = [
+  ['label', 'Site name (what they pick)'],
+  ['line1', 'Address line 1'],
+  ['line2', 'Address line 2'],
+  ['suburb', 'Suburb'],
+  ['state', 'State'],
+  ['postcode', 'Postcode — freight is priced on this'],
+  ['contact_name', 'Contact at this site'],
+  ['contact_phone', 'Phone the carrier should ring'],
+]
+
+interface SiteDraft {
+  label: string; line1: string; line2: string; suburb: string
+  state: string; postcode: string; contact_name: string; contact_phone: string
+}
+const EMPTY_SITE: SiteDraft = { label: '', line1: '', line2: '', suburb: '', state: '', postcode: '', contact_name: '', contact_phone: '' }
+
+function DeliverySitesSection({ distributorId }: { distributorId: string }) {
+  const toast = useToast()
+  const confirmDialog = useConfirm()
+  const [sites, setSites] = useState<DeliverySite[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState<SiteDraft>(EMPTY_SITE)
+
+  const base = `/api/b2b/admin/distributors/${distributorId}/addresses`
+
+  async function load() {
+    try {
+      const r = await fetch(base, { credentials: 'same-origin' })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setSites(j.addresses || [])
+    } catch (e: any) { setError(e?.message || String(e)) }
+  }
+  useEffect(() => { void load() }, [distributorId])
+
+  async function call(method: 'POST' | 'PATCH' | 'DELETE', body?: any, query = ''): Promise<boolean> {
+    setBusy(true); setError(null)
+    try {
+      const r = await fetch(base + query, {
+        method, credentials: 'same-origin',
+        ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      await load()
+      return true
+    } catch (e: any) { setError(e?.message || String(e)); return false }
+    finally { setBusy(false) }
+  }
+
+  const active = (sites || []).filter(s => s.is_active)
+
+  return (
+    <Section
+      title="Delivery sites"
+      subtitle={active.length > 1
+        ? `${active.length} sites — the distributor picks one at checkout and freight is quoted to it`
+        : 'One site. Add another for a distributor running more than one store under the same entity.'}>
+      {error && <div style={{marginBottom:10}}><Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner></div>}
+      {sites === null && <div style={{fontSize:12.5,color:T.text3}}>Loading…</div>}
+
+      {(sites || []).map(s => (
+        <div key={s.id} style={{
+          display:'flex', alignItems:'flex-start', gap:10, padding:'9px 0',
+          borderBottom:`1px solid ${T.border}`, opacity: s.is_active ? 1 : 0.5,
+        }}>
+          <div style={{flex:1, minWidth:0}}>
+            <div style={{fontSize:13.5, fontWeight:650, display:'flex', alignItems:'center', gap:7, flexWrap:'wrap'}}>
+              {s.label}
+              {s.is_default && <StatusPill color={A.good}>Default</StatusPill>}
+              {!s.is_active && <StatusPill color={T.text3}>Removed</StatusPill>}
+            </div>
+            <div style={{fontSize:12.5, color:T.text2, marginTop:2}}>
+              {[s.line1, s.line2, [s.suburb, s.state, s.postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ') || '—'}
+            </div>
+            {(s.contact_name || s.contact_phone) && (
+              <div style={{fontSize:12, color:T.text3, marginTop:2}}>
+                {[s.contact_name, s.contact_phone].filter(Boolean).join(' · ')}
+              </div>
+            )}
+          </div>
+          {s.is_active && (
+            <div style={{display:'flex', gap:6, flexShrink:0}}>
+              {!s.is_default && (
+                <Btn variant="ghost" size="sm" disabled={busy}
+                  onClick={() => { void call('PATCH', { address_id: s.id, is_default: true }) }}>
+                  Make default
+                </Btn>
+              )}
+              <Btn variant="ghost" size="sm" disabled={busy}
+                onClick={async () => {
+                  const ok = await confirmDialog({
+                    title: `Remove ${s.label}?`,
+                    message: 'It stops being selectable at checkout. Past orders keep the address they were shipped to.',
+                    danger: true,
+                  })
+                  if (!ok) return
+                  if (await call('DELETE', undefined, `?address_id=${encodeURIComponent(s.id)}`)) toast('Site removed', 'success')
+                }}>
+                Remove
+              </Btn>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {!adding ? (
+        <div style={{marginTop:12}}>
+          <Btn variant="secondary" size="sm" onClick={() => setAdding(true)}>Add a delivery site</Btn>
+        </div>
+      ) : (
+        <div style={{marginTop:12, display:'flex', flexDirection:'column', gap:8}}>
+          <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:8}}>
+            {SITE_FIELDS.map(([k, ph]) => (
+              <input key={k} placeholder={ph} value={draft[k]}
+                onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))}
+                className="al-focus" style={inputStyle()}/>
+            ))}
+          </div>
+          <div style={{display:'flex', gap:8}}>
+            <Btn size="sm" disabled={busy || !draft.label.trim() || !draft.postcode.trim()}
+              onClick={async () => {
+                const label = draft.label.trim()
+                if (await call('POST', draft)) {
+                  toast(`${label} added`, 'success')
+                  setDraft(EMPTY_SITE)
+                  setAdding(false)
+                }
+              }}>
+              {busy ? 'Saving…' : 'Add site'}
+            </Btn>
+            <Btn variant="ghost" size="sm" onClick={() => { setDraft(EMPTY_SITE); setAdding(false) }}>Cancel</Btn>
+          </div>
+        </div>
+      )}
     </Section>
   )
 }

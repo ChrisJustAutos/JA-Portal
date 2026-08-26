@@ -116,10 +116,27 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   // 1. Load cart with lines + catalogue snapshots
   const { data: cart } = await c
     .from('b2b_carts')
-    .select('id')
+    .select('id, ship_address_id')
     .eq('distributor_user_id', user.id)
     .maybeSingle()
   if (!cart) return res.status(400).json({ error: 'Your cart is empty' })
+
+  // Which of the distributor's sites is this going to? (migration 204)
+  // Resolved from the cart, then their default. Snapshotted onto the order
+  // below so the pick list, labels, MYOB ShipToAddress and the invoice PDF all
+  // print where it ACTUALLY went - an address edited or deleted next month must
+  // not rewrite a shipped order. Every one of those consumers already prefers
+  // shipping_address_snapshot; until now nothing ever filled it.
+  const { data: shipAddr } = await c
+    .from('b2b_distributor_addresses')
+    .select('id, label, line1, line2, suburb, state, postcode, country, contact_name, contact_phone')
+    .eq('distributor_id', user.distributor.id).eq('is_active', true)
+    .or(`id.eq.${cart.ship_address_id || '00000000-0000-0000-0000-000000000000'},is_default.eq.true`)
+    // Default first, so [0] is deterministically the fallback.
+    .order('is_default', { ascending: false })
+    .limit(2)
+  // Prefer the cart's explicit choice; fall back to the default row.
+  const chosenAddr = (shipAddr || []).find(a2 => a2.id === cart.ship_address_id) || (shipAddr || [])[0] || null
 
   const { data: lines, error: linesErr } = await c
     .from('b2b_cart_items')
@@ -579,6 +596,20 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       machship_carrier_id:           freightMachShipCarrierId,
       machship_carrier_service_id:   freightMachShipServiceId,
       freight_service_label:         chosenMachShipRoute ? freightLabel : null,
+      ship_address_id:               chosenAddr?.id || null,
+      shipping_address_snapshot:     chosenAddr ? {
+        address_id: chosenAddr.id,
+        label:      chosenAddr.label,
+        company:    user.distributor.displayName,
+        line1:      chosenAddr.line1,
+        line2:      chosenAddr.line2,
+        suburb:     chosenAddr.suburb,
+        state:      chosenAddr.state,
+        postcode:   chosenAddr.postcode,
+        country:    chosenAddr.country,
+        name:       chosenAddr.contact_name,
+        phone:      chosenAddr.contact_phone,
+      } : null,
     })
     .select('id, order_number')
     .single()
