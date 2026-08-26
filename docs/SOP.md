@@ -281,6 +281,21 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **An order stays at its current status when you book it.** Until 25 August 2026, Book Freight marked the order **shipped** straight away - a leftover from before the two steps were split - so orders sitting on the bench read as shipped, both on the orders list and in the distributor's own portal. Booking now only records the carrier; **Ship Now** is what marks it shipped, which is what it always should have been.
 
+### 4.1g When a drop-ship "receive" fails
+
+When a supplier confirms a drop-ship, the portal does three things in order: **bill the PO** in MYOB (which receives the stock into that supplier's DS location), **convert the sale order to a tax invoice** (which consumes that stock), then **receipt the payment**.
+
+**The order matters.** If the bill fails, the invoice conversion cannot succeed - the stock it needs is exactly what the bill receives. Until 26 August it was attempted anyway, and MYOB rejected it with `Inventory_InsufficientStockMultipleLocation`: an alarming inventory error that says nothing about the real cause. B2B-2026-000052 hit exactly that.
+
+Now the conversion is **skipped** when a PO is unbilled, and the order timeline says so plainly. What you will see on the order page:
+
+- **`dropship_po_bill_failed`** - the real problem, naming the PO, the supplier and MYOB's reason. Bill failures used to leave no trace at all.
+- **`convert_invoice` skipped** - with which POs are outstanding.
+
+**What to do:** fix the reason the bill failed (usually the supplier or item is not linked in MYOB, or the DS location is missing), then press **"Supplier confirmed - bill PO + invoice"** on the order to re-run the whole chain. It is safe to press again: the bill, the invoice and the payment each have their own idempotency check, and a PO already billed by hand in MYOB is adopted rather than billed twice.
+
+**⚠ The Slack alert now carries the reason.** It used to say only "hit a snag - check the order page".
+
 ### 4.2a Matching an order to its MYOB invoice
 
 **Admin → B2B → Orders → open the order.** The **Summary** card now leads with the **MYOB invoice** number — `JAWSB2B0055` — above the distributor and the customer PO, with the date it was invoiced beneath it. That is the number MYOB, accounts and the distributor all quote, so when someone rings about "Cutlers JAWSB2B0055" you can match it without hunting.

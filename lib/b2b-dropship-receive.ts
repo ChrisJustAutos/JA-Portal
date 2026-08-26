@@ -49,6 +49,21 @@ export interface ReceiveDropShipResult {
   error?: string
 }
 
+// MYOB error bodies lead with boilerplate and put the part you need - the item,
+// the location, the quantity - at the END. Slicing the first 500 characters
+// kept the half that says nothing: B2B-2026-000052's stock error was cut off at
+// exactly "AdditionalDetails": ":", one character before the item name.
+//
+// Keep the head for context AND the tail for the specifics, and strip the JSON
+// whitespace so more signal fits in the same budget.
+function myobDetail(e: any, max = 700): string {
+  const raw = String(e?.message || e || '').replace(/[\s]+/g, ' ').trim()
+  if (raw.length <= max) return raw
+  const head = Math.floor(max * 0.45)
+  const tail = max - head - 5
+  return `${raw.slice(0, head)} … ${raw.slice(-tail)}`
+}
+
 export async function receiveDropShipPo(orderId: string, opts: { actorId?: string | null } = {}): Promise<ReceiveDropShipResult> {
   const c = svc()
   const steps: ReceiveStep[] = []
@@ -119,7 +134,21 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
           billed.push({ supplier_name: po.supplier_name, myob_po_uid: po.myob_po_uid, myob_po_number: po.myob_po_number, myob_bill_uid: bill.uid, myob_bill_number: bill.number, adopted: bill.adopted === true })
         }
       } catch (e: any) {
-        steps.push({ step: label, ok: false, detail: (e?.message || String(e)).slice(0, 400) })
+        const msg = myobDetail(e)
+        steps.push({ step: label, ok: false, detail: msg })
+        console.error(`receive-dropship: PO->bill failed for ${orderId} (${po.supplier_name}):`, msg)
+        // Only invoice failures were recorded as events, so a bill failure -
+        // the thing that CAUSES the invoice failure - left no trace on the
+        // order page at all. B2B-2026-000052 showed an alarming MYOB
+        // "insufficient stock" error with nothing explaining why.
+        try {
+          await c.from('b2b_order_events').insert({
+            order_id: orderId, event_type: 'dropship_po_bill_failed',
+            actor_type: opts.actorId ? 'admin' : 'system', actor_id: opts.actorId || null,
+            notes: `PO ${po.myob_po_number || po.myob_po_uid} (${po.supplier_name || 'supplier'}) could not be converted to a bill: ${msg}`,
+            metadata: { supplier_name: po.supplier_name, myob_po_uid: po.myob_po_uid, myob_po_number: po.myob_po_number },
+          })
+        } catch (ev: any) { console.error('order_events insert failed (non-fatal):', ev?.message) }
       }
     }
 
@@ -139,8 +168,22 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
     }
 
     // ── 2. Retry sale order → invoice conversion (same as freight booking) ─
+    //
+    // ONLY once every drop-ship PO is billed. Converting the sale order
+    // consumes stock that the bill is what receives - so with an unbilled PO
+    // the conversion cannot succeed, and MYOB rejects it with
+    // Inventory_InsufficientStockMultipleLocation: an alarming inventory error
+    // that says nothing about the actual cause. B2B-2026-000052 hit exactly
+    // that on 2026-08-25. Skipping is not a workaround; there is genuinely
+    // nothing to convert until the goods are received.
+    const unbilled = currentPos.filter(p => p?.myob_po_uid && !p?.myob_bill_uid)
     let hasSaleInvoice = !!o.myob_sale_invoice_uid
-    if (!o.myob_invoice_uid) {
+    if (unbilled.length > 0 && !hasSaleInvoice) {
+      steps.push({
+        step: 'convert_invoice', ok: false,
+        detail: `Skipped — ${unbilled.length} drop-ship PO(s) not billed yet (${unbilled.map((p: any) => p.myob_po_number || p.supplier_name || 'PO').join(', ')}). The bill is what receives the stock this invoice consumes, so the conversion would fail on stock. Fix the bill above, then re-run.`,
+      })
+    } else if (!o.myob_invoice_uid) {
       steps.push({ step: 'convert_invoice', ok: true, detail: 'No MYOB sale order on file yet — nothing to convert.' })
     } else if (hasSaleInvoice) {
       steps.push({ step: 'convert_invoice', ok: true, detail: `Sale order already converted — invoice ${o.myob_sale_invoice_uid}` })
@@ -158,7 +201,7 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
           await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_converted', actor_type: 'system', actor_id: null, notes: `MYOB invoice ${conv.myob_sale_invoice_number || conv.myob_sale_invoice_uid} (${conv.status})`, metadata: { myob_sale_invoice_uid: conv.myob_sale_invoice_uid, myob_sale_invoice_number: conv.myob_sale_invoice_number, status: conv.status } })
         } catch (e: any) { console.error('order_events insert failed (non-fatal):', e?.message) }
       } catch (e: any) {
-        const msg = (e?.message || String(e)).slice(0, 500)
+        const msg = myobDetail(e)
         // 37001 OrderConvertedToInvoice = the sale order was converted
         // manually in the desktop app — adopt that invoice instead of failing.
         if (/OrderConvertedToInvoice|37001/i.test(msg)
@@ -190,14 +233,22 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
           } catch (e: any) { console.error('order_events insert failed (non-fatal):', e?.message) }
         }
       } catch (e: any) {
-        const msg = (e?.message || String(e)).slice(0, 500)
+        const msg = myobDetail(e)
         steps.push({ step: 'apply_payment', ok: false, detail: msg })
         console.error(`receive-dropship: MYOB customer payment failed for ${orderId}:`, msg)
         try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_payment_failed', actor_type: 'system', actor_id: null, notes: msg }) } catch {}
       }
     }
 
-    return { ok: steps.length > 0 && steps.every(s => s.ok), httpStatus: 200, steps }
+    // The Slack alert reads `run.error`; without this it was always undefined,
+    // so a failed receive posted "hit a snag" and nothing else.
+    const firstFailure = steps.find(s => !s.ok)
+    return {
+      ok: steps.length > 0 && steps.every(s => s.ok),
+      httpStatus: 200,
+      steps,
+      ...(firstFailure ? { error: `${firstFailure.step}: ${firstFailure.detail}` } : {}),
+    }
   } finally {
     await releaseOrderStage(c, orderId, 'dropship_billing_at')
   }
