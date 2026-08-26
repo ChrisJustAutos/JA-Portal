@@ -108,6 +108,14 @@ export async function pushPurchaseBillToMyob(poId: string, performedBy: string |
     TotalTax: totalTax,
     TotalAmount: totalAmount,
     JournalMemo: `Workshop PO ${poId}`.substring(0, 255),
+    // MYOB REQUIRES FreightTaxCode on an Item Bill even when Freight is 0 -
+    // omit it and the whole POST is rejected with "FreightTaxCode is required".
+    // Already documented in lib/ap-myob-bill.ts, and it broke every B2B
+    // drop-ship bill until 2026-08-26 (MPI PO 00001382). This path had the
+    // same gap; fixed pre-emptively rather than waiting for the first workshop
+    // PO push to fail. Zero freight attracts no tax whichever code is used.
+    Freight: 0,
+    FreightTaxCode: { UID: gstUid },
   }
   const result = await myobFetch(conn.id, path, { method: 'POST', body, performedBy })
   if (result.status !== 201 && result.status !== 200) {

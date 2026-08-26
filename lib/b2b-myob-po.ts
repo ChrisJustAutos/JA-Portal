@@ -250,10 +250,21 @@ export async function convertDropShipPoToBill(input: ConvertPoToBillInput): Prom
   if (po.Number) body.Number = String(po.Number)   // keep the PO number for continuity
   if (po.ShipToAddress) body.ShipToAddress = String(po.ShipToAddress).slice(0, 255)
   if (po.Comment) body.Comment = String(po.Comment).slice(0, 255)
-  if (Number(po.Freight || 0) > 0) {
-    body.Freight = round2(Number(po.Freight))
-    if (po.FreightTaxCode?.UID) body.FreightTaxCode = { UID: po.FreightTaxCode.UID }
-  }
+  // FreightTaxCode is REQUIRED on an Item Bill even when there is no freight -
+  // MYOB rejects the whole conversion with "FreightTaxCode is required"
+  // otherwise. A drop-ship PO never carries freight (the supplier ships direct
+  // and bills us separately), so this branch never ran and every drop-ship
+  // bill failed. MPI AUTOMOTIVE PO 00001382, B2B-2026-000052, 2026-08-26.
+  //
+  // The sale-invoice path already learned this and falls back to FRE when
+  // freight is zero (lib/b2b-myob-invoice.ts); the purchase-bill path did not.
+  // Zero freight attracts no GST, so FRE is the correct code, not merely a
+  // placeholder to satisfy the validator.
+  const freight = round2(Number(po.Freight || 0))
+  body.Freight = freight
+  const { assertCheckoutConfigured } = await import('./b2b-settings')
+  const cfg = await assertCheckoutConfigured()
+  body.FreightTaxCode = { UID: po.FreightTaxCode?.UID || (freight > 0 ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid) }
 
   const path = `/accountright/${conn.company_file_id}/Purchase/Bill/Item`
   const result = await myobFetch(conn.id, path, { method: 'POST', body })
