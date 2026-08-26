@@ -469,24 +469,69 @@ export interface AllStockItem {
  * allocated / alert_qty / on_order come back only if the LIST endpoint exposes
  * them (the per-item detail endpoint always has them, but fetching detail for
  * thousands of rows every 30 min is too heavy). Missing → null / 0.
+ * CONFIRMED 2026-08-27 from a live page-1 key dump: the list carries
+ * `available_quantity` and `ordered_quantity` but NOT `allocated_quantity`, so
+ * `allocated` lands 0 here and committed-to-jobs = on_hand − available.
+ *
+ * COMPLETENESS IS PART OF THE CONTRACT. This either returns the whole
+ * catalogue or throws — it must never resolve with a partial one. The caller
+ * REPLACES md_stock_cache wholesale with whatever it gets back, so a silent
+ * short read poisons the parts bot with a catalogue full of holes. That is not
+ * hypothetical: on 2026-08-26 a mid-run session eviction on page 10 truncated
+ * the cache from 856 items to 270 and still reported success, leaving the front
+ * counter unable to find two-thirds of the catalogue.
  */
 export async function fetchAllStock(
   client: MdClient,
-  opts: { log?: (...a: any[]) => void; maxPages?: number; onSample?: (raw: any) => void } = {},
+  opts: {
+    log?: (...a: any[]) => void
+    maxPages?: number
+    onSample?: (raw: any) => void
+    /**
+     * Optional session recovery. MD allows one session per employee, so a human
+     * (or another worker) logging in mid-page evicts us. When supplied, a 401 is
+     * recovered by re-logging in and retrying the SAME page rather than losing
+     * the tail of the catalogue. Should mutate the passed client in place.
+     */
+    relogin?: () => Promise<void>
+  } = {},
 ): Promise<AllStockItem[]> {
   const log = opts.log || (() => {})
   const maxPages = opts.maxPages || 1000
   const items: AllStockItem[] = []
+  const MAX_RELOGINS = 4
+  let reloginsUsed = 0
+  let totalPagesExpected: number | null = null
+  let lastPageFetched = 0
 
   for (let page = 1; page <= maxPages; page++) {
-    let resp: { stocks?: any[]; meta?: any }
-    try {
-      resp = await mdFetch<{ stocks?: any[]; meta?: any }>(client, `/stocks.json?page=${page}`)
-    } catch (e: any) {
-      if (page === 1) throw e   // first-page failure is fatal
-      log(`  catalogue: /stocks.json page ${page} failed (${String(e?.message).slice(0, 120)}) — stopping at ${items.length}`)
-      break
+    let resp: { stocks?: any[]; meta?: any } | null = null
+    // Up to two extra attempts per page: one for a transient blip, one after a
+    // re-login. Anything still failing after that is a real failure — throw.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        resp = await mdFetch<{ stocks?: any[]; meta?: any }>(client, `/stocks.json?page=${page}`)
+        break
+      } catch (e: any) {
+        const msg = String(e?.message || e)
+        const isAuth = /→\s*401\b/.test(msg) && /login|different computer/i.test(msg)
+        const canRelogin = isAuth && !!opts.relogin && reloginsUsed < MAX_RELOGINS
+        if (canRelogin) {
+          reloginsUsed++
+          log(`  catalogue: session evicted on page ${page} — re-logging in (${reloginsUsed}/${MAX_RELOGINS})`)
+          await new Promise(r => setTimeout(r, 1500 * reloginsUsed))
+          await opts.relogin!()
+          continue
+        }
+        if (attempt < 2 && !isAuth) {
+          await new Promise(r => setTimeout(r, 800 * (attempt + 1)))
+          continue
+        }
+        throw new Error(`catalogue: /stocks.json page ${page} failed after ${items.length} item(s) — ${msg.slice(0, 200)}`)
+      }
     }
+    if (!resp) throw new Error(`catalogue: /stocks.json page ${page} returned no response`)
+    lastPageFetched = page
     const stocks = Array.isArray(resp?.stocks) ? resp.stocks : []
     if (page === 1 && stocks[0]) { log(`  catalogue: /stocks.json item keys = ${Object.keys(stocks[0]).join(', ')}`); opts.onSample?.(stocks[0]) }
     if (stocks.length === 0) break
@@ -519,10 +564,23 @@ export async function fetchAllStock(
     }
 
     const totalPages = pickNum(resp?.meta || {}, ['total_pages', 'last_page', 'pages'])
+    if (totalPages) totalPagesExpected = totalPages
     if (totalPages && page >= totalPages) break
     log(`  catalogue: page ${page} → ${stocks.length} stocks (total so far: ${items.length})`)
   }
 
+  // Completeness gate. MD tells us on page 1 how many pages there are, so a run
+  // that stops short of that has lost part of the catalogue and must not be
+  // presented as a full snapshot — the caller would write it over a good cache.
+  if (totalPagesExpected != null && lastPageFetched < totalPagesExpected) {
+    throw new Error(
+      `catalogue: incomplete — read ${lastPageFetched}/${totalPagesExpected} pages ` +
+      `(${items.length} items). Refusing to return a partial catalogue.`,
+    )
+  }
+  if (items.length === 0) throw new Error('catalogue: /stocks.json returned no items')
+
+  log(`  catalogue: complete — ${items.length} item(s) over ${lastPageFetched} page(s)`)
   return items
 }
 

@@ -75,8 +75,19 @@ async function main() {
   const { chromium } = await import('playwright')
   const browser = await chromium.launch({ headless: true })
   try {
-    const client = await loginToMechanicDesk(browser, WS_ID, MD_USER, MD_PASS)
-    console.log('logged in OK')
+    // NOTE: loginToMechanicDesk returns { client, cookies } — destructure it.
+    // Taking the whole result as the client silently sends `Cookie: undefined`
+    // and every call 401s with "Please login" (distinct from the eviction
+    // message, "logged in from a different computer").
+    const { client } = await loginToMechanicDesk(browser, WS_ID, MD_USER, MD_PASS)
+
+    // Fail fast on a dead session rather than reporting a page of 401s as
+    // "no data". /stocks.json is known-good (the parts-bot cache pages it).
+    const check = await mdGet(client, '/stocks.json?page=1')
+    if (check.status !== 200) {
+      throw new Error(`session check failed: /stocks.json?page=1 -> ${check.status} ${JSON.stringify(check.json || check.head).slice(0, 160)}`)
+    }
+    console.log(`logged in OK — session verified (/stocks.json page 1, meta=${JSON.stringify(check.json?.meta || {})})`)
 
     // ── Q1: is there a jobs-list endpoint? ────────────────────────────────
     line('Q1 — jobs-list endpoint candidates')
@@ -122,6 +133,7 @@ async function main() {
     line('Q2 — status values seen across a 180-day diary sweep (back 150d, fwd 30d)')
     const today = new Date()
     const statusCount = new Map<string, number>()
+    let diaryOk = 0
     const jobIds: number[] = []
     const seen = new Set<number>()
     // Sample weekly rather than daily — we want the status vocabulary and a
@@ -129,6 +141,8 @@ async function main() {
     for (let off = -150; off <= 30; off += 7) {
       const d = new Date(today); d.setDate(d.getDate() + off)
       const r = await mdGet(client, `/auto_workshop/diary?start=${encodeURIComponent(isoAU(d))}&end=${encodeURIComponent(isoAU(d, true))}`)
+      if (r.status !== 200) { console.log(`  diary ${d.toISOString().slice(0, 10)} -> ${r.status} ${String(r.json?.message || r.head).slice(0, 60)}`); continue }
+      diaryOk++
       for (const arr of [r.json?.bookings, r.json?.jobs]) {
         for (const row of (Array.isArray(arr) ? arr : [])) {
           const jid = Number(row?.job_id ?? row?.id)
@@ -138,6 +152,7 @@ async function main() {
         }
       }
     }
+    console.log(`  diary days answered 200: ${diaryOk}`)
     console.log(`  diary rows by status: ${JSON.stringify(Array.from(statusCount.entries()).sort((a, b) => b[1] - a[1]))}`)
     console.log(`  unique job ids collected: ${jobIds.length}`)
 
@@ -201,15 +216,31 @@ async function main() {
           console.log(`  /stocks/${sid} values: ${JSON.stringify(scalars(d.json)).slice(0, 500)}`)
         }
       }
-      // How many of a page of stocks have allocation? Tells us if an
-      // allocated>0 scan is cheap enough to be a real backstop.
-      const probeIds = stocks.slice(0, 25).map((s: any) => Number(s.id)).filter(Boolean)
-      let allocated = 0, checked = 0
+      // THE key identity to confirm: is the detail endpoint's allocated_quantity
+      // the same number as (list on_hand - list available_quantity)? If yes, the
+      // portal can compute "committed to jobs" straight from the cached list and
+      // never needs a per-item detail scan.
+      const probeIds = stocks.slice(0, 30).map((s: any) => Number(s.id)).filter(Boolean)
+      const byId = new Map<number, any>(stocks.map((s: any) => [Number(s.id), s]))
+      let checked = 0, allocatedNonZero = 0, identityHolds = 0, identityBreaks = 0
+      const breaks: any[] = []
       for (const sid2 of probeIds) {
         const d = await mdGet(client, `/stocks/${sid2}`)
-        if (d.json) { checked++; if (Number(d.json.allocated_quantity) > 0) allocated++ }
+        if (!d.json) continue
+        checked++
+        const alloc = Number(d.json.allocated_quantity) || 0
+        if (alloc > 0) allocatedNonZero++
+        const listRow = byId.get(sid2) || {}
+        const onHand = Number(listRow.quantity) || 0
+        const avail = Number(listRow.available_quantity)
+        if (!isFinite(avail)) continue
+        const derived = onHand - avail
+        if (Math.abs(derived - alloc) < 0.001) identityHolds++
+        else { identityBreaks++; if (breaks.length < 6) breaks.push({ id: sid2, on_hand: onHand, available: avail, derived, allocated_quantity: alloc, detail_available: d.json.available_quantity ?? null }) }
       }
-      console.log(`  of ${checked} sampled stock items, ${allocated} have allocated_quantity > 0`)
+      console.log(`  sampled ${checked} items: ${allocatedNonZero} with allocated_quantity > 0`)
+      console.log(`  >> identity (on_hand - available == allocated_quantity): holds ${identityHolds}, breaks ${identityBreaks}`)
+      if (breaks.length) console.log(`  >> mismatches: ${JSON.stringify(breaks)}`)
     }
 
     // Total catalogue size — decides whether a full allocated scan is viable.

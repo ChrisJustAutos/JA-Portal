@@ -27,7 +27,11 @@ on:
 # Never run two syncs at once — a second MD login would evict the first's
 # session mid-scrape (single-session-per-employee).
 concurrency:
-  group: md-stock-sync
+  # All the scheduled MD scrapers share one group: MechanicDesk allows a single
+  # session per employee account, so two workers running at once evict each
+  # other mid-run. Serialising them removes worker-vs-worker collisions
+  # entirely (human logins are handled by re-login-and-resume in the worker).
+  group: mechanicdesk-session
   cancel-in-progress: false
 
 jobs:

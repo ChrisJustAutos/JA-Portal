@@ -17,7 +17,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: mechanicdesk-pull
+  # All the scheduled MD scrapers share one group: MechanicDesk allows a single
+  # session per employee account, so two workers running at once evict each
+  # other mid-run. Serialising them removes worker-vs-worker collisions
+  # entirely (human logins are handled by re-login-and-resume in the worker).
+  group: mechanicdesk-session
   cancel-in-progress: false
 
 jobs:

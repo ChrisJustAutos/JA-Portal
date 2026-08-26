@@ -50,7 +50,15 @@ async function main() {
     try {
       const { client } = await loginToMechanicDesk(browser, wsId, username, password)
       log('Logged in — paging /stocks.json')
-      const items = await fetchAllStock(client, { log })
+      // MD allows one session per employee: a human (or another worker) logging
+      // in mid-run evicts us. Recover in place rather than losing the tail of
+      // the catalogue — fetchAllStock now refuses to return a partial one.
+      const relogin = async () => {
+        const { client: fresh } = await loginToMechanicDesk(browser, wsId, username, password)
+        client.cookieHeader = fresh.cookieHeader
+        client.csrfToken = fresh.csrfToken
+      }
+      const items = await fetchAllStock(client, { log, relogin })
       log(`Fetched ${items.length} catalogue item(s) — posting to portal`)
       const done = await ingest({ action: 'finish', run_id: runId, items })
       log(`Done — cached ${done.items} item(s)`)
