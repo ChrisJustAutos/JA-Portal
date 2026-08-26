@@ -433,6 +433,10 @@ function DeliverySitesSection({ distributorId }: { distributorId: string }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  // The id being edited in place. Add and edit share one draft, so only one
+  // of them can be open at a time - two half-filled forms on the same card is
+  // how you save the wrong address to the wrong site.
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState<SiteDraft>(EMPTY_SITE)
 
   const base = `/api/b2b/admin/distributors/${distributorId}/addresses`
@@ -479,22 +483,66 @@ function DeliverySitesSection({ distributorId }: { distributorId: string }) {
           borderBottom:`1px solid ${T.border}`, opacity: s.is_active ? 1 : 0.5,
         }}>
           <div style={{flex:1, minWidth:0}}>
-            <div style={{fontSize:13.5, fontWeight:650, display:'flex', alignItems:'center', gap:7, flexWrap:'wrap'}}>
-              {s.label}
-              {s.is_default && <StatusPill color={A.good}>Default</StatusPill>}
-              {!s.is_active && <StatusPill color={T.text3}>Removed</StatusPill>}
-            </div>
-            <div style={{fontSize:12.5, color:T.text2, marginTop:2}}>
-              {[s.line1, s.line2, [s.suburb, s.state, s.postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ') || '—'}
-            </div>
-            {(s.contact_name || s.contact_phone) && (
-              <div style={{fontSize:12, color:T.text3, marginTop:2}}>
-                {[s.contact_name, s.contact_phone].filter(Boolean).join(' · ')}
+            {editingId === s.id ? (
+              <div style={{display:'flex', flexDirection:'column', gap:8}}>
+                <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:8}}>
+                  {SITE_FIELDS.map(([k, ph]) => (
+                    <input key={k} placeholder={ph} value={draft[k]}
+                      onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))}
+                      className="al-focus" style={inputStyle()}/>
+                  ))}
+                </div>
+                <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+                  <Btn size="sm" disabled={busy || !draft.label.trim() || !draft.postcode.trim()}
+                    onClick={async () => {
+                      if (await call('PATCH', { address_id: s.id, ...draft })) {
+                        toast(`${draft.label.trim()} saved`, 'success')
+                        setEditingId(null); setDraft(EMPTY_SITE)
+                      }
+                    }}>
+                    {busy ? 'Saving…' : 'Save changes'}
+                  </Btn>
+                  <Btn variant="ghost" size="sm"
+                    onClick={() => { setEditingId(null); setDraft(EMPTY_SITE) }}>Cancel</Btn>
+                  {s.is_default && (
+                    <span style={{fontSize:12, color:T.text3, alignSelf:'center'}}>
+                      This is the default site — the postcode here is what freight quotes against by default.
+                    </span>
+                  )}
+                </div>
               </div>
+            ) : (
+              <>
+                <div style={{fontSize:13.5, fontWeight:650, display:'flex', alignItems:'center', gap:7, flexWrap:'wrap'}}>
+                  {s.label}
+                  {s.is_default && <StatusPill color={A.good}>Default</StatusPill>}
+                  {!s.is_active && <StatusPill color={T.text3}>Removed</StatusPill>}
+                </div>
+                <div style={{fontSize:12.5, color:T.text2, marginTop:2}}>
+                  {[s.line1, s.line2, [s.suburb, s.state, s.postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ') || '—'}
+                </div>
+                {(s.contact_name || s.contact_phone) && (
+                  <div style={{fontSize:12, color:T.text3, marginTop:2}}>
+                    {[s.contact_name, s.contact_phone].filter(Boolean).join(' · ')}
+                  </div>
+                )}
+              </>
             )}
           </div>
-          {s.is_active && (
+          {s.is_active && editingId !== s.id && (
             <div style={{display:'flex', gap:6, flexShrink:0}}>
+              <Btn variant="ghost" size="sm" disabled={busy}
+                onClick={() => {
+                  setEditingId(s.id)
+                  setDraft({
+                    label: s.label || '', line1: s.line1 || '', line2: s.line2 || '',
+                    suburb: s.suburb || '', state: s.state || '', postcode: s.postcode || '',
+                    contact_name: s.contact_name || '', contact_phone: s.contact_phone || '',
+                  })
+                  setAdding(false)
+                }}>
+                Edit
+              </Btn>
               {!s.is_default && (
                 <Btn variant="ghost" size="sm" disabled={busy}
                   onClick={() => { void call('PATCH', { address_id: s.id, is_default: true }) }}>
@@ -520,7 +568,10 @@ function DeliverySitesSection({ distributorId }: { distributorId: string }) {
 
       {!adding ? (
         <div style={{marginTop:12}}>
-          <Btn variant="secondary" size="sm" onClick={() => setAdding(true)}>Add a delivery site</Btn>
+          <Btn variant="secondary" size="sm"
+            onClick={() => { setEditingId(null); setDraft(EMPTY_SITE); setAdding(true) }}>
+            Add a delivery site
+          </Btn>
         </div>
       ) : (
         <div style={{marginTop:12, display:'flex', flexDirection:'column', gap:8}}>

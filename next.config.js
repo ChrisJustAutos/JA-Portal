@@ -10,6 +10,7 @@ const BUILD_ID =
 // Which Workshop sections are switched on (MechanicDesk stays the workshop
 // system of record) — the same list the tab strip reads.
 const { parkedWorkshopRewrites } = require('./lib/workshop-sections')
+const { parkedB2BRewrites } = require('./lib/b2b-sections')
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -41,7 +42,7 @@ const nextConfig = {
     // parked pages would render instead of the notice). The OAuth rewrites keep
     // their original afterFiles behaviour.
     return {
-      beforeFiles: parkedWorkshopRewrites(),
+      beforeFiles: [...parkedWorkshopRewrites(), ...parkedB2BRewrites()],
       afterFiles: [
       { source: '/.well-known/oauth-authorization-server', destination: '/api/oauth/metadata' },
       { source: '/.well-known/oauth-authorization-server/api/mcp', destination: '/api/oauth/metadata' },

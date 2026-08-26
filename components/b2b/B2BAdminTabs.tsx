@@ -12,9 +12,13 @@
 import { AppIcon } from '../../lib/AppIcons'
 import { T } from '../../lib/ui/theme'
 import { A, RADIUS, AlloyStyles } from './ui'
+// eslint-disable-next-line @typescript-eslint/no-var-requires -- shared with next.config.js, which cannot import TS
+const { isB2BSectionActive } = require('../../lib/b2b-sections')
 
 export type B2BAdminSection = 'dashboard' | 'catalogue' | 'reorder' | 'stocktake' | 'stock_overview' | 'distributors' | 'suppliers' | 'orders' | 'tune_jobs' | 'assets' | 'training' | 'settings'
 
+// Stock Wall and Suppliers are filtered out below via lib/b2b-sections —
+// they stay in this list so reviving them is one boolean, not a re-add.
 const TABS: Array<{ id: B2BAdminSection; label: string; href: string; icon: string }> = [
   { id: 'dashboard',      label: 'Dashboard',      href: '/admin/b2b',                icon: 'overview' },
   { id: 'catalogue',      label: 'Catalogue',      href: '/admin/b2b/catalogue',      icon: 'catalogue' },
@@ -74,7 +78,7 @@ export default function B2BAdminTabs({ active }: { active: B2BAdminSection }) {
           table.b2b-cards td.b2b-card-hide{ display:none !important; }
         }
       `}</style>
-      {TABS.map(tab => {
+      {TABS.filter(t => isB2BSectionActive(t.id)).map(tab => {
         const on = tab.id === active
         return (
           <a key={tab.id} href={tab.href}

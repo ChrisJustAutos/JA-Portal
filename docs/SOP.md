@@ -268,7 +268,18 @@ Every distributor's existing address was brought across as their **default** sit
 
 **⚠ Sites are staff-managed, not self-serve.** Where a distributor's goods may be sent is a credit and fraud decision - their portal only ever picks from the list you set. If a distributor asks for a new delivery address, add it here.
 
+**To change a site**, press **Edit** on it, adjust any field and **Save changes**. Editing the address a distributor has already ordered to is safe: past orders keep the address they were actually shipped to, so nothing reprints differently. Changing the **postcode** of a site changes what freight quotes at, including for carts already open on it.
+
 **Removing a site** stops it being selectable but keeps history: past orders keep the address they were actually shipped to, printed on their pick list, labels and tax invoice. You cannot remove the default while other sites exist - make another site the default first.
+
+### 4.1i Stock Wall and Suppliers have been switched off
+
+Both came off the B2B menu on **26 August 2026**.
+
+- **Stock Wall** — the Slack parts bot answers stock questions now, and **Stock Order** covers reordering.
+- **Suppliers** — the read-only supplier logins were never taken up; no supplier account was ever created. Drop-ship POs reach suppliers by email instead. The supplier sign-in page is closed too, since nobody was administering it.
+
+If you land on one from an old bookmark you get a short "not in use" notice explaining why, on the same URL. **Nothing was deleted** — the screens and their data are still there, off the menu. Ask Chris if you need either back.
 
 ### 4.2 Pick, pack and despatch
 
