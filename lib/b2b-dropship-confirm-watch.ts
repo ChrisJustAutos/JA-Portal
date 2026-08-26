@@ -57,6 +57,7 @@ interface CandidateOrder {
 export interface ConfirmWatchResult {
   scanned: number
   confirmed: number
+  acknowledged: number
   healed: number             // manual MYOB conversions detected + finished (payment etc.)
   skipped: number
   errors: string[]
@@ -68,7 +69,21 @@ const stripHtml = (html: string) =>
 
 const emailDomain = (addr: string | null | undefined) => String(addr || '').toLowerCase().split('@')[1] || ''
 
-interface ConfirmVerdict { confirmed: boolean; reason: string; etaDate: string | null; etaText: string | null }
+// A supplier reply is one of three things, and they are NOT interchangeable:
+//
+//   acknowledged - "all in stock, we'll get it out today". The order is
+//                  accepted but nothing has left. Useful: relay the ETA to the
+//                  distributor. Must NOT bill the PO or invoice the customer.
+//   dispatched   - it has actually shipped. Their invoice/consignment/freight
+//                  comes with it. THIS is what receives the stock and raises
+//                  the customer's tax invoice.
+//   neither      - question, backorder, decline, noise.
+//
+// Both used to collapse into confirmed=true, so a stock acknowledgement billed
+// the PO and invoiced the distributor days before the goods moved
+// (MPI / B2B-2026-000052, Chris 2026-08-26).
+type ConfirmStage = 'acknowledged' | 'dispatched' | 'neither'
+interface ConfirmVerdict { stage: ConfirmStage; reason: string; etaDate: string | null; etaText: string | null }
 
 async function classifyConfirmation(subject: string, bodyText: string, poNumbers: string[], orderNumber: string): Promise<ConfirmVerdict> {
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -76,10 +91,15 @@ async function classifyConfirmation(subject: string, bodyText: string, poNumbers
   const system = `You review emails received by an auto-parts wholesaler's orders inbox. The wholesaler emailed a supplier a drop-ship purchase order (PO ${poNumbers.join(' / ') || 'n/a'}, our ref ${orderNumber}) and is waiting for the supplier to CONFIRM they accept and will fulfil/ship it.
 
 Reply ONLY with JSON:
-{"confirmed": true|false, "reason": "<one short sentence>", "eta_date": "YYYY-MM-DD or null", "eta_text": "verbatim dispatch/due-date phrase or null"}
+{"stage": "acknowledged"|"dispatched"|"neither", "reason": "<one short sentence>", "eta_date": "YYYY-MM-DD or null", "eta_text": "verbatim dispatch/due-date phrase or null"}
 
-confirmed=true when the supplier accepts/acknowledges the order, confirms fulfilment or dispatch, sends their sales-order confirmation, invoice or tracking for it.
-confirmed=false for: out-of-stock/backorder/delay notices, declines or cancellations, questions that need an answer first (price/address/stock queries), quotes, automated read receipts, marketing, anything ambiguous. When unsure, false.
+The distinction between the first two matters more than anything else here, because "dispatched" causes us to invoice our customer:
+
+stage="dispatched" ONLY when the goods have actually LEFT the supplier: they send their invoice for the order, a consignment/tracking number, freight or carrier details, a packing slip, or say plainly that it has shipped/been picked up/is on its way (past tense).
+
+stage="acknowledged" when the supplier accepts the order or confirms availability but it has NOT yet left: "all in stock", "we'll get it shipped out today", "order received", "will be dispatched tomorrow", an order acknowledgement with no freight or invoice attached. A FUTURE or SAME-DAY promise to ship is acknowledged, NOT dispatched - "will ship today" is not "has shipped".
+
+stage="neither" for: out-of-stock/backorder/delay notices, declines or cancellations, questions needing an answer first (price/address/stock queries), quotes, automated read receipts, marketing, anything ambiguous. When unsure between acknowledged and dispatched, choose acknowledged; when unsure at all, choose neither.
 
 eta_date/eta_text: the supplier's expected DISPATCH or due date for this order if stated (e.g. "Expected dispatch date", "ETA", "due to ship"). eta_date only when you can resolve a full calendar date (assume the email's dates are current-year if unstated); eta_text is the supplier's own wording. Both null when no date is given.`
   const r = await fetch(ANTHROPIC_API_URL, {
@@ -94,18 +114,18 @@ eta_date/eta_text: the supplier's expected DISPATCH or due date for this order i
   const data = await r.json()
   const text = data.content?.[0]?.text || ''
   const m = text.match(/\{[\s\S]*\}/)
-  if (!m) return { confirmed: false, reason: 'classifier returned no JSON', etaDate: null, etaText: null }
+  if (!m) return { stage: 'neither', reason: 'classifier returned no JSON', etaDate: null, etaText: null }
   try {
     const j = JSON.parse(m[0])
     const etaDate = /^\d{4}-\d{2}-\d{2}$/.test(String(j.eta_date || '')) ? String(j.eta_date) : null
     return {
-      confirmed: j.confirmed === true,
+      stage: (j.stage === 'dispatched' ? 'dispatched' : j.stage === 'acknowledged' ? 'acknowledged' : 'neither') as ConfirmStage,
       reason: String(j.reason || '').slice(0, 300),
       etaDate,
       etaText: j.eta_text ? String(j.eta_text).slice(0, 200) : null,
     }
   } catch {
-    return { confirmed: false, reason: 'classifier JSON unparseable', etaDate: null, etaText: null }
+    return { stage: 'neither', reason: 'classifier JSON unparseable', etaDate: null, etaText: null }
   }
 }
 
@@ -223,7 +243,7 @@ async function oneShotRefresh43(c: SupabaseClient, errors: string[]): Promise<vo
 
 export async function scanDropShipConfirmations(opts: { lookbackDays?: number } = {}): Promise<ConfirmWatchResult> {
   const c = sb()
-  const res: ConfirmWatchResult = { scanned: 0, confirmed: 0, healed: 0, skipped: 0, errors: [], openOrders: 0 }
+  const res: ConfirmWatchResult = { scanned: 0, confirmed: 0, acknowledged: 0, healed: 0, skipped: 0, errors: [], openOrders: 0 }
 
   await oneShotRefresh43(c, res.errors)
 
@@ -320,19 +340,35 @@ export async function scanDropShipConfirmations(opts: { lookbackDays?: number } 
       }
 
       const verdict = await classifyConfirmation(msg.subject || '', bodyText, order.poNumbers, order.order_number)
-      if (!verdict.confirmed) {
+      if (verdict.stage === 'neither') {
         await finish('not_confirmation', `${how}; classifier: ${verdict.reason}`, order.id)
         res.skipped++
         continue
       }
 
-      const run = await receiveDropShipPo(order.id)
-      const summary = run.steps.map(s => `${s.ok ? '✓' : '✗'} ${s.step}: ${s.detail}`).join(' | ')
-      await finish(run.ok ? 'confirmed' : 'error', `${how}; classifier: ${verdict.reason}; ${summary || run.error || ''}`, order.id)
-      if (run.ok) res.confirmed++
-      else res.errors.push(`${order.order_number}: ${run.error || summary}`.slice(0, 300))
-
       const supplier = order.supplierNames[0] || emailDomain(msg.from)
+      const dispatched = verdict.stage === 'dispatched'
+
+      // The receive bills the PO and raises OUR customer's tax invoice, so it
+      // waits for actual dispatch. An acknowledgement still records the ETA and
+      // tells the distributor - it just doesn't move any money.
+      const run = dispatched ? await receiveDropShipPo(order.id) : null
+      const summary = run ? run.steps.map(s => `${s.ok ? '✓' : '✗'} ${s.step}: ${s.detail}`).join(' | ') : ''
+      if (run) {
+        await finish(run.ok ? 'confirmed' : 'error', `${how}; classifier: ${verdict.reason}; ${summary || run.error || ''}`, order.id)
+        if (run.ok) res.confirmed++
+        else res.errors.push(`${order.order_number}: ${run.error || summary}`.slice(0, 300))
+      } else {
+        await finish('acknowledged', `${how}; classifier: ${verdict.reason}`, order.id)
+        res.acknowledged++
+        try {
+          await c.from('b2b_order_events').insert({
+            order_id: order.id, event_type: 'dropship_acknowledged', actor_type: 'system', actor_id: null,
+            notes: `${supplier} acknowledged the order (not dispatched yet): ${verdict.reason}`,
+            metadata: { supplier, stage: verdict.stage, eta_date: verdict.etaDate, eta_text: verdict.etaText },
+          })
+        } catch (e: any) { console.error('dropship acknowledged event failed (non-fatal):', e?.message || e) }
+      }
 
       // Supplier gave an expected dispatch/due date → record it on the order
       // and pass it straight on to the distributor (Chris 2026-08-06).
@@ -360,13 +396,17 @@ export async function scanDropShipConfirmations(opts: { lookbackDays?: number } 
       // Tell the team (best-effort — #jaws-orders + the legacy webhook).
       try {
         const etaNote = verdict.etaDate ? ` Expected dispatch ${verdict.etaDate}.` : (verdict.etaText ? ` Expected dispatch: ${verdict.etaText}.` : '')
-        await postB2bOrderSlack(c, run.ok
-          ? `:package: ${supplier} confirmed the drop-ship for *${order.order_number}* — PO billed, MYOB invoice + payment done automatically.${etaNote} Distributor notified.`
-          : `:warning: ${supplier} confirmed the drop-ship for *${order.order_number}* but the automatic receive hit a snag — check the order page. ${String(run.error || '').slice(0, 200)}${etaNote}`)
+        await postB2bOrderSlack(c, !run
+          ? `:hourglass_flowing_sand: ${supplier} acknowledged the drop-ship for *${order.order_number}* — in stock, not shipped yet. Nothing billed or invoiced; that waits for the dispatch email.${etaNote} Distributor notified.`
+          : run.ok
+          ? `:package: ${supplier} DISPATCHED the drop-ship for *${order.order_number}* — PO billed, MYOB invoice + payment done automatically.${etaNote} Distributor notified.`
+          : `:warning: ${supplier} dispatched the drop-ship for *${order.order_number}* but the automatic receive hit a snag — check the order page. ${String(run.error || '').slice(0, 200)}${etaNote}`)
       } catch (e: any) { console.error('dropship-confirm Slack notify failed:', e?.message || e) }
 
-      // This order's POs are handled — stop matching further messages to it.
-      if (run.ok) {
+      // Only stop watching once the goods have actually been received. An
+      // acknowledged order MUST stay a candidate, or the dispatch email that
+      // follows would never be matched to it.
+      if (run?.ok) {
         const idx = candidates.indexOf(order)
         if (idx >= 0) candidates.splice(idx, 1)
         if (candidates.length === 0) break

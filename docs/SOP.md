@@ -281,6 +281,22 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **An order stays at its current status when you book it.** Until 25 August 2026, Book Freight marked the order **shipped** straight away - a leftover from before the two steps were split - so orders sitting on the bench read as shipped, both on the orders list and in the distributor's own portal. Booking now only records the carrier; **Ship Now** is what marks it shipped, which is what it always should have been.
 
+### 4.1f2 Supplier replies: acknowledged vs dispatched
+
+A supplier's reply to a drop-ship PO is one of three things, and the portal now tells them apart (26 August 2026):
+
+| Reply | What it means | What the portal does |
+|---|---|---|
+| **Acknowledged** | "All in stock, we'll get it out today." Accepted, but nothing has left. | Records the expected dispatch date, emails it to the distributor, posts to Slack. **Nothing is billed or invoiced.** Keeps watching for the dispatch email. |
+| **Dispatched** | It has actually shipped - their invoice, consignment number or freight details come with it. | Bills the PO in MYOB, converts our sale order to a tax invoice, receipts the payment, notifies the distributor. |
+| **Neither** | Backorder, decline, a question, noise. | Logged and ignored. |
+
+**⚠ This is why "will ship today" no longer triggers invoicing.** Until 26 August both of the first two counted as confirmation, so a stock acknowledgement billed the PO and raised the distributor's tax invoice days before the goods moved. A future or same-day promise to ship is **acknowledged**, not dispatched - "will ship today" is not "has shipped".
+
+If in doubt the classifier chooses the safer option: acknowledged over dispatched, and neither over both.
+
+**You can still force it.** If you know an order has shipped and no dispatch email is coming, press **"Supplier confirmed - bill PO + invoice"** on the order.
+
 ### 4.1g When a drop-ship "receive" fails
 
 When a supplier confirms a drop-ship, the portal does three things in order: **bill the PO** in MYOB (which receives the stock into that supplier's DS location), **convert the sale order to a tax invoice** (which consumes that stock), then **receipt the payment**.
