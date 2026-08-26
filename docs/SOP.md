@@ -649,6 +649,16 @@ This is not the same as **Stock & Inventory** (`/stock`), which shows *today* on
 
 ---
 
+**Avg/mo is measured from a SKU's first selling month, not the whole window** (26 August 2026). A line that has only been out a month is no longer averaged across months it did not exist in. JA-VD300-1BB sold 7 in July on a six-month window: it read **1.17 a month** and now reads **7.00**, a six-fold difference on the number reorder decisions lean on.
+
+Where the window is shortened the report says so beside the figure — **"(from 2026-07, no earlier sales)"** on screen and in the email, a **\*** with a footnote in the PDF — so you can see at a glance which averages rest on one month rather than six.
+
+**Growth is left blank for those lines**, not shown as a big percentage. There is no earlier period to compare against, and "up 100%" against months a product did not exist in is noise.
+
+The **Units** column in Top movers and Margin earners is now labelled **Sold units**, which is what it always was.
+
+**⚠ Old reports keep their old figures until rebuilt.** The screen, the PDF and the email all serve the stored snapshot, so July's report still shows 1.17 for that SKU. Press **Rebuild from MYOB** on any month you want recalculated the new way.
+
 ## 9. Tasks, projects and messages
 
 - **Tasks** — board and list views, with automations you draw as a flow diagram.

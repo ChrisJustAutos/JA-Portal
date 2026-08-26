@@ -239,11 +239,16 @@ function StockEomDoc({ rep }: { rep: EomReport }) {
           title="Top movers this month — by units"
           cols={[
             { label: 'SKU', width: '18%' }, { label: 'Name', width: '24%' },
-            { label: 'On hand', width: '9%', right: true }, { label: 'Units', width: '9%', right: true },
-            { label: 'Prev', width: '8%', right: true }, { label: 'Avg/mo', width: '9%', right: true },
-            { label: 'Growth', width: '8%', right: true }, { label: 'Revenue ex', width: '15%', right: true },
+            { label: 'On hand', width: '9%', right: true }, { label: 'Sold units', width: '9%', right: true },
+            { label: 'Prev', width: '8%', right: true }, { label: 'Avg/mo', width: '11%', right: true },
+            { label: 'Growth', width: '8%', right: true }, { label: 'Revenue ex', width: '13%', right: true },
           ]}
-          rows={rep.topByUnits.slice(0, 15).map(i => [i.sku.slice(0, 20), name(i, 26), qty(i.onHand), qty(i.monthUnits), qty(i.prevMonthUnits), qty(i.avgUnitsPerMonth), growth(i.growthPct), money(i.monthRevenueEx)])}
+          hint="Avg/mo is measured from the SKU's first selling month, not the whole window — a * marks one whose history is shorter than the window, with the month it starts from. Growth is left blank where there is no earlier period to compare against."
+          rows={rep.topByUnits.slice(0, 15).map(i => [
+            i.sku.slice(0, 20), name(i, 26), qty(i.onHand), qty(i.monthUnits), qty(i.prevMonthUnits),
+            i.historyPartial ? `${qty(i.avgUnitsPerMonth)}*` : qty(i.avgUnitsPerMonth),
+            growth(i.growthPct), money(i.monthRevenueEx),
+          ])}
         />
 
         <Table
@@ -253,7 +258,7 @@ function StockEomDoc({ rep }: { rep: EomReport }) {
             { label: 'SKU', width: '20%' }, { label: 'Name', width: '28%' },
             { label: 'On hand', width: '11%', right: true },
             { label: 'Margin $', width: '15%', right: true }, { label: 'Margin %', width: '13%', right: true },
-            { label: 'Units', width: '13%', right: true },
+            { label: 'Sold units', width: '13%', right: true },
           ]}
           rows={rep.topByMargin.slice(0, 15).map(i => [i.sku.slice(0, 22), name(i, 28), qty(i.onHand), money(i.monthMargin), pct(i.marginPct), qty(i.monthUnits)])}
         />

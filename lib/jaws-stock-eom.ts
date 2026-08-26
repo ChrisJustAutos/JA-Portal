@@ -132,6 +132,14 @@ export interface EomItem {
   prevMonthUnits: number
   units90: number; units365: number
   lastSold: string | null; daysSinceLastSold: number | null
+  /** Earliest sale seen in the fetched range (not necessarily ever). */
+  firstSold: string | null
+  /** Months the averages are actually divided by, and where they start from.
+   *  historyPartial = the SKU had no sales in the first month of the window, so
+   *  the average is measured from its first selling month instead. */
+  historyMonthsUsed: number
+  historyFromMonth: string | null
+  historyPartial: boolean
   /** Units invoiced AFTER the reported month ended. A slow mover with sales
    *  here isn't dead — it just hadn't sold in the window being reported. */
   unitsSinceMonthEnd: number
@@ -293,6 +301,7 @@ export async function buildEomReport(
     prevUnits: number
     units90: number; units365: number; revenue365Ex: number
     lastSold: Date | null          // bounded to <= month end, see below
+    firstSold: Date | null         // earliest sale IN THE FETCHED RANGE, see below
     unitsAfter: number             // invoiced after the month end
     monthly: Record<string, { units: number; revEx: number }>
   }
@@ -308,7 +317,7 @@ export async function buildEomReport(
     const qty = num(line.ShipQuantity)
     const ex = lineExGst(num(line.Total), meta.isTaxInclusive, line.TaxCodeCode)
     let a = per.get(sku)
-    if (!a) { a = { monthUnits: 0, monthRevenueEx: 0, prevUnits: 0, units90: 0, units365: 0, revenue365Ex: 0, lastSold: null, unitsAfter: 0, monthly: {} }; per.set(sku, a) }
+    if (!a) { a = { monthUnits: 0, monthRevenueEx: 0, prevUnits: 0, units90: 0, units365: 0, revenue365Ex: 0, lastSold: null, firstSold: null, unitsAfter: 0, monthly: {} }; per.set(sku, a) }
     const d = meta.date
     if (d >= start && d <= end) { a.monthUnits += qty; a.monthRevenueEx += ex }
     if (d >= prev.start && d <= prev.end) a.prevUnits += qty
@@ -319,6 +328,10 @@ export async function buildEomReport(
     // "days since last sold" (Chris spotted -11 on a July report, 2026-08-24).
     // A month-end snapshot must only know what it could have known then.
     if (d <= end && (!a.lastSold || d > a.lastSold)) a.lastSold = d
+    // Same month-end bound for the FIRST sale. This is the earliest sale in the
+    // fetched range, which is not necessarily the item's first sale ever — the
+    // fetch only reaches back so far. That distinction is handled below.
+    if (d <= end && (!a.firstSold || d < a.firstSold)) a.firstSold = d
     if (d > end) a.unitsAfter += qty
     const mk = monthKey(d)
     const m = a.monthly[mk] || { units: 0, revEx: 0 }
@@ -347,8 +360,23 @@ export async function buildEomReport(
     const series = histWin.months.map(mk => a?.monthly[mk] || { units: 0, revEx: 0 })
     const historyUnits = series.reduce((t, m) => t + m.units, 0)
     const historyRevenueEx = series.reduce((t, m) => t + m.revEx, 0)
-    const avgUnitsPerMonth = historyUnits / histWin.months.length
-    const avgRevenuePerMonth = historyRevenueEx / histWin.months.length
+
+    // Average over the months the SKU has ACTUALLY BEEN SELLING, not the whole
+    // window (Chris 2026-08-26). JA-VD300 first sold a month ago; dividing a
+    // month's sales by six months read as a sixth of its real rate, which is
+    // exactly the figure the reorder decisions lean on.
+    //
+    // The denominator starts at the first month in the window with a sale. A
+    // long-standing item that sold in month one is unaffected. An item whose
+    // first sale is later is averaged from there, and `historyPartial` marks it
+    // so the report can say so rather than quietly using a different divisor
+    // from its neighbours.
+    const firstIdx = series.findIndex(m => m.units > 0)
+    const historyPartial = firstIdx > 0
+    const historyMonthsUsed = firstIdx < 0 ? histWin.months.length : series.length - firstIdx
+    const historyFromMonth = historyPartial ? histWin.months[firstIdx] : null
+    const avgUnitsPerMonth = historyUnits / historyMonthsUsed
+    const avgRevenuePerMonth = historyRevenueEx / historyMonthsUsed
     const supplierRaw = it.RestockingSupplierName ? String(it.RestockingSupplierName) : null
     return {
       sku, name: String(it.Name || ''),
@@ -371,9 +399,16 @@ export async function buildEomReport(
       // Capped at MYOB's own CurrentValue: onHand x avgCost can drift from it.
       capitalAtRisk: r2(Math.min(num(it.CurrentValue), Math.max(0, onHand - runRatePerDay * TARGET_COVER_DAYS) * avgCost)),
       historyUnits: r2(historyUnits), historyRevenueEx: r2(historyRevenueEx),
+      firstSold: a?.firstSold ? a.firstSold.toISOString().slice(0, 10) : null,
+      historyMonthsUsed, historyFromMonth, historyPartial,
       avgUnitsPerMonth: r2(avgUnitsPerMonth), avgRevenuePerMonth: r2(avgRevenuePerMonth),
       monthsCoverAtAvg: avgUnitsPerMonth > 0 ? r2(onHand / avgUnitsPerMonth) : null,
-      growthPct: halfOverHalfGrowth(series),
+      // No growth read for a SKU that wasn't selling in the first half of the
+      // window: "up 100%" against months it did not exist in is noise, not a
+      // trend. halfOverHalfGrowth already returns null when the first half is
+      // empty, so this only makes the intent explicit for partial histories
+      // whose first sale lands mid-first-half.
+      growthPct: historyPartial && historyMonthsUsed < series.length / 2 ? null : halfOverHalfGrowth(series),
       monthlySeries: histWin.months.map((mk, ix) => ({ month: mk, units: r2(series[ix].units), revenueEx: r2(series[ix].revEx) })),
     }
   })
@@ -714,9 +749,14 @@ export function renderEomEmail(rep: EomReport, portalUrl: string): { subject: st
       ${row('Reorder suggested', `${h.reorderCount} SKUs · ${money(h.reorderCost)} to buy`)}
     </table>
 
-    ${listTable('Top movers this month (units)', rep.topByUnits.slice(0, 10).map(i =>
-      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 32)) + '</span>', String(r2(i.onHand)), String(r2(i.monthUnits)), String(r2(i.avgUnitsPerMonth)), money(i.monthRevenueEx), pct(i.marginPct)]),
-      ['SKU', 'On hand', 'Units', 'Avg/mo', 'Revenue ex', 'Margin'])}
+    ${listTable('Top movers this month (sold units)', rep.topByUnits.slice(0, 10).map(i =>
+      [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 32)) + '</span>',
+       String(r2(i.onHand)), String(r2(i.monthUnits)),
+       // A shortened average window is stated inline rather than starred, since
+       // an email has nowhere to put a footnote.
+       String(r2(i.avgUnitsPerMonth)) + (i.historyPartial ? ` <span style="color:#888">(from ${esc(String(i.historyFromMonth || i.firstSold || ''))}, no earlier sales)</span>` : ''),
+       money(i.monthRevenueEx), pct(i.marginPct)]),
+      ['SKU', 'On hand', 'Sold units', 'Avg/mo', 'Revenue ex', 'Margin'])}
 
     ${listTable('Biggest margin earners this month', rep.topByMargin.slice(0, 10).map(i =>
       [esc(i.sku) + ' <span style="color:#888">' + esc(i.name.slice(0, 38)) + '</span>', money(i.monthMargin), pct(i.marginPct)]),

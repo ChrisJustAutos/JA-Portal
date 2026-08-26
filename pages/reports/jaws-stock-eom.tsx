@@ -23,6 +23,8 @@ interface Item {
   units90: number; lastSold: string | null; daysSinceLastSold: number | null; unitsSinceMonthEnd: number
   daysOfCover: number | null; capitalAtRisk: number
   historyUnits: number; historyRevenueEx: number
+  firstSold?: string | null
+  historyMonthsUsed?: number; historyFromMonth?: string | null; historyPartial?: boolean
   avgUnitsPerMonth: number; avgRevenuePerMonth: number
   monthsCoverAtAvg: number | null; growthPct: number | null
   monthlySeries?: Array<{ month: string; units: number; revenueEx: number }>
@@ -341,13 +343,20 @@ export default function JawsStockEomPage({ user }: { user: PortalUserSSR }) {
                 cols={[{ label: 'Last sold' }, { label: 'SKUs', right: true }, { label: 'Value held', right: true }, { label: 'Share', right: true }]}
                 rows={report.ageing.map(a => [a.bucket, a.skus, money(a.value), h.analysedValue > 0 ? pct(a.value / h.analysedValue) : '—'])} />
 
-              <Table title="Top movers this month — by units"
-                hint={`What actually shifted. Prev = same SKU last month. Avg/mo and Growth are over the history window; months of cover is on-hand at that average rate. On hand is as at ${report.generatedAt.slice(0, 10)}, when the stock was read.`}
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'Units', right: true }, { label: 'Prev', right: true }, { label: 'Avg/mo', right: true }, { label: 'Growth', right: true }, { label: 'Revenue ex', right: true }, { label: 'Margin %', right: true }, { label: 'Months cover', right: true }]}
-                rows={report.topByUnits.map(i => [i.sku, i.name.slice(0, 40), qty(i.onHand), qty(i.monthUnits), qty(i.prevMonthUnits), qty(i.avgUnitsPerMonth), growth(i.growthPct), money(i.monthRevenueEx), pct(i.marginPct), i.monthsCoverAtAvg == null ? '—' : i.monthsCoverAtAvg.toFixed(1)])} />
+              <Table title="Top movers this month — by sold units"
+                hint={`What actually shifted. Prev = same SKU last month. Avg/mo is measured from each SKU's FIRST SELLING MONTH, not the whole window — a new line is not averaged across months it did not exist in. Where that window is shorter, the month it starts from is shown beside the figure and Growth is left blank, because there is no earlier period to compare against. Months of cover is on-hand at that average rate. On hand is as at ${report.generatedAt.slice(0, 10)}, when the stock was read.`}
+                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'Sold units', right: true }, { label: 'Prev', right: true }, { label: 'Avg/mo', right: true }, { label: 'Growth', right: true }, { label: 'Revenue ex', right: true }, { label: 'Margin %', right: true }, { label: 'Months cover', right: true }]}
+                rows={report.topByUnits.map(i => [
+                  i.sku, i.name.slice(0, 40), qty(i.onHand), qty(i.monthUnits), qty(i.prevMonthUnits),
+                  i.historyPartial
+                    ? `${qty(i.avgUnitsPerMonth)}  (from ${i.historyFromMonth || i.firstSold || '—'}, no earlier sales)`
+                    : qty(i.avgUnitsPerMonth),
+                  growth(i.growthPct), money(i.monthRevenueEx), pct(i.marginPct),
+                  i.monthsCoverAtAvg == null ? '—' : i.monthsCoverAtAvg.toFixed(1),
+                ])} />
 
               <Table title="Biggest margin earners this month" hint="Margin dollars, not revenue — usually a different list, and the one that pays the wages."
-                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'Margin $', right: true }, { label: 'Margin %', right: true }, { label: 'Units', right: true }, { label: 'Avg/mo', right: true }]}
+                cols={[{ label: 'SKU' }, { label: 'Name' }, { label: 'On hand', right: true }, { label: 'Margin $', right: true }, { label: 'Margin %', right: true }, { label: 'Sold units', right: true }, { label: 'Avg/mo', right: true }]}
                 rows={report.topByMargin.map(i => [i.sku, i.name.slice(0, 44), qty(i.onHand), money(i.monthMargin), pct(i.marginPct), qty(i.monthUnits), qty(i.avgUnitsPerMonth)])} />
 
               <Table title="Slow movers — where the capital is stuck" hint={`Two ways onto this list: nothing sold in the 90 days to the end of ${report.monthLabel}, or it still sells but holds over 180 days of cover with at least $2,000 tied up beyond a 90-day target. Ranked by capital at risk — the value held beyond 90 days of that SKU's own demand — so the money is at the top, not the longest-idle SKU. Stock that has never sold is excluded (kit parts). “Sold since” is what moved after the month closed: a number there means the SKU is waking up.`}
