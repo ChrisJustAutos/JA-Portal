@@ -205,8 +205,11 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
         }
       } else {
         // Back to its own packaging — keep the unit's existing dimensions and
-        // just stop claiming it's in one of our standard boxes.
-        replacement = { ...target, name: target.contents?.[0]?.name || target.name, ownPackaging: true, quantity: 1 }
+        // just stop claiming it's in one of our standard boxes. `boxes` is
+        // stripped explicitly: only pallets carry a stacked-box plan and the
+        // guard above rejects those, but the spread would carry one through if
+        // that ever stopped being true.
+        replacement = { ...target, name: target.contents?.[0]?.name || target.name, ownPackaging: true, quantity: 1, boxes: undefined }
       }
 
       const plan = units.map((u, i) => (i === index ? replacement : u))
