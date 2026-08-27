@@ -70,6 +70,9 @@ export default function WorkshopMapDashboard() {
   const [cat, setCat] = useState('all')
   const [st, setSt] = useState('all')             // state pill — jobs/quotes maps + conversion
   const [distOn, setDistOn] = useState(false)     // fold distributor tunes into booked jobs
+  // Comparison financial years. Maps stay single-year (overlapping dots are
+  // unreadable); Conversion / By State / Vehicle Trend can hold several.
+  const [compare, setCompare] = useState<number[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
   const [pdfBusy, setPdfBusy] = useState(false)
@@ -336,6 +339,7 @@ export default function WorkshopMapDashboard() {
   }
 
   const isMapView = view === 'jobs' || view === 'quotes'
+  const canCompare = !isMapView
   const hasStrips = isMapView || view === 'state'
 
   return (
@@ -357,8 +361,24 @@ export default function WorkshopMapDashboard() {
           {(data?.fys.length || 0) > 1 && (
             <span className="fysel">
               {data!.fys.map(fy => (
-                <button key={fy} className={'mbtn' + (fy === P.fy ? ' active' : '')} onClick={() => { setMonth(-1); load(fy) }}>FY{fy}</button>
+                <button key={fy} className={'mbtn' + (fy === P.fy ? ' active' : '')}
+                  onClick={() => { setMonth(-1); setCompare(c => c.filter(x => x !== fy)); load(fy) }}>FY{fy}</button>
               ))}
+              {/* Comparison years. Only the non-map views can show more than one
+                  year at once — two years of dots on a map is unreadable, so the
+                  control hides itself there rather than lying about what it does. */}
+              {canCompare && data!.fys.filter(f => f !== P.fy).length > 0 && (
+                <>
+                  <span className="cmpLbl">vs</span>
+                  {data!.fys.filter(f => f !== P.fy).map(fy => (
+                    <button key={`c${fy}`} className={'mbtn cmp' + (compare.includes(fy) ? ' active' : '')}
+                      title={compare.includes(fy) ? `Stop comparing FY${fy}` : `Compare against FY${fy}`}
+                      onClick={() => setCompare(c => c.includes(fy) ? c.filter(x => x !== fy) : [...c, fy].slice(-3))}>
+                      FY{String(fy).slice(2)}
+                    </button>
+                  ))}
+                </>
+              )}
             </span>
           )}
           <button className="pdfbtn" onClick={downloadPdf} disabled={pdfBusy || !data?.fy}
@@ -471,7 +491,7 @@ export default function WorkshopMapDashboard() {
         {view === 'state' && <StateView P={P} month={month} cat={cat} />}
         {view === 'trend' && (
           <VehicleTrendView
-            fy={P.fy} months={P.months} cats={P.cats}
+            fy={P.fy} compareFys={canCompare ? compare : []} months={P.months} cats={P.cats}
             month={month} setMonth={setMonth}
             cat={cat} setCat={setCat}
             st={st} setSt={setSt}
@@ -861,9 +881,10 @@ interface TrendRow { bucket: string; group: string; state: string; jobs: number;
 interface TrendResp { fy: number; monthIdx: number | null; granularity: 'month' | 'day'; buckets: { k: string; label: string }[]; rows: TrendRow[] }
 
 function VehicleTrendView({
-  fy, months, cats, month, setMonth, cat, setCat, st, setSt,
+  fy, compareFys, months, cats, month, setMonth, cat, setCat, st, setSt,
 }: {
   fy: number
+  compareFys: number[]
   months: { k: string; label: string }[]
   cats: { k: string; n: string; col: string }[]
   month: number
@@ -877,6 +898,12 @@ function VehicleTrendView({
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [measure, setMeasure] = useState<TrendMeasure>('jobs')
+  // Which vehicle types to compare. Empty = all of them (the default), so the
+  // view opens exactly as it did before anyone touched these chips.
+  const [picked, setPicked] = useState<string[]>([])
+  // Prior-year series, keyed by FY. Compared like-for-like against the same
+  // bucket positions — Jul is Jul in both years.
+  const [priors, setPriors] = useState<Record<number, TrendResp>>({})
 
   // Refetch whenever the FY or month selection changes — the bucket grain
   // itself depends on it, so this can't be filtered client-side.
@@ -891,6 +918,24 @@ function VehicleTrendView({
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [fy, month])
+
+  // Comparison years — one fetch each, same month grain. Fetched separately
+  // rather than server-joined so a slow or missing year degrades to "this year
+  // only" instead of failing the whole view.
+  useEffect(() => {
+    let cancelled = false
+    if (!compareFys.length) { setPriors({}); return }
+    Promise.all(compareFys.map(cf =>
+      fetch(`/api/workshop/map/vehicle-trend?fy=${cf}${month >= 0 ? `&month=${month}` : ''}`)
+        .then(r => r.json()).then(j => (j && !j.error ? [cf, j] as const : null)).catch(() => null),
+    )).then(pairs => {
+      if (cancelled) return
+      const out: Record<number, TrendResp> = {}
+      for (const p of pairs) if (p) out[p[0]] = p[1]
+      setPriors(out)
+    })
+    return () => { cancelled = true }
+  }, [compareFys, month])
 
   const money = MEASURES.find(m => m.k === measure)!.money
 
@@ -921,17 +966,76 @@ function VehicleTrendView({
       bucketTotals[i] += v
       groupTotals[r.group] = (groupTotals[r.group] || 0) + v
     }
+    // Peak of what is actually on screen — when vehicle types are being
+    // compared, a peak belonging to a type you excluded is just misleading.
     let maxVal = 0
-    for (const c of cats) for (const v of series[c.k] || []) if (v > maxVal) maxVal = v
+    for (const c of cats) {
+      if (picked.length && !picked.includes(c.k)) continue
+      for (const v of series[c.k] || []) if (v > maxVal) maxVal = v
+    }
     return { series, bucketTotals, groupTotals, maxVal: maxVal || 1 }
-  }, [resp, cats, measure, st])
+  }, [resp, cats, measure, st, picked])
 
   // Series worth drawing, biggest first — an all-zero group would just be a
-  // flat line on the axis and a wasted legend row.
+  // flat line on the axis and a wasted legend row. When vehicle types have been
+  // picked for comparison, only those are drawn.
   const drawn = useMemo(
-    () => cats.filter(c => (groupTotals[c.k] || 0) > 0).sort((a, b) => (groupTotals[b.k] || 0) - (groupTotals[a.k] || 0)),
-    [cats, groupTotals],
+    () => cats
+      .filter(c => (groupTotals[c.k] || 0) > 0)
+      .filter(c => picked.length === 0 || picked.includes(c.k))
+      .sort((a, b) => (groupTotals[b.k] || 0) - (groupTotals[a.k] || 0)),
+    [cats, groupTotals, picked],
   )
+
+  // "Others" — everything with volume that ISN'T picked, summed into one line,
+  // so a comparison reads as "70 and 300 against the rest" rather than losing
+  // the rest entirely.
+  const [showOthers, setShowOthers] = useState(false)
+  const othersSeries = useMemo(() => {
+    if (!picked.length || !showOthers) return null
+    const n = resp?.buckets.length || 0
+    const out = Array(n).fill(0) as number[]
+    let tot = 0
+    for (const c of cats) {
+      if (picked.includes(c.k)) continue
+      const row = series[c.k] || []
+      for (let i = 0; i < n; i++) { out[i] += row[i] || 0 }
+      tot += groupTotals[c.k] || 0
+    }
+    return tot > 0 ? { vals: out, total: tot } : null
+  }, [picked, showOthers, cats, series, groupTotals, resp])
+
+  // Prior-year comparison lines: the picked vehicles (or all) summed per bucket,
+  // one line per year. Summed rather than per-vehicle-per-year because 5
+  // vehicles x 3 years is 15 lines and nobody can read that.
+  const priorSeries = useMemo(() => {
+    const n = resp?.buckets.length || 0
+    return compareFys.map(cf => {
+      const pr = priors[cf]
+      if (!pr) return null
+      const vals = Array(n).fill(0) as number[]
+      // Compare by bucket POSITION (Jul->Jul), not by date key — the years differ.
+      for (const r of pr.rows) {
+        if (st !== 'all' && r.state !== st) continue
+        if (picked.length && !picked.includes(r.group)) continue
+        const i = pr.buckets.findIndex(b => b.k === r.bucket)
+        if (i < 0 || i >= n) continue
+        vals[i] += (r as any)[measure] || 0
+      }
+      const total = vals.reduce((a, b) => a + b, 0)
+      return total > 0 ? { fy: cf, vals, total } : null
+    }).filter(Boolean) as { fy: number; vals: number[]; total: number }[]
+  }, [compareFys, priors, resp, st, picked, measure])
+
+  // The plot scales to everything drawn on it — prior years and the Others
+  // line included, or they run off the top of the chart.
+  const chartMax = useMemo(() => {
+    let m = 0
+    for (const c of drawn) for (const v of (series[c.k] || [])) if (v > m) m = v
+    for (const ps of priorSeries) for (const v of ps.vals) if (v > m) m = v
+    for (const v of (othersSeries?.vals || [])) if (v > m) m = v
+    return m || 1
+  }, [drawn, series, priorSeries, othersSeries])
 
   const fmtV = (v: number) => money ? fmtK(v) : Math.round(v).toLocaleString('en-AU')
   const grandTotal = Object.values(groupTotals).reduce((s, v) => s + v, 0)
@@ -943,7 +1047,7 @@ function VehicleTrendView({
   const plotH = H - pad.top - pad.bottom
   const nB = resp?.buckets.length || 0
   const xAt = (i: number) => pad.left + (nB <= 1 ? plotW / 2 : (plotW * i) / (nB - 1))
-  const yAt = (v: number) => pad.top + plotH - (v / maxVal) * plotH
+  const yAt = (v: number) => pad.top + plotH - (v / chartMax) * plotH
   // Daily views get a lot of ticks — thin them so labels stay readable.
   const tickEvery = nB > 20 ? Math.ceil(nB / 15) : 1
 
@@ -960,6 +1064,25 @@ function VehicleTrendView({
             {mo.label.split(' ')[0]}<span className="mt">daily</span>
           </button>
         ))}
+      </div>
+
+      <div className="strip vehs" style={{ margin: '0 0 8px', padding: 0, background: 'none', border: 'none' }}>
+        <span className="striplabel">Compare</span>
+        <button className={'mbtn' + (picked.length === 0 ? ' active' : '')}
+          title="Show every vehicle type" onClick={() => setPicked([])}>All types</button>
+        {cats.filter(c => (groupTotals[c.k] || 0) > 0).map(c => (
+          <button key={`pk${c.k}`} className={'mbtn' + (picked.includes(c.k) ? ' active' : '')}
+            style={picked.includes(c.k) ? { borderColor: c.col, color: c.col } : undefined}
+            title={`Compare ${c.n}`}
+            onClick={() => setPicked(pk => pk.includes(c.k) ? pk.filter(x => x !== c.k) : [...pk, c.k])}>
+            {c.n.replace('LC ', '')}
+          </button>
+        ))}
+        {picked.length > 0 && (
+          <button className={'mbtn' + (showOthers ? ' active' : '')}
+            title="Add everything not picked as a single grey line"
+            onClick={() => setShowOthers(o => !o)}>vs others</button>
+        )}
       </div>
 
       <div className="strip vehs" style={{ margin: '0 0 8px', padding: 0, background: 'none', border: 'none' }}>
@@ -996,8 +1119,8 @@ function VehicleTrendView({
               {/* Gridlines + Y labels */}
               {[0, 0.25, 0.5, 0.75, 1].map((f, i) => (
                 <g key={i}>
-                  <line x1={pad.left} y1={yAt(maxVal * f)} x2={pad.left + plotW} y2={yAt(maxVal * f)} stroke="#243040" strokeWidth={1} />
-                  <text x={pad.left - 8} y={yAt(maxVal * f) + 4} textAnchor="end" fill="#566273" fontSize={11} fontFamily="Space Mono, monospace">{fmtV(maxVal * f)}</text>
+                  <line x1={pad.left} y1={yAt(chartMax * f)} x2={pad.left + plotW} y2={yAt(chartMax * f)} stroke="#243040" strokeWidth={1} />
+                  <text x={pad.left - 8} y={yAt(chartMax * f) + 4} textAnchor="end" fill="#566273" fontSize={11} fontFamily="Space Mono, monospace">{fmtV(chartMax * f)}</text>
                 </g>
               ))}
               {/* X labels */}
@@ -1024,6 +1147,29 @@ function VehicleTrendView({
                   </g>
                 )
               })}
+              {/* Everything not picked, as one grey line — so a two-vehicle
+                  comparison still shows what it's being compared against. */}
+              {othersSeries && (
+                <polyline points={othersSeries.vals.map((v, i) => `${xAt(i)},${yAt(v)}`).join(' ')}
+                          fill="none" stroke="#7A8696" strokeWidth={2} strokeDasharray="1 4"
+                          strokeLinecap="round" />
+              )}
+              {/* Prior years — same hue family, dashed and progressively fainter,
+                  so "which year" reads off the line style and "which vehicle"
+                  keeps reading off colour. */}
+              {priorSeries.map((ps, idx) => (
+                <g key={ps.fy} opacity={0.75 - idx * 0.18}>
+                  <polyline points={ps.vals.map((v, i) => `${xAt(i)},${yAt(v)}`).join(' ')}
+                            fill="none" stroke="#E6EDF3" strokeWidth={2}
+                            strokeDasharray={idx === 0 ? '6 4' : '2 3'}
+                            strokeLinejoin="round" strokeLinecap="round" />
+                  {nB <= 20 && ps.vals.map((v, i) => (
+                    <circle key={i} cx={xAt(i)} cy={yAt(v)} r={2.5} fill="#E6EDF3">
+                      <title>{`FY${ps.fy} · ${resp.buckets[i]?.label}: ${fmtV(v)}`}</title>
+                    </circle>
+                  ))}
+                </g>
+              ))}
               {/* Axes last so they sit above the fills */}
               <line x1={pad.left} y1={pad.top} x2={pad.left} y2={pad.top + plotH} stroke="#3a4658" strokeWidth={1} />
               <line x1={pad.left} y1={pad.top + plotH} x2={pad.left + plotW} y2={pad.top + plotH} stroke="#3a4658" strokeWidth={1} />
@@ -1042,6 +1188,19 @@ function VehicleTrendView({
                 <span className="dot" style={{ background: c.col }} /><span className="nm">{c.n}</span>
                 <span className="num">{fmtV(groupTotals[c.k] || 0)}</span>
               </button>
+            ))}
+            {othersSeries && (
+              <span className="chip" style={{ color: 'var(--wm-muted)', cursor: 'default' }}>
+                <span className="dot" style={{ background: 'var(--wm-muted)' }} /><span className="nm">Others</span>
+                <span className="num">{fmtV(othersSeries.total)}</span>
+              </span>
+            )}
+            {priorSeries.map((ps, idx) => (
+              <span key={ps.fy} className="chip" style={{ color: 'var(--wm-txt)', cursor: 'default' }}>
+                <span className="dash" style={{ borderTopStyle: idx === 0 ? 'dashed' : 'dotted' }} />
+                <span className="nm">FY{ps.fy}</span>
+                <span className="num">{fmtV(ps.total)}</span>
+              </span>
             ))}
           </div>
 
@@ -1160,6 +1319,10 @@ const CSS = `
 .wm-dash .convView{position:absolute;inset:0;overflow-y:auto;padding:18px}
 .wm-dash .cards{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px}
 /* Conversion controls — distributor toggle + table/chart switch */
+.wm-dash .fysel .cmpLbl{font-size:10px;color:var(--wm-muted2);padding:0 4px;align-self:center}
+.wm-dash .fysel .mbtn.cmp{opacity:.75;border-style:dashed}
+.wm-dash .fysel .mbtn.cmp.active{opacity:1;border-style:solid}
+.wm-dash .chip .dash{display:inline-block;width:16px;height:0;border-top:2px dashed var(--wm-txt);margin-right:2px}
 .wm-dash .convCtl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0 4px}
 .wm-dash .distTog{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--wm-txt);background:var(--wm-panel);border:1px solid var(--wm-line);border-radius:8px;padding:7px 11px;cursor:pointer}
 .wm-dash .distTog.off{opacity:.45;cursor:not-allowed}
