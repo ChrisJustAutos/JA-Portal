@@ -244,6 +244,12 @@ export interface CreateConsignmentRequest {
 
 export interface Consignment {
   id: number
+  // The company that owns the consignment. MachShip REQUIRES this on
+  // /apiv2/manifests/manifest, and the createConsignment response is the one
+  // place we reliably see it — GET /apiv2/consignments/{id} is not a real
+  // route (it 404s for every consignment; see b2b-ship-now).
+  companyId?: number | null
+  company?: { id?: number | null } | null
   consignmentNumber: string                       // e.g. "MS123456"
   carrierConsignmentId?: string | null            // the tracking number (carrier-issued)
   status?: { id?: number; name?: string } | null  // e.g. "Unmanifested" / "InTransit" / "Delivered"

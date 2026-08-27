@@ -18,7 +18,13 @@
 // per group.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { manifestConsignments, getConsignment, MachShipApiError, MachShipNotConfiguredError } from './b2b-machship'
+import {
+  manifestConsignments,
+  findConsignmentsByCarrierConsignmentId,
+  findConsignmentsByReference1,
+  MachShipApiError, MachShipNotConfiguredError,
+  type Consignment,
+} from './b2b-machship'
 import { sendDistributorShippedEmail } from './b2b-order-notify'
 
 const LABELS_BUCKET = 'b2b-shipping-labels'
@@ -59,6 +65,7 @@ export interface ShipNowResult {
 const ORDER_FIELDS = `
   id, order_number, status, distributor_id, dropship_pos, is_test,
   machship_consignment_id, machship_consignment_number, machship_manifest_id,
+  machship_company_id, customer_po, freight_chosen_quote,
   tracking_number, freight_service_label, freight_status, shipped_at,
   payment_method, payment_settled_at
 `
@@ -73,6 +80,9 @@ type OrderRow = {
   machship_consignment_id: string | null
   machship_consignment_number: string | null
   machship_manifest_id: string | null
+  machship_company_id: number | null
+  customer_po: string | null
+  freight_chosen_quote: any
   tracking_number: string | null
   freight_service_label: string | null
   freight_status: string | null
@@ -247,21 +257,117 @@ export async function shipNowForOrders(
   // response doesn't carry it ("CompanyId is required" on Banana Coast 000043,
   // 2026-08-11) — the consignment GET does, so resolve it there. Group by it so
   // each company gets ONE manifest (= one pickup booking) for the whole run.
+
+/**
+ * Dig the companyId out of the stored MachShip rate quote. Every order booked
+ * through the portal has one, and it has always carried the field — this is the
+ * cheapest and most reliable source, and needs no API call at all.
+ */
+function companyIdFromQuote(quote: any): number | null {
+  const seen = new Set<any>()
+  const walk = (v: any): number | null => {
+    if (!v || typeof v !== 'object' || seen.has(v)) return null
+    seen.add(v)
+    for (const [k, val] of Object.entries(v)) {
+      if (/^companyId$/i.test(k)) {
+        const n = Number(val)
+        if (Number.isFinite(n) && n > 0) return n
+      }
+      if (val && typeof val === 'object') { const hit = walk(val); if (hit) return hit }
+    }
+    return null
+  }
+  return walk(quote)
+}
+
+/** The account-wide fallback CompanyId, set in B2B Settings. */
+async function loadSettingsCompanyId(c: SupabaseClient): Promise<number | null> {
+  try {
+    const { data } = await c.from('b2b_settings').select('machship_company_id').limit(1).maybeSingle()
+    const n = Number(data?.machship_company_id)
+    return Number.isFinite(n) && n > 0 ? n : null
+  } catch { return null }
+}
+
+/**
+ * Fetch the live consignment WITHOUT the broken direct GET, using the two
+ * lookup endpoints MachShip actually serves — by carrier tracking number, then
+ * by our Reference 1. Same approach the freight poller uses to recover.
+ */
+async function resolveConsignmentForOrder(o: OrderRow): Promise<Consignment | null> {
+  const tracking = String(o.tracking_number || '').trim()
+  const wantId = String(o.machship_consignment_id || '').trim()
+  const pick = (list: Consignment[]): Consignment | null => {
+    if (!list.length) return null
+    const exact = list.find(x => String(x.id) === wantId)
+    if (exact) return exact
+    return list.length === 1 ? list[0] : null
+  }
+  if (tracking) {
+    const byTracking = pick(await findConsignmentsByCarrierConsignmentId([tracking]))
+    if (byTracking) return byTracking
+  }
+  const reference = o.order_number
+    ? o.order_number + (o.customer_po ? ` / ${o.customer_po}` : '')
+    : ''
+  if (reference) {
+    const byRef = pick(await findConsignmentsByReference1([reference]))
+    if (byRef) return byRef
+  }
+  return null
+}
+
+  // ── CompanyId, which MachShip requires on every manifest ────────────────
+  //
+  // This used to come from GET /apiv2/consignments/{id}. That is NOT a real
+  // MachShip route — it 404s for every consignment that has ever existed. The
+  // freight poller hid it by falling back to the returnConsignmentsBy*
+  // lookups (its logs read "re-resolved 71024867 -> 71024867": the SAME id, so
+  // nothing was ever stale — the route was wrong). Ship Now had no fallback,
+  // so companyId was silently null and manifesting failed outright once
+  // MachShip started enforcing it.
+  //
+  // Resolution order, cheapest and most trustworthy first:
+  //   1. the id captured on the order when the consignment was booked
+  //   2. the MachShip rate quote already stored on the order — it has carried
+  //      companyId all along on every order since 2026-08-06; nothing was
+  //      reading it
+  //   3. the configured account-wide fallback (B2B settings)
+  //   4. a live lookup by carrier tracking number / our Reference 1 — the two
+  //      endpoints that actually work
+  const fallbackCompanyId = await loadSettingsCompanyId(c)
+
   const groups = new Map<string, { companyId: number | null; orders: OrderRow[] }>()
   for (const o of todo) {
-    let companyId: number | null = null
-    try {
-      const got: any = await getConsignment(o.machship_consignment_id as string)
-      companyId = got?.companyId ?? got?.company?.id ?? null
-    } catch (e: any) {
-      if (e instanceof MachShipNotConfiguredError) {
-        return { ok: false, httpStatus: 503, notConfigured: true, error: e.message, results }
+    let companyId: number | null = o.machship_company_id ?? companyIdFromQuote(o.freight_chosen_quote) ?? fallbackCompanyId ?? null
+
+    if (!companyId) {
+      try {
+        const found = await resolveConsignmentForOrder(o)
+        companyId = (found?.companyId ?? found?.company?.id ?? null) as number | null
+        if (companyId) {
+          // Persist it so this order never needs the lookup again.
+          await c.from('b2b_orders').update({ machship_company_id: companyId }).eq('id', o.id)
+        }
+      } catch (e: any) {
+        if (e instanceof MachShipNotConfiguredError) {
+          return { ok: false, httpStatus: 503, notConfigured: true, error: e.message, results }
+        }
+        console.error(`ship-now: companyId lookup failed for order ${o.id}:`, e?.message || e)
       }
-      // Fall through with a null companyId — the manifest call will report if
-      // it's genuinely required and missing.
-      console.error(`ship-now: consignment GET failed for order ${o.id}:`, e?.message || e)
     }
-    const key = String(companyId ?? 'none')
+
+    if (!companyId) {
+      // Fail this order with something actionable instead of letting MachShip
+      // answer "CompanyId is required", which says nothing about what to do.
+      results.push({
+        order_id: o.id, order_number: o.order_number, ok: false,
+        error: 'Could not determine the MachShip CompanyId for this consignment. Set the fallback in B2B Settings → Freight, or re-book the freight.',
+      })
+      continue
+    }
+
+    const key = String(companyId)
     if (!groups.has(key)) groups.set(key, { companyId, orders: [] })
     groups.get(key)!.orders.push(o)
   }

@@ -203,6 +203,11 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     ...(opts.packMode ? { freight_pack_mode: opts.packMode } : {}),
     machship_consignment_id: String(consignment.id),
     machship_consignment_number: consignment.consignmentNumber || null,
+    // Captured HERE because this is the only response that reliably carries it,
+    // and the manifest call cannot go without it.
+    ...(consignment.companyId ?? consignment.company?.id
+      ? { machship_company_id: Number(consignment.companyId ?? consignment.company?.id) }
+      : {}),
     tracking_number: consignment.carrierConsignmentId || null,
     freight_eta_at: consignment.etaUtc || consignment.etaLocal || null,
     freight_status: consignment.status?.name?.toLowerCase() || 'unmanifested',
