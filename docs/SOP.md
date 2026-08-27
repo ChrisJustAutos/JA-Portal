@@ -134,6 +134,10 @@ Read it before you start chasing a variance:
   sitting for months is usually a job somebody forgot to invoice; that is worth chasing on its own.
 - **↻ Check Mechanics Desk** re-runs it (a couple of minutes). It also runs by itself early each weekday morning, so
   it is normally current before anyone starts counting.
+- **⬇ Export CSV** downloads whatever you are looking at — the view you are on and anything you have typed in the
+  search box. **By part** gives one row per part with the Should count column, ready to sit next to your count sheet
+  in Excel. **By car** gives one row per part on each car, which is the sheet to carry around the shop when you are
+  checking what is actually bolted to what. Both start with the date the check ran.
 
 **Cars booked in for later are deliberately NOT counted**, even when their parts have already been picked — the car
 isn't here, so those parts should still be on the shelf for you to find. If the panel says it's over a day old, or
