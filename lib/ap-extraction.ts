@@ -160,8 +160,15 @@ async function runExtraction(content: any[], modelOverride?: string): Promise<Ex
   const model = modelOverride || process.env.AP_EXTRACTION_MODEL || DEFAULT_MODEL
 
   const body = {
-    model,
-    max_tokens: 4096,
+    // 4096 was too small and failed SILENTLY-ish: a long invoice (many line
+    // items) ran past the cap, the JSON came back truncated mid-array, and
+    // JSON.parse threw "Expected ',' or ']' after array element in JSON at
+    // position 9036". That is what swallowed MPI Automotive 655307 twice on
+    // 2026-08-26 - the real cause was invisible for two days because the
+    // caller filed the throw as "not an invoice".
+    // 16000 is the documented default for non-streaming requests and is well
+    // inside every extraction model's output cap.
+    max_tokens: 16000,
     system: buildSystemPrompt(),
     messages: [{ role: 'user', content }],
   }
@@ -182,6 +189,16 @@ async function runExtraction(content: any[], modelOverride?: string): Promise<Ex
   }
 
   const data = await r.json()
+  // Truncation must announce itself. Without this the only symptom is a JSON
+  // parse error from a half-written array, which reads like a corrupt document
+  // rather than "the answer did not fit".
+  if (data.stop_reason === 'max_tokens') {
+    throw new Error(
+      `AP extraction: model output hit the ${body.max_tokens}-token cap and the JSON is truncated `
+      + `(${data.usage?.output_tokens ?? '?'} output tokens). The document is probably very long - `
+      + `raise max_tokens or split it.`,
+    )
+  }
   const text = data.content?.[0]?.text || ''
   const raw = extractJson(text)
   const invoice = validateAndNormalise(raw)

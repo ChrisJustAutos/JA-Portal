@@ -857,8 +857,21 @@ async function processInvoice(
       //
       // It is an ERROR now: the reason is recorded, the bytes are staged so the
       // document can actually be looked at, and the 3-strike guard retries it.
+      const raw = String(e?.message || e)
+      // ⚠ Not every throw is a malfunction. The extractor THROWS "missing both
+      // invoice_number and total_inc_gst - no anchors to trust extraction" as a
+      // VERDICT: it read the thing fine, and the thing is not a bill. That is
+      // the signature image in a forwarded email, the T&C page, the e-ticket.
+      // Retrying those 3x and then paging someone is pure noise - which is
+      // exactly what the first cut of this fix did to Chris's forward
+      // (2026-08-28). Terminal and silent, as before.
+      const isVerdict = /no anchors to trust extraction/i.test(raw)
       const flagged = await maybeFlagStaffPhoto(c, ctx, inv, null)
-      const why = `could not read the document: ${String(e?.message || e).slice(0, 300)}`
+      if (isVerdict) {
+        if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', error: flagged.note || 'read OK but not a bill: no invoice number or total to anchor on', slackTs: flagged.ts, pdfStoragePath: flagged.stagedPath })
+        return { ...base, supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
+      }
+      const why = `could not read the document: ${raw.slice(0, 300)}`
       const staged = flagged.stagedPath || (dryRun ? null : (await stageAndSign(c, msg, attId, bytes, kind).catch(() => null))?.path || null)
       const last = (ctx.attempt || 1) >= MAX_ERROR_ATTEMPTS
       let ts = flagged.ts
