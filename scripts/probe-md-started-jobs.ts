@@ -129,6 +129,45 @@ async function main() {
     const rows = details.filter(Boolean) as any[]
     console.table(rows)
 
+    // ── where do the jobs sit in time? ───────────────────────────────────
+    // Chris confirmed 2026-08-27: a STARTED job is `new` with a date that has
+    // arrived. `preparing` is MD's forward forecast — jobs booked ahead with
+    // parts already prepped — so it is excluded however far out it runs. This
+    // bucketing answers the only remaining design question: how far BACK the
+    // sweep must reach before it stops finding started jobs.
+    line('Q6b — age distribution of jobs carrying tracked parts (unfinalized)')
+    const nowMs = today.getTime()
+    const buckets: [string, number, number][] = [
+      ['future',        -1e9, -0.5],
+      ['0-7d ago',       -0.5, 7],
+      ['8-30d ago',       7, 30],
+      ['31-45d ago',     30, 45],
+      ['46-90d ago',     45, 90],
+      ['91-180d ago',    90, 180],
+      ['181-365d ago',  180, 365],
+      ['>365d ago',     365, 1e9],
+    ]
+    const withParts = rows.filter(r => r.tracked_lines > 0 && r.inv_finalized !== true)
+    const ageOf = (jid: number) => {
+      const m = jobMeta.get(jid)!
+      return (nowMs - new Date(`${m.day}T12:00:00+10:00`).getTime()) / 86400000
+    }
+    console.log('  bucket        | new jobs/units (STARTED per Chris) | preparing jobs/units (excluded)')
+    for (const [label, lo, hi] of buckets) {
+      const inB = withParts.filter(r => { const a = ageOf(r.job); return a > lo && a <= hi })
+      if (!inB.length) continue
+      const n = inB.filter(r => r.diary_status === 'new')
+      const p = inB.filter(r => r.diary_status === 'preparing')
+      const u = (arr: any[]) => Math.round(arr.reduce((s, r) => s + r.tracked_qty, 0) * 10) / 10
+      console.log(`  ${label.padEnd(13)} | ${String(n.length).padStart(3)} / ${String(u(n)).padStart(7)}                      | ${String(p.length).padStart(3)} / ${u(p)}`)
+    }
+    const startedAll = withParts.filter(r => r.diary_status === 'new' && ageOf(r.job) > -0.5)
+    console.log(`
+  >> CHRIS'S RULE (new + today-or-earlier + unfinalized + has parts):`)
+    console.log(`     ${startedAll.length} job(s), ${Math.round(startedAll.reduce((s, r) => s + r.tracked_qty, 0) * 10) / 10} units`)
+    const oldest = startedAll.map(r => Math.round(ageOf(r.job))).sort((a, b) => b - a).slice(0, 8)
+    console.log(`     oldest started jobs, days ago: ${JSON.stringify(oldest)}`)
+
     // ── the shape of the answer under Chris's definition ─────────────────
     line('Q7 — candidate rule: not finished + invoice not finalized + has tracked parts')
     const live = rows.filter(r => r.finished !== true && r.inv_finalized !== true && r.tracked_lines > 0)

@@ -11,6 +11,13 @@ name: Probe MD started jobs (manual)
 
 on:
   workflow_dispatch:
+    inputs:
+      back_days:
+        description: 'Days to sweep backwards (default 45)'
+        required: false
+      fwd_days:
+        description: 'Days to sweep forwards (default 14)'
+        required: false
 
 concurrency:
   # Shared with the other MD workers — a probe must never land on top of a
@@ -37,4 +44,6 @@ jobs:
           MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
           MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
           MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          BACK_DAYS:                ${{ github.event.inputs.back_days }}
+          FWD_DAYS:                 ${{ github.event.inputs.fwd_days }}
         run: npx tsx scripts/probe-md-started-jobs.ts
