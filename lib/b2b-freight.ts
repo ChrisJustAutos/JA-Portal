@@ -244,6 +244,57 @@ async function loadFreightSettings(): Promise<FreightSettings | null> {
   return (data as any) || null
 }
 
+// ── Tiered freight markup (migration 208) ─────────────────────────
+// A flat percentage charged the same 20% on a $2,800 consignment as on a $60
+// one. Bands are read against what the CARRIER charges us, ex GST, and the
+// bound is INCLUSIVE: $500 exactly is in the "up to $500" band.
+
+export interface MarkupTier {
+  up_to_ex_gst: number | null   // null = the open-ended top band
+  markup_percent: number
+}
+
+async function loadMarkupTiers(): Promise<MarkupTier[]> {
+  const c = sb()
+  const { data } = await c
+    .from('b2b_freight_markup_tiers')
+    .select('up_to_ex_gst, markup_percent')
+    .eq('is_active', true)
+  const rows = (data || []).map((r: any) => ({
+    up_to_ex_gst: r.up_to_ex_gst == null ? null : Number(r.up_to_ex_gst),
+    markup_percent: Number(r.markup_percent),
+  }))
+  // Cheapest band first, open-ended last, whatever order the DB returned.
+  rows.sort((a, b) => {
+    if (a.up_to_ex_gst == null) return 1
+    if (b.up_to_ex_gst == null) return -1
+    return a.up_to_ex_gst - b.up_to_ex_gst
+  })
+  return rows
+}
+
+/**
+ * The markup percent for a carrier price. First band whose (inclusive) bound
+ * the price fits, else the open-ended band, else `fallback` — which is the
+ * legacy flat b2b_settings.freight_markup_percent, so an empty tier table
+ * prices exactly as it did before this existed.
+ *
+ * NOTE the deliberate consequence of a descending scale on a per-consignment
+ * basis: the bands are CLIFFS, not a sliding scale. A $500 carrier price earns
+ * $100 of markup and a $501 one earns $50.10. That is what was asked for
+ * (Chris 2026-08-27); a smooth version would have to mark up each band's slice
+ * separately, the way income tax does.
+ */
+export function resolveMarkupPct(baseExGst: number, tiers: MarkupTier[], fallback: number): number {
+  if (!tiers || tiers.length === 0) return fallback
+  for (const t of tiers) {
+    if (t.up_to_ex_gst == null) return t.markup_percent
+    if (baseExGst <= t.up_to_ex_gst) return t.markup_percent
+  }
+  // Bands configured but none open-ended and the price is above them all.
+  return fallback
+}
+
 // The admin-configured standard cartons used by the cartonizer.
 async function loadFreightBoxes(): Promise<FreightBox[]> {
   const c = sb()
@@ -501,7 +552,8 @@ export async function getLiveQuote(
   if (!settings) {
     return { mode: 'unavailable', reason: 'b2b_settings singleton missing' }
   }
-  const markup = Number(settings.freight_markup_percent ?? 20)
+  const flatMarkup = Number(settings.freight_markup_percent ?? 20)
+  const markupTiers = await loadMarkupTiers()
   // Sender suburb/postcode are required even for a routes call.
   if (!settings.machship_from_suburb || !settings.machship_from_postcode) {
     return { mode: 'unavailable', reason: 'MachShip sender address not configured in B2B Settings' }
@@ -566,9 +618,12 @@ export async function getLiveQuote(
     return sum + inbound * Number(it.qty || 0)
   }, 0))
 
-  const markupMultiplier = 1 + (markup / 100)
   const rates: LiveQuoteRate[] = Array.from(best.values()).map(({ route: r, cand, base }) => {
-    const marked = round2(round2(base * markupMultiplier) + surchargeExGst)
+    // Markup is per RATE, not per quote: the band depends on this carrier's
+    // price, so a $480 service and a $520 one on the same order are marked up
+    // differently. markup_pct travels with the rate and is what gets stored.
+    const markup = resolveMarkupPct(round2(base), markupTiers, flatMarkup)
+    const marked = round2(round2(base * (1 + markup / 100)) + surchargeExGst)
     const eta    = r.despatchOptions?.[0]?.etaUtc || r.despatchOptions?.[0]?.etaLocal || null
     const days   = r.despatchOptions?.[0]?.totalBusinessDays ?? r.despatchOptions?.[0]?.totalDays ?? null
     return {

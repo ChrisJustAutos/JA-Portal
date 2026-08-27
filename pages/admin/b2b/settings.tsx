@@ -16,6 +16,7 @@ import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
 import EmailTemplatesManager from '../../../components/b2b/EmailTemplatesManager'
 import FreightPackagingManager from '../../../components/b2b/FreightPackagingManager'
 import FreightCarriersManager from '../../../components/b2b/FreightCarriersManager'
+import FreightMarkupTiersManager from '../../../components/b2b/FreightMarkupTiersManager'
 import { useConfirm } from '../../../components/ui/Feedback'
 import { T, alpha } from '../../../lib/ui/theme'
 import { A, Btn, btnStyle, cardStyle, Banner, PageTitle, Field, inputStyle, RADIUS, SHADOW } from '../../../components/b2b/ui'
@@ -466,7 +467,13 @@ export default function B2BSettingsPage({ user }: Props) {
               {/* ─── Freight pricing & sender (MachShip) ─── */}
               <Section id="freight-pricing" activeId={openSectionId} onClose={closeSection} title="Freight Pricing &amp; Sender Address"
                 description="Markup applied to MachShip's quoted price before showing it to distributors, plus the pickup address used for every booking. Both are required for live quoting and booking to work end-to-end.">
-                <Field label="Markup %" hint="Added on top of MachShip's quote (e.g. 20 = quote × 1.20). Range 0–200.">
+                <div style={{fontSize:13,color:T.text2,fontWeight:650,marginBottom:8}}>Markup bands</div>
+                <FreightMarkupTiersManager/>
+
+                <div style={{height:20}}/>
+
+                <div style={{fontSize:13,color:T.text2,fontWeight:650,marginBottom:8}}>Fallback markup</div>
+                <Field label="Markup %" hint="Only used when NO bands are configured above, or when a carrier price falls outside every band. Added on top of MachShip's quote (e.g. 20 = quote × 1.20). Range 0–200.">
                   <input
                     type="number"
                     min={0}

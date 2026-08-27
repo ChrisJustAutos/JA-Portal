@@ -415,6 +415,26 @@ A pallet is now filled by **weight *and* by space**, and it is only offered if t
 
 **⚠** Deleting or switching off every pallet means orders ship in cartons no matter how heavy they are. The list warns you when it is empty.
 
+### 4.3c Freight markup bands (Admin → B2B → Settings → Freight Pricing)
+
+**New 27 August 2026.** The markup added to the carrier's price is no longer one number for every job. It is now a set of bands, and they came from Chris:
+
+| What the carrier charges us (ex GST) | Markup |
+|---|---|
+| up to $500 | 20% |
+| over $500 to $1,000 | 10% |
+| over $1,000 | 5% |
+
+**The band is picked by OUR cost, not the price the distributor pays.** MachShip quotes us $480, that is the first band, 20% is added, the distributor sees $576.
+
+**The upper limit is inclusive.** $500.00 exactly is in the 20% band; $500.01 is in the 10% band.
+
+**⚠ The bands are steps, not a sliding scale — and that has a sharp edge.** A $500.00 carrier price earns us $100. A $500.01 one earns $50. So a slightly dearer consignment can cost the distributor *less* overall. This is deliberate, but it means the boundaries are worth knowing when you are near one: if a quote comes back just over $500 or just over $1,000, sending it a different way (see the packing options in 4.3b) may cross a boundary and change the total more than you would expect.
+
+**Editing them.** Each row is a band; *Up to $* is its top and blanking it makes it the open-ended top band (there can only be one). Add or delete bands freely. **Fallback markup** underneath is only used if there are no bands at all, or if a price somehow falls outside every band — it is a safety net, not the normal path.
+
+This applies to **live carrier quotes only**. Postcode-zone rates, flat-rate satchels and drop-ship freight all carry a price you set directly, so there is no markup to band.
+
 ### 4.3b Freight quote (Admin → B2B → Freight quote)
 
 **New 27 August 2026.** A calculator: add products, type a suburb and postcode, press **Quote freight**, get live MachShip rates. No order is created and nothing is saved - use it freely for "what would this cost to send to X". It replaces having to open the test-order builder just to see a price.
