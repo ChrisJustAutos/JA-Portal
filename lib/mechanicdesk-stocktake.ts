@@ -893,6 +893,259 @@ export async function collectPrePickDemand(
   return { jobsCount: jobIds.size, items, jobs, jobItems }
 }
 
+// ── Parts on cars (Stocktake MD checker) ──────────────────────────────────
+// Parts already fitted to cars that are in the workshop, on jobs MD hasn't
+// invoiced yet — so MD (and MYOB behind it) still counts them as on-hand and a
+// stocktake count comes up short.
+//
+// WHAT QUALIFIES (Chris, 2026-08-27): a STARTED job — the car is actually here.
+//   • diary status `new`  (probed: MD only has new / preparing / finished)
+//   • the diary date has arrived — guaranteed by sweeping BACKWARDS only
+//   • the invoice is not yet finalized (`invoice.finalized !== true` is the
+//     stock-deduction gate; once finalized MD has taken the stock off)
+//   • the job carries tracked stock lines
+// `preparing` is deliberately EXCLUDED: it is MD's forward forecast — jobs
+// booked ahead with parts prepped. Those parts may be off the shelf, but the
+// car is not in, so they are not "on a car". Probed 2026-08-27: 48 forward
+// `preparing` jobs held 404 units, more than double the real figure.
+//
+// Enumeration is a day-by-day diary sweep because MD offers nothing better:
+// /auto_workshop/{jobs,job_board,wip,...} all 404 and /jobs.json 504s.
+// The oldest qualifying job when probed was 209 days old, hence the year-long
+// default lookback.
+
+export interface MdOnCarItem {
+  md_stock_id: number
+  sku: string | null
+  name: string | null
+  on_cars: number            // units across qualifying jobs
+  jobs_count: number         // how many cars it is spread over
+  on_hand: number | null     // MD quantity at pull time
+  available: number | null   // MD available_quantity (= on_hand − allocated)
+  buy_price: number | null
+  bin: string | null
+  location: string | null
+}
+
+export interface MdOnCarJob {
+  md_job_id: number
+  job_number: string | null
+  customer_name: string | null
+  vehicle: string | null
+  rego: string | null
+  description: string | null
+  diary_status: string | null
+  invoice_number: string | null
+  scheduled_at: string | null
+  days_open: number | null
+  parts_count: number
+  parts_qty: number
+  parts_value: number
+}
+
+export interface MdOnCarJobItem {
+  md_job_id: number
+  md_stock_id: number
+  sku: string | null
+  name: string | null
+  quantity: number
+}
+
+export interface MdOnCarResult {
+  fromYmd: string
+  toYmd: string
+  daysSwept: number
+  daysFailed: number
+  jobsScanned: number
+  items: MdOnCarItem[]
+  jobs: MdOnCarJob[]
+  jobItems: MdOnCarJobItem[]
+  unitsTotal: number
+  valueTotal: number
+}
+
+/**
+ * Sweep the MD diary backwards from today and return the tracked parts sitting
+ * on started jobs. `lookbackDays` defaults to a year.
+ */
+export async function collectPartsOnCars(
+  client: MdClient,
+  opts: { lookbackDays?: number; log?: (m: string) => void; relogin?: () => Promise<void> } = {},
+): Promise<MdOnCarResult> {
+  const log = opts.log || (() => {})
+  const lookback = Math.max(1, Math.min(opts.lookbackDays ?? 365, 1000))
+
+  const today = new Date()
+  const days: Date[] = []
+  for (let off = lookback; off >= 0; off--) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - off)
+    days.push(d)
+  }
+  const ymd = (d: Date) => d.toISOString().slice(0, 10)
+  const bounds = (d: Date, end = false) => `${ymd(d)}T${end ? '23:59:59' : '00:00:00'}+10:00`
+
+  // A 401 mid-sweep would otherwise quietly shrink the result, which on this
+  // screen reads as "nothing is on a car" — the most misleading answer possible.
+  let reloginsUsed = 0
+  const MAX_RELOGINS = 4
+  const getWithRecovery = async <T>(path: string): Promise<T> => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await mdFetch<T>(client, path)
+      } catch (e: any) {
+        const msg = String(e?.message || e)
+        const isAuth = /→\s*401\b/.test(msg) && /login|different computer/i.test(msg)
+        if (isAuth && opts.relogin && reloginsUsed < MAX_RELOGINS) {
+          reloginsUsed++
+          log(`  session evicted — re-logging in (${reloginsUsed}/${MAX_RELOGINS})`)
+          await new Promise(r => setTimeout(r, 1500 * reloginsUsed))
+          await opts.relogin()
+          continue
+        }
+        if (attempt < 2 && !isAuth) { await new Promise(r => setTimeout(r, 700 * (attempt + 1))); continue }
+        throw e
+      }
+    }
+    throw new Error(`unreachable: ${path}`)
+  }
+
+  // 1. Diary sweep — collect candidate jobs. Only `new` survives; everything
+  //    found is dated today-or-earlier because we never look forward.
+  const jobDay = new Map<number, string>()
+  const jobStatus = new Map<number, string>()
+  let daysFailed = 0
+  await mapPool(days, 6, async (d) => {
+    try {
+      const diary = await getWithRecovery<any>(
+        `/auto_workshop/diary?start=${encodeURIComponent(bounds(d))}&end=${encodeURIComponent(bounds(d, true))}`,
+      )
+      for (const arr of [diary?.bookings, diary?.jobs]) {
+        for (const row of (Array.isArray(arr) ? arr : [])) {
+          const jid = Number(row?.job_id ?? row?.id)
+          if (!jid || !isFinite(jid)) continue
+          const st = String(row?.status ?? '')
+          if (st !== 'new') continue
+          // Keep the most RECENT diary day for a job that spans several: that
+          // is when the car was last in, which is what "days open" should mean.
+          const prev = jobDay.get(jid)
+          if (!prev || ymd(d) > prev) jobDay.set(jid, ymd(d))
+          jobStatus.set(jid, st)
+        }
+      }
+    } catch (e: any) {
+      daysFailed++
+      log(`  diary ${ymd(d)} failed: ${String(e?.message).slice(0, 120)}`)
+    }
+  })
+  log(`  swept ${days.length} day(s) (${daysFailed} failed) — ${jobDay.size} candidate job(s) with status "new"`)
+
+  // 2. Open each candidate and keep the ones whose stock is genuinely still
+  //    on the books.
+  const ids = Array.from(jobDay.keys())
+  const details = await mapPool(ids, 8, async (jid) => {
+    try { return await getWithRecovery<any>(`/jobs/${jid}?id=${jid}`) }
+    catch (e: any) { log(`  job ${jid} failed: ${String(e?.message).slice(0, 120)}`); return null }
+  })
+
+  const agg = new Map<number, MdOnCarItem>()
+  const jobsOut: MdOnCarJob[] = []
+  const jobItems: MdOnCarJobItem[] = []
+  const stockJobs = new Map<number, Set<number>>()
+  let unitsTotal = 0
+  let valueTotal = 0
+
+  for (let k = 0; k < ids.length; k++) {
+    const jid = ids[k]
+    const job = details[k]
+    if (!job) continue
+    if (job?.finished === true) continue                 // already closed out
+    const inv = job?.invoice || {}
+    if (inv?.finalized === true) continue                // MD has taken the stock
+
+    const lines = Array.isArray(inv?.items) ? inv.items : []
+    const perJob = new Map<number, { sku: string | null; name: string | null; qty: number; buy: number | null }>()
+    for (const it of lines) {
+      const st = it?.stock
+      const qty = Number(it?.quantity) || 0
+      // Tracked physical stock only — skips labour, freight, misc and headings.
+      if (!st || st.disable_tracking === true || !it?.stock_id || qty <= 0) continue
+      const sid = Number(it.stock_id)
+      const sku = it.stock_number || st.stock_number || null
+      const name = st.name || it.description || null
+      const buy = st.buy_price != null ? Number(st.buy_price) : null
+      const pe = perJob.get(sid)
+      if (pe) pe.qty += qty
+      else perJob.set(sid, { sku, name, qty, buy })
+
+      const cur = agg.get(sid)
+      if (cur) cur.on_cars += qty
+      else agg.set(sid, {
+        md_stock_id: sid, sku, name, on_cars: qty, jobs_count: 0,
+        on_hand: st.quantity != null ? Number(st.quantity) : null,
+        available: st.available_quantity != null ? Number(st.available_quantity) : null,
+        buy_price: buy, bin: st.bin || null, location: st.location || null,
+      })
+      if (!stockJobs.has(sid)) stockJobs.set(sid, new Set())
+      stockJobs.get(sid)!.add(jid)
+    }
+    if (perJob.size === 0) continue                      // no tracked parts → not on a car
+
+    const day = jobDay.get(jid)!
+    const daysOpen = Math.max(0, Math.round((today.getTime() - new Date(`${day}T12:00:00+10:00`).getTime()) / 86400000))
+    let qty = 0, value = 0
+    for (const [sid, e] of Array.from(perJob.entries())) {
+      const q = Math.round(e.qty * 100) / 100
+      jobItems.push({ md_job_id: jid, md_stock_id: sid, sku: e.sku, name: e.name, quantity: q })
+      qty += q
+      value += q * (e.buy ?? 0)
+    }
+    unitsTotal += qty
+    valueTotal += value
+
+    const b = job?.booking || {}
+    const vehicle = [b?.make, b?.model, b?.year].filter(Boolean).join(' ').trim()
+      || (job?.title ? String(job.title).split('\n')[0] : '')
+    jobsOut.push({
+      md_job_id: jid,
+      job_number: job?.number != null ? String(job.number) : null,
+      customer_name: b?.name || b?.customer?.name || null,
+      vehicle: vehicle || null,
+      rego: b?.registration_number || job?.registration_number || null,
+      description: job?.description || job?.job_types_title || null,
+      diary_status: jobStatus.get(jid) || null,
+      invoice_number: inv?.number != null ? String(inv.number) : null,
+      scheduled_at: job?.time || `${day}T00:00:00+10:00`,
+      days_open: daysOpen,
+      parts_count: perJob.size,
+      parts_qty: Math.round(qty * 100) / 100,
+      parts_value: Math.round(value * 100) / 100,
+    })
+  }
+
+  for (const [sid, jobset] of Array.from(stockJobs.entries())) {
+    const it = agg.get(sid)
+    if (it) { it.jobs_count = jobset.size; it.on_cars = Math.round(it.on_cars * 100) / 100 }
+  }
+
+  const items = Array.from(agg.values()).sort((a, b) => b.on_cars - a.on_cars)
+  jobsOut.sort((a, b) => (b.days_open ?? 0) - (a.days_open ?? 0))
+  log(`  ${jobsOut.length} started job(s) holding ${Math.round(unitsTotal * 100) / 100} unit(s) across ${items.length} SKU(s)`)
+
+  return {
+    fromYmd: ymd(days[0]),
+    toYmd: ymd(days[days.length - 1]),
+    daysSwept: days.length,
+    daysFailed,
+    jobsScanned: ids.length,
+    items,
+    jobs: jobsOut,
+    jobItems,
+    unitsTotal: Math.round(unitsTotal * 100) / 100,
+    valueTotal: Math.round(valueTotal * 100) / 100,
+  }
+}
+
 // ── Customers (Monday → MD customer import, probe 2026-07-13) ─────────────
 // MD's customer search + object shape confirmed via probe-md-customers:
 // GET /customers.json?query=<term> → array of customer objects with

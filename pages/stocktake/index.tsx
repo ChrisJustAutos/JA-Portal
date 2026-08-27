@@ -22,6 +22,7 @@ import { UserRole, roleHasPermission } from '../../lib/permissions'
 import { T } from '../../lib/ui/theme'
 import { SkeletonRows } from '../../components/ui'
 import { useConfirm } from '../../components/ui/Feedback'
+import PartsOnCarsPanel from '../../components/workshop/PartsOnCarsPanel'
 
 // If a row stays in matching/pushing longer than this, we treat it as
 // stuck (the GH Action worker probably crashed before it could PATCH
@@ -189,6 +190,8 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
           {error && <div style={{background:'rgba(240,78,78,0.1)', border:`1px solid ${T.red}40`, borderRadius:8, padding:'10px 14px', color:T.red, fontSize:13, marginBottom:12}}>{error}</div>}
 
           {canEdit && <UploadCard onUploaded={(id) => router.push(`/stocktake/${id}`)} />}
+
+          <PartsOnCarsPanel canEdit={canEdit} />
 
           <div style={{marginTop:30}}>
             <h2 style={{margin:'0 0 12px 0', fontSize:14, fontWeight:600, color:T.text2, textTransform:'uppercase', letterSpacing:'0.05em'}}>

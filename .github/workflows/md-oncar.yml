@@ -1,0 +1,73 @@
+name: Parts on cars — Mechanics Desk worker
+
+# Finds the tracked parts sitting on STARTED jobs in MechanicDesk — cars in the
+# workshop whose jobs haven't been invoiced, so MD (and MYOB behind it) still
+# counts their parts as on-hand. Feeds the "On cars" panel on Stocktake (MD),
+# which is how a short shelf count gets explained instead of re-counted.
+#
+# MD has no usable jobs-list endpoint (/auto_workshop/* 404, /jobs.json 504),
+# so the worker sweeps the diary day by day, backwards from today. Sweeping
+# backwards only is also what makes "the booking date has arrived" automatic.
+#
+# Triggers:
+#   - repository_dispatch ('oncar-pull') from /api/workshop/oncar/refresh
+#   - workflow_dispatch (manual, lookback input)
+#   - schedule: early each weekday morning, so the panel is current before
+#     anyone starts counting
+
+on:
+  repository_dispatch:
+    types:
+      - oncar-pull
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: 'Days to sweep backwards (default 365)'
+        required: false
+  schedule:
+    # 05:40 AEST (UTC+10) Mon–Sat = 19:40 UTC Sun–Fri.
+    - cron: '40 19 * * 0-5'
+
+concurrency:
+  # Shared with the other MD scrapers — one session per employee account.
+  group: mechanicdesk-session
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: parts on cars
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Pull parts-on-cars snapshot
+        env:
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
+          JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
+          LOOKBACK_DAYS:            ${{ github.event.client_payload.lookback_days || github.event.inputs.lookback_days }}
+          RUN_ID:                   ${{ github.event.client_payload.run_id }}
+          REQUESTED_BY:             ${{ github.event.client_payload.requested_by || 'scheduled' }}
+        run: npx tsx scripts/pull-md-oncar.ts
