@@ -83,16 +83,26 @@ export default function WorkshopMapDashboard() {
   const boundsRef = useRef<L.LatLngBounds | null>(null)
   const mapDivRef = useRef<HTMLDivElement | null>(null)
 
-  const load = useCallback(async (fy?: number) => {
+  // fySel null = let the API choose the default year. Held in state (rather
+  // than only passed to load()) so that changing the comparison years refetches
+  // the SAME primary year instead of silently falling back to the default.
+  const [fySel, setFySel] = useState<number | null>(null)
+
+  const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      const r = await fetch(`/api/workshop/map${fy ? `?fy=${fy}` : ''}`)
+      const qs = new URLSearchParams()
+      if (fySel) qs.set('fy', String(fySel))
+      if (compare.length) qs.set('compare', compare.join(','))
+      const r = await fetch(`/api/workshop/map${qs.toString() ? `?${qs}` : ''}`)
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Failed to load map data')
       setData(d)
     } catch (e: any) { setError(e?.message || 'Failed to load map data') }
     finally { setLoading(false) }
-  }, [])
+  }, [fySel, compare])
+  // Refetches on both a year change and a comparison change — the comparison
+  // payloads come from the server, so the request has to be re-issued.
   useEffect(() => { load() }, [load])
 
   // Export PDF — the whole FY month by month, honouring the vehicle and state
@@ -253,7 +263,7 @@ export default function WorkshopMapDashboard() {
   const runActive = data?.last_run && ['pending', 'running'].includes(data.last_run.status)
   useEffect(() => {
     if (!runActive) return
-    const t = setInterval(() => load(data?.fy || undefined), 20000)
+    const t = setInterval(() => load(), 20000)
     return () => clearInterval(t)
   }, [runActive, load, data?.fy])
 
@@ -264,7 +274,7 @@ export default function WorkshopMapDashboard() {
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Refresh failed')
       setRefreshMsg(d.message || 'Sync started')
-      setTimeout(() => load(data?.fy || undefined), 5000)
+      setTimeout(() => load(), 5000)
     } catch (e: any) { setRefreshMsg(e?.message || 'Refresh failed') }
     finally { setRefreshing(false) }
   }
@@ -351,7 +361,7 @@ export default function WorkshopMapDashboard() {
 
       <header>
         <div className="titlerow">
-          <h1>Just Autos <span className="b">·</span> FY{P.fy} Workshop</h1>
+          <h1>Just Autos <span className="b">·</span> FY{P.fy}{canCompare && compare.length > 0 ? ` vs ${compare.slice().sort((a, b) => b - a).map(f => `FY${f}`).join(', ')}` : ''} Workshop</h1>
           <span className="sub">
             {view === 'conv' ? 'Quotes vs booked jobs' : view === 'state' ? 'State breakdown' : view === 'trend' ? 'Vehicle trend' : (view === 'jobs' ? 'Booked jobs' : 'Quotes')}
             {hasStrips && <> · {month < 0 ? `${P.months[0]?.label} – ${P.months[11]?.label}` : P.months[month]?.label}{cat !== 'all' ? ` · ${NAME[cat]}` : ''}</>}
@@ -362,17 +372,22 @@ export default function WorkshopMapDashboard() {
             <span className="fysel">
               {data!.fys.map(fy => (
                 <button key={fy} className={'mbtn' + (fy === P.fy ? ' active' : '')}
-                  onClick={() => { setMonth(-1); setCompare(c => c.filter(x => x !== fy)); load(fy) }}>FY{fy}</button>
+                  onClick={() => { setMonth(-1); setCompare(c => c.filter(x => x !== fy)); setFySel(fy) }}>FY{fy}</button>
               ))}
               {/* Comparison years. Only the non-map views can show more than one
                   year at once — two years of dots on a map is unreadable, so the
                   control hides itself there rather than lying about what it does. */}
-              {canCompare && data!.fys.filter(f => f !== P.fy).length > 0 && (
+              {data!.fys.filter(f => f !== P.fy).length > 0 && (
+                // Shown but disabled on the map tabs rather than hidden: a
+                // control that vanishes reads as "the buttons don't work".
                 <>
                   <span className="cmpLbl">vs</span>
                   {data!.fys.filter(f => f !== P.fy).map(fy => (
-                    <button key={`c${fy}`} className={'mbtn cmp' + (compare.includes(fy) ? ' active' : '')}
-                      title={compare.includes(fy) ? `Stop comparing FY${fy}` : `Compare against FY${fy}`}
+                    <button key={`c${fy}`} className={'mbtn cmp' + (compare.includes(fy) ? ' active' : '') + (canCompare ? '' : ' na')}
+                      disabled={!canCompare}
+                      title={!canCompare
+                        ? 'Year comparison works on Conversion, By State and Vehicle Trend — two years of dots on a map cannot be read'
+                        : compare.includes(fy) ? `Stop comparing FY${fy}` : `Compare against FY${fy}`}
                       onClick={() => setCompare(c => c.includes(fy) ? c.filter(x => x !== fy) : [...c, fy].slice(-3))}>
                       FY{String(fy).slice(2)}
                     </button>
@@ -487,7 +502,8 @@ export default function WorkshopMapDashboard() {
           </div>
         )}
         {view === 'conv' && <ConversionView P={P} COL={COL} NAME={NAME} st={st}
-          dist={data?.distributor_jobs || null} distOn={distOn} setDistOn={setDistOn} />}
+          dist={data?.distributor_jobs || null} distOn={distOn} setDistOn={setDistOn}
+          comparisons={data?.comparisons || []} />}
         {view === 'state' && <StateView P={P} month={month} cat={cat} />}
         {view === 'trend' && (
           <VehicleTrendView
@@ -515,9 +531,10 @@ export default function WorkshopMapDashboard() {
 
 interface ConvCounts { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }
 
-function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn }: {
+function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons }: {
   P: Payload; COL: Record<string, string>; NAME: Record<string, string>; st: string
   dist: DistributorJobs | null; distOn: boolean; setDistOn: (v: boolean) => void
+  comparisons: { fy: number; payload: Payload; distributor_jobs?: DistributorJobs | null }[]
 }) {
   const [chart, setChart] = useState(false)
 
@@ -562,6 +579,36 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn }: {
     return { c, q, j, v, d, pct: q ? (100 * j) / q : 0 }
   })
 
+  // Comparison years, run through the SAME rules as the primary year — state
+  // filter and the distributor fold included — so the percentages are
+  // like-for-like rather than one year counting things the other doesn't.
+  const cmp = useMemo(() => comparisons.map(cy => {
+    const cp = cy.payload
+    let cc: ConvCounts
+    if (st === 'all') cc = cp.conv
+    else {
+      const qcount: Record<string, number[]> = {}, qval: Record<string, number[]> = {}, jcount: Record<string, number[]> = {}
+      cp.quotes.points.forEach(pt => {
+        if (pcState(pt.pc) !== st) return
+        ;(qcount[pt.g] ||= Array(12).fill(0))[pt.m]++
+        ;(qval[pt.g] ||= Array(12).fill(0))[pt.m] += pt.a
+      })
+      cp.jobs.points.forEach(pt => { if (pcState(pt.pc) === st) (jcount[pt.g] ||= Array(12).fill(0))[pt.m]++ })
+      cc = { qcount, qval, jcount }
+    }
+    const cd = cy.distributor_jobs
+    const useDist = distOn && st === 'all' && !!cd && cd.total > 0
+    const byVeh = CK.map(c => {
+      const q = sum(cc.qcount[c] || [])
+      const jBase = sum(cc.jcount[c] || [])
+      const j = jBase + (useDist && cd ? sum(cd.jcount[c] || []) : 0)
+      return { c, q, j, pct: q ? (100 * j) / q : 0 }
+    })
+    const tq2 = byVeh.reduce((a, b) => a + b.q, 0)
+    const tj2 = byVeh.reduce((a, b) => a + b.j, 0)
+    return { fy: cy.fy, byVeh, tq: tq2, tj: tj2, pct: tq2 ? (100 * tj2) / tq2 : 0 }
+  }), [comparisons, st, distOn])
+
   return (
     <div className="convView">
       <div className="cards">
@@ -598,10 +645,10 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn }: {
 
       <h2>By vehicle — full year</h2>
       {chart ? (
-        <ConvBars rows={rows} COL={COL} NAME={NAME} showDist={on} />
+        <ConvBars rows={rows} COL={COL} NAME={NAME} showDist={on} cmp={cmp} fy={P.fy} />
       ) : (
         <table>
-          <thead><tr><th>Vehicle</th><th>Quotes</th><th>Quoted $</th><th>Avg quote</th><th>Booked jobs</th>{on && <th>of which dist.</th>}<th>Conv %</th></tr></thead>
+          <thead><tr><th>Vehicle</th><th>Quotes</th><th>Quoted $</th><th>Avg quote</th><th>Booked jobs</th>{on && <th>of which dist.</th>}<th>Conv %</th>{cmp.map(cy => <th key={cy.fy}>FY{String(cy.fy).slice(2)} conv %</th>)}</tr></thead>
           <tbody>
             {rows.map(r => (
               <tr key={r.c}>
@@ -612,6 +659,21 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn }: {
                 <td className="num">{r.j}</td>
                 {on && <td className="num" style={{ color: 'var(--wm-muted)' }}>{r.d}</td>}
                 <td className="num" style={{ color: convColor(r.pct) }}>{r.q ? r.pct.toFixed(0) : '0'}%</td>
+                {cmp.map(cy => {
+                  const pv = cy.byVeh.find(b => b.c === r.c)
+                  const delta = pv && pv.q ? r.pct - pv.pct : null
+                  return (
+                    <td key={cy.fy} className="num" style={{ color: 'var(--wm-muted)' }}
+                        title={pv ? `FY${cy.fy}: ${pv.j} jobs / ${pv.q} quotes` : ''}>
+                      {pv && pv.q ? `${pv.pct.toFixed(0)}%` : '–'}
+                      {delta != null && (
+                        <span style={{ display: 'block', fontSize: 9.5, color: delta >= 0 ? 'var(--wm-mint)' : '#e0707a' }}>
+                          {delta >= 0 ? '+' : ''}{delta.toFixed(0)} pts
+                        </span>
+                      )}
+                    </td>
+                  )
+                })}
               </tr>
             ))}
             <tr className="tot">
@@ -622,6 +684,7 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn }: {
               <td className="num">{tj}</td>
               {on && <td className="num" style={{ color: 'var(--wm-muted)' }}>{distTotalInCats}</td>}
               <td className="num">{tq ? (100 * tj / tq).toFixed(0) : '0'}%</td>
+              {cmp.map(cy => <td key={cy.fy} className="num" style={{ color: 'var(--wm-muted)' }}>{cy.tq ? cy.pct.toFixed(0) : '0'}%</td>)}
             </tr>
           </tbody>
         </table>
@@ -673,28 +736,56 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn }: {
 // Bars carry a 2px surface gap and direct labels — the vehicle hues sit in a
 // narrow lightness band, so shape and labels do the separating, not lightness.
 
-function ConvBars({ rows, COL, NAME, showDist }: {
+function ConvBars({ rows, COL, NAME, showDist, cmp, fy }: {
   rows: { c: string; q: number; j: number; d: number; pct: number }[]
   COL: Record<string, string>; NAME: Record<string, string>; showDist: boolean
+  cmp: { fy: number; byVeh: { c: string; q: number; j: number; pct: number }[] }[]
+  fy: number
 }) {
-  const max = Math.max(10, ...rows.map(r => r.pct))
+  // The scale spans every year on screen, or a comparison year taller than the
+  // primary would run past the end of its track.
+  const max = Math.max(10, ...rows.map(r => r.pct), ...cmp.flatMap(cy => cy.byVeh.map(b => b.pct)))
   return (
     <div className="cbars">
       {rows.map(r => (
-        <div key={r.c} className="cbar" title={`${r.j} jobs / ${r.q} quotes${showDist && r.d ? ` — ${r.d} from distributors` : ''}`}>
+        <div key={r.c} className="cbarGrp">
           <div className="cbarLbl"><span className="vd" style={{ background: COL[r.c] }} />{NAME[r.c]}</div>
-          <div className="cbarTrack">
-            <div className="cbarFill" style={{ width: `${Math.max(0.5, (100 * r.pct) / max)}%`, background: COL[r.c] }} />
-            {showDist && r.d > 0 && r.j > 0 && (
-              // The distributor slice of this bar, hatched so it reads as a
-              // different kind of job rather than a different vehicle.
-              <div className="cbarDist" style={{
-                width: `${Math.max(0, (100 * r.pct * (r.d / r.j)) / max)}%`,
-                backgroundImage: `repeating-linear-gradient(135deg, rgba(11,14,19,.55) 0 3px, transparent 3px 6px)`,
-              }} />
-            )}
+          <div className="cbarStack">
+            {/* Primary year — full-strength vehicle colour. */}
+            <div className="cbar" title={`FY${fy}: ${r.j} jobs / ${r.q} quotes${showDist && r.d ? ` — ${r.d} from distributors` : ''}`}>
+              <span className="cbarYr">{cmp.length > 0 ? `FY${String(fy).slice(2)}` : ''}</span>
+              <div className="cbarTrack">
+                <div className="cbarFill" style={{ width: `${Math.max(0.5, (100 * r.pct) / max)}%`, background: COL[r.c] }} />
+                {showDist && r.d > 0 && r.j > 0 && (
+                  // The distributor slice of this bar, hatched so it reads as a
+                  // different kind of job rather than a different vehicle.
+                  <div className="cbarDist" style={{
+                    width: `${Math.max(0, (100 * r.pct * (r.d / r.j)) / max)}%`,
+                    backgroundImage: `repeating-linear-gradient(135deg, rgba(11,14,19,.55) 0 3px, transparent 3px 6px)`,
+                  }} />
+                )}
+              </div>
+              <div className="cbarVal">{r.pct.toFixed(0)}%<span>{r.j}/{r.q}</span></div>
+            </div>
+            {/* Comparison years — same hue (colour follows the vehicle, never
+                the year), stepped back in opacity, year named on the bar. */}
+            {cmp.map((cy, i) => {
+              const b = cy.byVeh.find(x => x.c === r.c)
+              if (!b) return null
+              return (
+                <div key={cy.fy} className="cbar prior" title={`FY${cy.fy}: ${b.j} jobs / ${b.q} quotes`}>
+                  <span className="cbarYr">FY{String(cy.fy).slice(2)}</span>
+                  <div className="cbarTrack">
+                    <div className="cbarFill" style={{
+                      width: `${Math.max(b.q ? 0.5 : 0, (100 * b.pct) / max)}%`,
+                      background: COL[r.c], opacity: 0.5 - i * 0.12,
+                    }} />
+                  </div>
+                  <div className="cbarVal">{b.q ? `${b.pct.toFixed(0)}%` : '–'}<span>{b.j}/{b.q}</span></div>
+                </div>
+              )
+            })}
           </div>
-          <div className="cbarVal">{r.pct.toFixed(0)}%<span>{r.j}/{r.q}</span></div>
         </div>
       ))}
       {showDist && <div className="cbarKey"><span className="hatch" /> hatched = distributor jobs</div>}
@@ -1321,6 +1412,7 @@ const CSS = `
 /* Conversion controls — distributor toggle + table/chart switch */
 .wm-dash .fysel .cmpLbl{font-size:10px;color:var(--wm-muted2);padding:0 4px;align-self:center}
 .wm-dash .fysel .mbtn.cmp{opacity:.75;border-style:dashed}
+.wm-dash .fysel .mbtn.cmp.na{opacity:.3;cursor:not-allowed}
 .wm-dash .fysel .mbtn.cmp.active{opacity:1;border-style:solid}
 .wm-dash .chip .dash{display:inline-block;width:16px;height:0;border-top:2px dashed var(--wm-txt);margin-right:2px}
 .wm-dash .convCtl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0 4px}
@@ -1341,6 +1433,12 @@ const CSS = `
 .wm-dash .cbarDist{position:absolute;left:0;top:0;bottom:0;border-radius:0 4px 4px 0}
 .wm-dash .cbarVal{font-size:13px;font-weight:600;color:var(--wm-txt);text-align:right}
 .wm-dash .cbarVal span{display:block;font-size:10px;font-weight:400;color:var(--wm-muted2)}
+.wm-dash .cbarGrp{display:grid;grid-template-columns:150px 1fr;align-items:start;gap:12px}
+.wm-dash .cbarGrp .cbarLbl{padding-top:2px}
+.wm-dash .cbarStack{display:flex;flex-direction:column;gap:3px}
+.wm-dash .cbarStack .cbar{grid-template-columns:auto 1fr 92px}
+.wm-dash .cbarYr{font-size:9.5px;color:var(--wm-muted2);font-family:'Space Mono',monospace;min-width:0;white-space:nowrap}
+.wm-dash .cbar.prior .cbarVal{color:var(--wm-muted);font-weight:500}
 .wm-dash .cbarKey{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--wm-muted2);margin-top:2px}
 .wm-dash .cbarKey .hatch{width:22px;height:10px;border-radius:2px;background:var(--wm-muted);background-image:repeating-linear-gradient(135deg,rgba(11,14,19,.55) 0 3px,transparent 3px 6px)}
 /* Grouped monthly bars */
