@@ -23,6 +23,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { supplierNumberRule, applySupplierNumberRule, huntPoNumber } from './ap-number-rules'
 import { extractPdfText } from './ap-pdf-text'
+import { amountDueSupplier, readAmountDue } from './ap-amount-due-suppliers'
 import {
   listMessagesWithAttachments,
   listAttachmentMeta,
@@ -338,7 +339,20 @@ async function runMailbox(
 
   for (const msg of messages) {
     let atts: GraphAttachmentMeta[]
-    try { atts = await listAttachmentMeta(mailbox, msg.id) } catch { continue }
+    try {
+      atts = await listAttachmentMeta(mailbox, msg.id)
+    } catch (e: any) {
+      // Was a bare `continue`: silent AND unlogged, so it retried forever with
+      // nobody the wiser. A Graph 404 here means the message moved or was
+      // deleted between listing and fetching — genuinely transient — so log it
+      // as an error against the MESSAGE and let the 3-strike guard handle it.
+      const why = `attachment list failed: ${String(e?.message || e).slice(0, 300)}`
+      if (!dryRun) {
+        await logRow(c, { mailbox, companyFile, msg, attId: 'message', attName: '(attachment list)' }, { outcome: 'error', error: why })
+      }
+      out.processed.push({ messageId: msg.id, attachmentId: 'message', attachmentName: '(attachment list)', supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error: why })
+      continue
+    }
     let anyPosted = false
 
     // Receipt + invoice in the SAME email: only post the invoice. Suppliers
@@ -393,9 +407,28 @@ async function runMailbox(
       if (!kind) continue
 
       // Dedup: processed this (message, attachment) already?
-      const { data: seen } = await c.from('ap_auto_entry_log')
-        .select('id').eq('graph_message_id', msg.id).eq('graph_attachment_id', att.id).maybeSingle()
-      if (seen) { out.skippedDuplicates++; continue }
+      //
+      // ⚠ Deliberately NOT .maybeSingle(). Retries mean a pair can hold MORE
+      // THAN ONE row, and maybeSingle() errors on >1, hands back data=null, and
+      // the guard would read "never seen" — re-extracting the same attachment
+      // every 15 minutes forever, at LLM cost. (Same shape as the
+      // b2b_distributor_users maybeSingle trap.)
+      //
+      // A TERMINAL outcome blocks for good: posted / flagged / skipped_* are all
+      // decisions, and re-deciding them is how you double-post. Only 'error' is
+      // retryable, and only MAX_ERROR_ATTEMPTS times.
+      const { data: seenRows, error: seenErr } = await c.from('ap_auto_entry_log')
+        .select('outcome')
+        .eq('graph_message_id', msg.id).eq('graph_attachment_id', att.id)
+      // A failed lookup must not be read as "unseen" — that is the loop again.
+      if (seenErr) { out.skippedDuplicates++; continue }
+      const priorRowsForAtt = seenRows || []
+      const terminalPrior = priorRowsForAtt.some((r: any) => r.outcome !== 'error')
+      const errorTries = priorRowsForAtt.filter((r: any) => r.outcome === 'error').length
+      if (terminalPrior || errorTries >= MAX_ERROR_ATTEMPTS) { out.skippedDuplicates++; continue }
+      // 1-based: the attempt about to happen. processInvoice raises a card when
+      // the LAST one fails, so a hiccup that clears on retry 2 stays silent.
+      const attempt = errorTries + 1
 
       if (hasInvoiceSibling && isReceiptName(att.name || '')) {
         out.processed.push({ messageId: msg.id, attachmentId: att.id, attachmentName: att.name || '', supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [], error: 'receipt skipped: invoice also attached to this email' })
@@ -405,7 +438,7 @@ async function runMailbox(
 
       let msgItems: AutoEntryItem[] = []
       try {
-        msgItems = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun })
+        msgItems = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun, attempt })
         out.processed.push(...msgItems)
         msgAllItems.push(...msgItems)
         if (msgItems.some(i => i.outcome === 'posted')) anyPosted = true
@@ -554,6 +587,13 @@ function isBatchSource(mailbox: string, fromAddress: string | null | undefined):
 
 const MAX_BATCH_SEGMENTS = 15
 
+// How many times a (message, attachment) whose processing ERRORED is retried
+// before we give up and raise a card. Extraction failures, Graph hiccups and
+// model timeouts are usually transient; before 2026-08-28 a single one was
+// PERMANENT, because the dedup guard treated any log row as "already handled"
+// (two MPI Automotive invoices lost that way, 2026-08-26).
+const MAX_ERROR_ATTEMPTS = 3
+
 // Staff senders (photos of receipts/invoices forwarded from phones). Suffix
 // match on the sender address; domain list is env-tunable.
 function isStaffSender(fromAddress: string | null | undefined): boolean {
@@ -598,9 +638,31 @@ async function maybeFlagStaffPhoto(
   return { ts, stagedPath: staged?.path || null, note: 'unreadable staff photo — flagged to Slack' }
 }
 
+/**
+ * The document could not be READ, and we have run out of retries.
+ *
+ * Deliberately fires only on the LAST attempt: a model timeout that clears on
+ * retry 2 should make no noise at all. When it does fire, it fires for ANY
+ * unreadable attachment regardless of filename — an error is an error, and
+ * guessing from the filename is what let two invoices through the cracks.
+ */
+async function alertUnreadable(
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary },
+  attName: string,
+  why: string,
+): Promise<string | null> {
+  const text = [
+    `🚨 *Couldn't read an attachment — nothing entered*`,
+    `“${ctx.msg.subject || '(no subject)'}” from *${ctx.msg.from || 'unknown'}* · ${attName || 'attachment'}`,
+    `_${why}_`,
+    `Tried ${MAX_ERROR_ATTEMPTS} times. If it is a bill, enter it by hand — or forward the email again to retry it fresh. The email is still in the ${ctx.mailbox} inbox.`,
+  ].join('\n')
+  return sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, ctx.companyFile)
+}
+
 async function processAttachment(
   c: SupabaseClient,
-  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; att: GraphAttachmentMeta; kind: 'pdf' | SupportedImageMediaType; dryRun: boolean },
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; att: GraphAttachmentMeta; kind: 'pdf' | SupportedImageMediaType; dryRun: boolean; attempt?: number },
 ): Promise<AutoEntryItem[]> {
   const { mailbox, msg, att, kind } = ctx
 
@@ -752,7 +814,7 @@ function isSelfEntityVendor(vendorName: string | null | undefined): boolean {
 
 async function processInvoice(
   c: SupabaseClient,
-  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean },
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean; attempt?: number },
   // preExtracted: batch segments extract in a parallel phase — the result (or
   // 'failed') is handed in so this function doesn't re-extract.
   // escalated: this is the second-opinion pass on the strong model — never
@@ -785,10 +847,24 @@ async function processInvoice(
         // outright, Chris 2026-07-15).
         extracted = (await extractInvoiceFromImage(b64, kind, { model: scanExtractionModel() })).invoice
       }
-    } catch {
+    } catch (e: any) {
+      // ⚠ This used to log 'skipped_not_invoice' with a NULL error — making a
+      // failure to READ the document indistinguishable from the document not
+      // being an invoice. No reason recorded, no copy kept, no alert, and the
+      // dedup guard then made it permanent. That is exactly how MPI Automotive
+      // 655307 vanished twice on 2026-08-26 (Chris: "never got pushed into
+      // MYOB ... just a little strange").
+      //
+      // It is an ERROR now: the reason is recorded, the bytes are staged so the
+      // document can actually be looked at, and the 3-strike guard retries it.
       const flagged = await maybeFlagStaffPhoto(c, ctx, inv, null)
-      if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', error: flagged.note, slackTs: flagged.ts, pdfStoragePath: flagged.stagedPath })
-      return { ...base, supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
+      const why = `could not read the document: ${String(e?.message || e).slice(0, 300)}`
+      const staged = flagged.stagedPath || (dryRun ? null : (await stageAndSign(c, msg, attId, bytes, kind).catch(() => null))?.path || null)
+      const last = (ctx.attempt || 1) >= MAX_ERROR_ATTEMPTS
+      let ts = flagged.ts
+      if (last && !dryRun && !ts) ts = await alertUnreadable(ctx, attName, why)
+      if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'error', error: why, slackTs: ts, pdfStoragePath: staged })
+      return { ...base, supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [] }
     }
   }
 
@@ -925,12 +1001,39 @@ async function processInvoice(
     }
   }
 
-  const total = extracted.totals.totalIncGst
+  // let: the amount-due rule below can correct this to the printed payable
+  // figure for suppliers whose stated total is not what you pay.
+  let total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null) {
     const flagged = await maybeFlagStaffPhoto(c, ctx, inv, extracted)
-    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: total, error: flagged.note, slackTs: flagged.ts, pdfStoragePath: flagged.stagedPath })
+    // TERMINAL and silent on purpose — this is the T&C page, the statement, the
+    // e-ticket: read fine, simply not a bill. But say WHICH half was missing,
+    // because "no supplier, no number, no amount, no error" used to be
+    // ambiguous between this and a failed read (an hour of digging, 2026-08-28).
+    const noneNote = flagged.note
+      || `read OK but not a bill: ${!extracted.invoiceNumber ? 'no invoice number' : ''}${!extracted.invoiceNumber && total == null ? ' and ' : ''}${total == null ? 'no total' : ''}`
+    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: total, error: noneNote, slackTs: flagged.ts, pdfStoragePath: flagged.stagedPath })
     return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
+
+  // ── Amount due != document total (Chris 2026-08-28) ──────────────────────
+  // Red Energy states the period's charges as the total, then takes a solar
+  // feed-in credit off underneath; the payable figure is the one after the
+  // credit. Posting the stated total books more than is owed and the payment
+  // never reconciles. We read the PRINTED "amount due" rather than doing the
+  // subtraction ourselves - see lib/ap-amount-due-suppliers for why.
+  let amountDueNote: string | null = null
+  if (amountDueSupplier(extracted.vendor?.name, msg.from, attName)) {
+    const due = readAmountDue(rawText)
+    if (due && total != null && Math.abs(due.amountDue - total) >= 0.01) {
+      amountDueNote = `stated total ${money(total)} but the document says ${due.label} ${money(due.amountDue)}`
+        + (due.creditSeen != null ? ` (solar credit ${money(due.creditSeen)} seen)` : '')
+      console.log(`[ap-auto-entry] amount-due rule: ${amountDueNote} (${attName})`)
+      total = due.amountDue
+      extracted = { ...extracted, totals: { ...extracted.totals, totalIncGst: due.amountDue } }
+    }
+  }
+
 
   // Resolve supplier + coding for the fact-check.
   const match = await tryAutoMatchSupplier(extracted.vendor?.name || null, extracted.vendor?.abn || null, companyFile).catch(() => null)
@@ -1031,6 +1134,10 @@ async function processInvoice(
   // the SUPPLIER couldn't be matched.
   if (supplierUid) ignorable.push('YELLOW:account-not-mapped')
   const failReasons: string[] = triage.triageReasons.filter(r => !ignorable.includes(r))
+  // Corrected the payable amount - flag for a human rather than posting it
+  // silently. Money the machine has ADJUSTED gets looked at once; when these
+  // have proved themselves on real bills, drop this push and let it auto-post.
+  if (amountDueNote) failReasons.push(`RED:amount-due-corrected: ${amountDueNote} - posting the payable figure; approve if right`)
   if (effectiveBank === 'mismatch') failReasons.push('RED:bank-mismatch')
   // Never auto-post a foreign-currency invoice at face value — the amount
   // would be wrong in AUD. Flag it for a human to enter at the converted rate.
