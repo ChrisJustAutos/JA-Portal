@@ -275,7 +275,7 @@ export async function createConsignment(req: CreateConsignmentRequest): Promise<
 // 9am–5pm.
 export async function manifestConsignments(
   consignmentIds: number[],
-  opts: { companyId?: number | null } = {},
+  opts: { companyId?: number | null; shape?: number } = {},
 ): Promise<any> {
   const BRIS_OFFSET_MS = 10 * 3600_000
   const nowBris = new Date(Date.now() + BRIS_OFFSET_MS)
@@ -290,15 +290,31 @@ export async function manifestConsignments(
   const close = new Date(pickup)
   close.setUTCHours(17, 0, 0, 0)
   const toUtcIso = (d: Date) => new Date(d.getTime() - BRIS_OFFSET_MS).toISOString()
-  const body = [{
-    consignmentIds,
+  const core = {
     ...(opts.companyId ? { companyId: opts.companyId } : {}),
     pickupDateTime: toUtcIso(pickup),
     pickupClosingTime: toUtcIso(close),
     pickupAlreadyBooked: false,
-  }]
-  return machshipFetch<any>('POST', '/apiv2/manifests/manifest', body)
+  }
+  // MachShip's manifest request body is undocumented and its Swagger is behind
+  // auth. On 2026-08-27 the shape below returned 200 with NO validation errors
+  // and `id: 0` — it accepted the request and manifested nothing, leaving the
+  // consignment "Unmanifested" in MachShip while the portal reported the order
+  // shipped. So the property name for the ids is a guess, and the caller must
+  // VERIFY against the carrier rather than trust the 200.
+  const shapes: any[] = [
+    [{ ...core, consignmentIds }],
+    [{ ...core, consignmentIds: consignmentIds.map(String) }],
+    [{ ...core, ids: consignmentIds }],
+    { ...core, consignmentIds },
+    { ...core, consignmentIds: consignmentIds.map(String) },
+  ]
+  const idx = Math.max(0, Math.min(opts.shape ?? 0, shapes.length - 1))
+  return machshipFetch<any>('POST', '/apiv2/manifests/manifest', shapes[idx])
 }
+
+/** How many request shapes manifestConsignments knows how to try. */
+export const MANIFEST_SHAPE_COUNT = 5
 
 export async function getConsignment(consignmentId: string | number): Promise<Consignment> {
   return machshipFetch<Consignment>('GET', `/apiv2/consignments/${encodeURIComponent(String(consignmentId))}`)

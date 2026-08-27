@@ -20,6 +20,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import {
   manifestConsignments,
+  MANIFEST_SHAPE_COUNT,
   findConsignmentsByCarrierConsignmentId,
   findConsignmentsByReference1,
   MachShipApiError, MachShipNotConfiguredError,
@@ -95,7 +96,7 @@ type OrderRow = {
 // The despatch rule lives in lib/b2b-despatch-state so the two admin screens
 // and this guard cannot drift apart again. Imported for use below and
 // re-exported because callers already reach for it on this module.
-import { isManifested } from './b2b-despatch-state'
+import { isManifested, PRE_DESPATCH_STATES } from './b2b-despatch-state'
 export { isManifested }
 
 /**
@@ -280,6 +281,28 @@ function companyIdFromQuote(quote: any): number | null {
   return walk(quote)
 }
 
+/**
+ * Ask the CARRIER whether these consignments actually left "Unmanifested".
+ * MachShip has returned a clean 200 for a manifest it never created, so a
+ * successful HTTP call is not evidence of despatch — this is.
+ */
+async function confirmManifested(orders: OrderRow[]): Promise<boolean> {
+  try {
+    let checked = 0
+    for (const o of orders) {
+      const live = await resolveConsignmentForOrder(o)
+      if (!live) continue          // couldn't read it — don't claim success
+      checked++
+      const st = String(live.status?.name || '').trim().toLowerCase()
+      if (!st || PRE_DESPATCH_STATES.has(st)) return false
+    }
+    return checked === orders.length && checked > 0
+  } catch (e: any) {
+    console.error('[ship-now] manifest verification failed:', e?.message || e)
+    return false
+  }
+}
+
 /** The account-wide fallback CompanyId, set in B2B Settings. */
 async function loadSettingsCompanyId(c: SupabaseClient): Promise<number | null> {
   try {
@@ -390,9 +413,41 @@ async function resolveConsignmentForOrder(o: OrderRow): Promise<Consignment | nu
     const consignmentIds = group.map(o => Number(o.machship_consignment_id))
     let manifestId: string | null = null
     try {
-      const mRes: any = await manifestConsignments(consignmentIds, { companyId })
+      // Try each known request shape until the CARRIER agrees the consignment
+      // is manifested. A wrong shape is a no-op (MachShip answers 200 / id 0 and
+      // manifests nothing), so this cannot double-book a pickup — and stopping
+      // at the first VERIFIED success is the only way to know which shape is
+      // real, given the endpoint is undocumented.
+      let mRes: any = null
+      let verified = false
+      for (let shape = 0; shape < MANIFEST_SHAPE_COUNT; shape++) {
+        mRes = await manifestConsignments(consignmentIds, { companyId, shape })
+        verified = await confirmManifested(group)
+        if (verified) {
+          if (shape > 0) console.warn(`[ship-now] manifest succeeded on request shape ${shape} — make it the default`)
+          break
+        }
+        console.warn(`[ship-now] manifest shape ${shape} accepted but carrier still shows unmanifested`)
+      }
+      if (!verified) {
+        // Do NOT mark these shipped. Saying the freight has gone when MachShip
+        // still has it Unmanifested is worse than failing: it converts the MYOB
+        // invoice and tells the warehouse the job is done.
+        for (const o of group) {
+          results.push({
+            order_id: o.id, order_number: o.order_number, ok: false,
+            error: 'MachShip accepted the manifest but the consignment is still Unmanifested. Nothing has been despatched — manifest it in MachShip directly and tell Chris.',
+          })
+        }
+        continue
+      }
       const m = Array.isArray(mRes) ? mRes[0] : mRes
-      const raw = m?.id ?? m?.manifestId ?? null
+      // MachShip has been answering `id: 0`. Zero is NOT a manifest reference —
+      // storing "0" made machship_manifest_id truthy, which pins the order to
+      // "manifested" in isManifested() no matter what the carrier later says.
+      // Treat 0 (and "0") as absent so the carrier's own status is what decides.
+      const rawCandidates = [m?.id, m?.manifestId, m?.manifestID, m?.manifest?.id, m?.consignmentManifestId]
+      const raw = rawCandidates.find(v => v != null && String(v).trim() !== '' && Number(v) !== 0) ?? null
       manifestId = raw != null ? String(raw) : null
       // No order in production has ever had machship_manifest_id set, so this
       // extraction has never matched MachShip's actual manifest response. It
@@ -402,10 +457,22 @@ async function resolveConsignmentForOrder(o: OrderRow): Promise<Consignment | nu
       // shape (keys only, no payload) so the right field can be picked with
       // evidence rather than guessed at.
       if (!manifestId) {
+        // Log the SHAPE and the scalar values (no addresses, no names) so the
+        // right field can be identified from evidence. MachShip's manifest
+        // response is undocumented and its Swagger is behind auth.
+        const scalars = (o: any) => {
+          if (!o || typeof o !== 'object') return String(o)
+          const out: Record<string, any> = {}
+          for (const [k, v] of Object.entries(o)) {
+            if (v === null || ['number', 'boolean'].includes(typeof v)) out[k] = v
+            else if (typeof v === 'string') out[k] = v.length <= 24 ? v : `str(${v.length})`
+            else out[k] = Array.isArray(v) ? `arr[${v.length}]` : 'obj'
+          }
+          return out
+        }
         console.warn(
-          '[ship-now] manifest returned no id — response keys:',
-          m && typeof m === 'object' ? Object.keys(m).join(',') : typeof m,
-          '| top-level:', mRes && typeof mRes === 'object' && !Array.isArray(mRes) ? Object.keys(mRes).join(',') : (Array.isArray(mRes) ? 'array' : typeof mRes),
+          '[ship-now] manifest returned no usable id — first:', JSON.stringify(scalars(m)),
+          '| envelope:', Array.isArray(mRes) ? `array[${mRes.length}]` : JSON.stringify(scalars(mRes)),
         )
       }
     } catch (e: any) {
