@@ -71,6 +71,56 @@ export function modelType(model?: string | null): "PRADO" | "HILUX" | "LC" | "OT
 }
 
 // ----------------------------------------------------------------------------
+// VIN → series
+// ----------------------------------------------------------------------------
+// Distributor invoices carry the VIN in the MYOB PO-number field, which is how
+// a distributor tune becomes a countable job on the Workshop Map. Unlike
+// bestChassis() there is no chassis code to read here — the series has to come
+// out of the VIN itself.
+//
+// The rules below were derived from, and are checked against, the real PO-number
+// universe (scripts/check-vin-series.ts cross-validates every VIN against the
+// independent `tune_details` text on b2b_tune_jobs). They match on the VDS
+// characters rather than whole 8-char prefixes, so a new plate-year doesn't
+// silently fall out.
+//
+//   JTMAA…            → 300     (LC300)
+//   JTM[HG]V…         → 200     (LC200 wagon)
+//   ␣␣␣x{V7|VL|RL|R7} → 70      (VDJ/GDJ 70-series, incl. the TW1 plate)
+//   JTE..3F… / JTEAC… → PRADO   (150/Gen2-3, and 250)
+//   (MR0|AHT|8AJ)x[ABE]3… → HILUX (N80)
+//
+// Anything else is OTH — deliberately visible rather than dropped, so an
+// unrecognised model shows up as a number to chase instead of vanishing.
+
+/** Normalise a PO/VIN string: trim, upper, and repair the O-for-zero typo in
+ *  the Thai WMI (MRO → MR0), which is the one transcription error that occurs. */
+export function normaliseVin(raw?: string | null): string {
+  return String(raw ?? '').trim().toUpperCase().replace(/^MRO/, 'MR0')
+}
+
+/** True when the string is a structurally valid 17-character VIN. A real VIN
+ *  never contains I, O or Q. This is what separates a VIN PO number from a
+ *  stock order or a customer name that happens to be 17 characters long. */
+export function isVin(raw?: string | null): boolean {
+  return /^[A-HJ-NPR-Z0-9]{17}$/.test(normaliseVin(raw))
+}
+
+/** Series for a VIN, or null when it isn't a VIN at all. Unrecognised VINs
+ *  return "OTH" — distinguishable from null, so callers can count them. */
+export function seriesFromVin(raw?: string | null): VehicleGroup | null {
+  const v = normaliseVin(raw)
+  if (!isVin(v)) return null
+  const vds = v.slice(4, 6)                       // the two chars that carry the model
+  if (v.startsWith('JTMAA')) return '300'
+  if (/^JTM[HG]V/.test(v)) return '200'
+  if (vds === 'V7' || vds === 'VL' || vds === 'RL' || vds === 'R7') return '70'
+  if (/^JTE..3F/.test(v) || v.startsWith('JTEAC')) return 'PRADO'
+  if (/^(MR0|AHT|8AJ)[A-Z][ABE]3/.test(v)) return 'HILUX'
+  return 'OTH'
+}
+
+// ----------------------------------------------------------------------------
 // Classification
 // ----------------------------------------------------------------------------
 export interface VehicleInputs {
