@@ -415,6 +415,16 @@ A pallet is now filled by **weight *and* by space**, and it is only offered if t
 
 **⚠** Deleting or switching off every pallet means orders ship in cartons no matter how heavy they are. The list warns you when it is empty.
 
+### 4.3d Getting a distributor onto the app
+
+Distributors can install the wholesale portal as a proper app - own icon, own window, no browser tabs - on a phone, tablet or computer. There is nothing in the App Store or Google Play; the site installs itself.
+
+**Send them the PDF:** Admin → Library → *Installing the Just Autos Wholesale app*. It is written for them, so it can be forwarded as-is.
+
+**The one thing that goes wrong:** they must be on a **`/b2b`** web address when they install - send them to `justautos.app/b2b/login`. Installing from `justautos.app` on its own gives them the **staff** app, which they cannot sign in to. If someone ends up locked out of an app they just installed, that is almost always why: delete the icon, install again from the `/b2b` address.
+
+**On an iPhone it must be Safari.** Chrome on an iPhone cannot install it. Notifications on iPhone also only work once the app is on the home screen - not from Safari - and need iOS 16.4 or later.
+
 ### 4.3c Freight markup bands (Admin → B2B → Settings → Freight Pricing)
 
 **New 27 August 2026.** The markup added to the carrier's price is no longer one number for every job. It is now a set of bands, and they came from Chris:

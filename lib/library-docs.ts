@@ -40,6 +40,14 @@ export const LIBRARY_DOCS: LibraryDoc[] = [
     pdf: 'docs/SOP.pdf',
   },
   {
+    slug: 'distributor-app-install',
+    title: 'Installing the Just Autos Wholesale app',
+    description: 'Step-by-step install for distributors — iPhone, Android, Windows and Mac — plus turning on order notifications. Written to be sent to them as-is.',
+    audience: 'Distributors (send them the PDF)',
+    md: 'docs/distributor-app-install-sop.md',
+    pdf: 'docs/distributor-app-install-sop.pdf',
+  },
+  {
     slug: 'handover',
     title: 'Full Handover Document',
     description: 'How the portal is built, where it runs, every integration and credential location, the scheduled automation, and known risks.',
