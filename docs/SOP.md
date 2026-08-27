@@ -590,6 +590,16 @@ The change percentages are worked out from the turnover figures themselves, not 
 | By State | State-level revenue and win rates |
 | **Vehicle Trend** | How each vehicle series is trending over time |
 
+**Comparing financial years.** The FY buttons top-right pick the year you're looking at; the **vs** buttons beside them add up to three more years to compare against. Comparison years only appear on Conversion, By State and Vehicle Trend — two years of dots on a map can't be read, so the maps stay on one year. On Vehicle Trend a comparison year draws as a dashed white line: the total of whichever vehicles you've selected, one line per year.
+
+**Comparing vehicle types.** The **Compare** row on Vehicle Trend starts on *All types*. Pick any combination of vehicles to narrow it to those, and **vs others** then adds everything you didn't pick as a single grey dotted line — so "70 and 300 against everything else" is one click.
+
+**Counting distributor tunes as jobs (Conversion).** A distributor tune reaches us as an invoice with the car's VIN in the PO field, so each unique VIN in a month is one more job. **Include distributor jobs** on the Conversion tab folds those into booked jobs, and the conversion % moves with them. It is **off by default**, and the reason matters: those jobs never had a workshop quote, so with it on the percentage reads higher than the workshop's own performance. Use it to see total work done; leave it off to judge the workshop's quoting. The by-vehicle table gains an *of which dist.* column so you can always see what the toggle did.
+
+The toggle is greyed out when a state is selected — a distributor invoice carries no postcode, so those jobs can't honestly be put in one state. Clear the state filter to use it.
+
+**Reading Conversion as a chart.** The **Table / Chart** switch turns both conversion tables into bars — one bar per vehicle for the year, and grouped bars per month. Same numbers, and with distributor jobs on, their share of each bar is hatched.
+
 **Using Vehicle Trend:** pick the financial year, and you get one line per vehicle series across the twelve months. Click a month and it redraws day by day for that month. Switch the measure between Jobs, Quotes, Job $ and Quoted $. Clicking a vehicle highlights its line rather than hiding the others, so you keep the comparison.
 
 **⚠** Vehicle Trend counts **every** invoice and quote, while the map tabs show one dot per customer per month. Its totals are legitimately higher — they are not disagreeing with each other, they are counting different things.
@@ -769,6 +779,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | The month-end stock email didn't arrive on the 2nd | Either the MYOB connection or the recipient list | Admin → Connections for MYOB health, then Reports → Stock EOM → **Email this report** to send it by hand |
 | The Slack parts bot says it can't find a part you know is in stock | The 30-minute stock sync was interrupted part-way and cached only some of the catalogue | Fixed 2026-08-27 — the sync now refuses to save a partial catalogue and keeps the last good one instead. If it happens again the bot's numbers will be *stale* rather than missing, so check when it last synced and tell Chris. Don't re-count the shelf over it. |
 | A stocktake count is short and nobody can explain it | Parts fitted to cars on jobs that haven't been invoiced — MD still counts them as on-hand | Stocktake (MD) → the **On cars** panel. Use its **Should count** column as the target, not MD's on-hand. If it's stale, press **Check Mechanics Desk** first |
+| Conversion % suddenly looks much better than you expected | **Include distributor jobs** is switched on — those jobs never had a workshop quote | Reports → Workshop Map → Conversion. Switch it off to see the workshop's own conversion; the *of which dist.* column shows what it was adding |
 | Someone can't see a tab | Permissions, working as designed | Ask Chris |
 
 **Where to look first, always:** Admin → Connections. It shows every integration and when it last succeeded.
