@@ -160,6 +160,7 @@ async function runExtraction(content: any[], modelOverride?: string): Promise<Ex
   const model = modelOverride || process.env.AP_EXTRACTION_MODEL || DEFAULT_MODEL
 
   const body = {
+    model,
     // 4096 was too small and failed SILENTLY-ish: a long invoice (many line
     // items) ran past the cap, the JSON came back truncated mid-array, and
     // JSON.parse threw "Expected ',' or ']' after array element in JSON at
