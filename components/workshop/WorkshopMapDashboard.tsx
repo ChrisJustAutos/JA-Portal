@@ -26,11 +26,23 @@ interface Payload {
   quotes: { points: Pt[]; meta: { total_quotes: number; mapped: number; total_value: number } }
   conv: { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }
 }
+// Distributor tunes counted as jobs — one per VIN per month, derived from the
+// Distributor report's MYOB invoices (the PO number is the car's VIN).
+interface DistributorJobs {
+  jcount: Record<string, number[]>
+  total: number
+  vehicles: number
+  unknown: number
+  rejected: number
+  sourceComputedAt: string | null
+}
 interface ApiResp {
   fy: number | null
   fys: number[]
   payload: Payload | null
   synced_at: string | null
+  distributor_jobs?: DistributorJobs | null
+  comparisons?: { fy: number; payload: Payload; synced_at: string | null; distributor_jobs?: DistributorJobs | null }[]
   // Booking-deposit invoices for the FY — excluded from the job totals (noise),
   // shown as a sub-line under the Revenue stat. byMonth is FY-indexed (Jul=0).
   deposits?: { total: number; count: number; byMonth: number[] } | null
@@ -57,6 +69,7 @@ export default function WorkshopMapDashboard() {
   const [month, setMonth] = useState(-1)          // -1 = all FY
   const [cat, setCat] = useState('all')
   const [st, setSt] = useState('all')             // state pill — jobs/quotes maps + conversion
+  const [distOn, setDistOn] = useState(false)     // fold distributor tunes into booked jobs
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
   const [pdfBusy, setPdfBusy] = useState(false)
@@ -453,7 +466,8 @@ export default function WorkshopMapDashboard() {
             )}
           </div>
         )}
-        {view === 'conv' && <ConversionView P={P} COL={COL} NAME={NAME} st={st} />}
+        {view === 'conv' && <ConversionView P={P} COL={COL} NAME={NAME} st={st}
+          dist={data?.distributor_jobs || null} distOn={distOn} setDistOn={setDistOn} />}
         {view === 'state' && <StateView P={P} month={month} cat={cat} />}
         {view === 'trend' && (
           <VehicleTrendView
@@ -469,11 +483,27 @@ export default function WorkshopMapDashboard() {
 }
 
 // ── Conversion tab ─────────────────────────────────────────────────────────
+// Quotes vs booked jobs. Two readings of the same numbers — a table and a bar
+// chart — because a table answers "what exactly" and bars answer "which is
+// bigger", and people want both.
+//
+// DISTRIBUTOR JOBS: a distributor tune reaches MYOB as an invoice whose PO
+// number is the car's VIN, so each unique VIN in a month is one more booked
+// job. Off by default (the base figures are the workshop's own); when on, the
+// jobs fold into booked jobs and the conversion % moves with them. The jobs
+// row stays visible either way so you can see what the toggle is doing.
 
-function ConversionView({ P, COL, NAME, st }: { P: Payload; COL: Record<string, string>; NAME: Record<string, string>; st: string }) {
+interface ConvCounts { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }
+
+function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn }: {
+  P: Payload; COL: Record<string, string>; NAME: Record<string, string>; st: string
+  dist: DistributorJobs | null; distOn: boolean; setDistOn: (v: boolean) => void
+}) {
+  const [chart, setChart] = useState(false)
+
   // 'all' uses the authoritative precomputed conv (covers unmapped quotes/jobs too);
   // a state selection rebuilds the same structure from geocoded points only.
-  const C = useMemo(() => {
+  const base = useMemo<ConvCounts>(() => {
     if (st === 'all') return P.conv
     const qcount: Record<string, number[]> = {}, qval: Record<string, number[]> = {}, jcount: Record<string, number[]> = {}
     P.quotes.points.forEach(p => {
@@ -484,77 +514,225 @@ function ConversionView({ P, COL, NAME, st }: { P: Payload; COL: Record<string, 
     P.jobs.points.forEach(p => { if (pcState(p.pc) === st) (jcount[p.g] ||= Array(12).fill(0))[p.m]++ })
     return { qcount, qval, jcount }
   }, [P, st])
+
+  // Distributor jobs are national — a state filter can't place them (the
+  // invoice has no postcode), so they're only foldable on the all-Australia view.
+  const distUsable = !!dist && dist.total > 0 && st === 'all'
+  const on = distOn && distUsable
+
+  const C = useMemo<ConvCounts>(() => {
+    if (!on || !dist) return base
+    const jcount: Record<string, number[]> = {}
+    for (const k of Object.keys(base.jcount)) jcount[k] = [...(base.jcount[k] || [])]
+    for (const [k, arr] of Object.entries(dist.jcount)) {
+      const row = (jcount[k] ||= Array(12).fill(0))
+      arr.forEach((v, i) => { row[i] = (row[i] || 0) + v })
+    }
+    return { ...base, jcount }
+  }, [base, dist, on])
+
   const sum = (a: number[]) => a.reduce((x, y) => x + y, 0)
   let tq = 0, tj = 0, tv = 0
   CK.forEach(c => { tq += sum(C.qcount[c] || []); tj += sum(C.jcount[c] || []); tv += sum(C.qval[c] || []) })
+  const distTotalInCats = dist ? CK.reduce((s, c) => s + sum(dist.jcount[c] || []), 0) : 0
+
+  const rows = CK.map(c => {
+    const q = sum(C.qcount[c] || []), j = sum(C.jcount[c] || []), v = sum(C.qval[c] || [])
+    const d = dist ? sum(dist.jcount[c] || []) : 0
+    return { c, q, j, v, d, pct: q ? (100 * j) / q : 0 }
+  })
+
   return (
     <div className="convView">
       <div className="cards">
         <div className="card"><div className="v">{tq.toLocaleString('en-AU')}</div><div className="k">Quotes issued</div></div>
-        <div className="card"><div className="v" style={{ color: 'var(--wm-mint)' }}>{tj.toLocaleString('en-AU')}</div><div className="k">Booked jobs</div></div>
+        <div className="card"><div className="v" style={{ color: 'var(--wm-mint)' }}>{tj.toLocaleString('en-AU')}</div><div className="k">Booked jobs{on ? ' (incl. distributor)' : ''}</div></div>
         <div className="card"><div className="v" style={{ color: 'var(--wm-amber)' }}>{tq ? (100 * tj / tq).toFixed(1) : '0'}%</div><div className="k">Overall conversion</div></div>
         <div className="card"><div className="v">{fmtK(tv)}</div><div className="k">Total quoted</div></div>
       </div>
 
-      <h2>By vehicle — full year</h2>
-      <table>
-        <thead><tr><th>Vehicle</th><th>Quotes</th><th>Quoted $</th><th>Avg quote</th><th>Booked jobs</th><th>Conv %</th></tr></thead>
-        <tbody>
-          {CK.map(c => {
-            const q = sum(C.qcount[c] || []), j = sum(C.jcount[c] || []), v = sum(C.qval[c] || [])
-            return (
-              <tr key={c}>
-                <td className="veh"><span className="vd" style={{ background: COL[c] }} />{NAME[c]}</td>
-                <td className="num">{q.toLocaleString('en-AU')}</td>
-                <td className="num">{fmtK(v)}</td>
-                <td className="num">{fmtK(q ? v / q : 0)}</td>
-                <td className="num">{j}</td>
-                <td className="num" style={{ color: convColor(q ? 100 * j / q : 0) }}>{q ? (100 * j / q).toFixed(0) : '0'}%</td>
-              </tr>
-            )
-          })}
-          <tr className="tot">
-            <td>Total</td>
-            <td className="num">{tq.toLocaleString('en-AU')}</td>
-            <td className="num">{fmtK(tv)}</td>
-            <td className="num">{fmtK(tq ? tv / tq : 0)}</td>
-            <td className="num">{tj}</td>
-            <td className="num">{tq ? (100 * tj / tq).toFixed(0) : '0'}%</td>
-          </tr>
-        </tbody>
-      </table>
+      {/* Controls: distributor toggle + table/chart switch */}
+      <div className="convCtl">
+        {dist && dist.total > 0 && (
+          <label className={'distTog' + (distUsable ? '' : ' off')} title={distUsable
+            ? 'Count each distributor tune (one per VIN per month) as a booked job'
+            : 'Distributor jobs are national — clear the state filter to include them'}>
+            <input type="checkbox" checked={on} disabled={!distUsable} onChange={e => setDistOn(e.target.checked)} />
+            <span>Include distributor jobs</span>
+            <b>+{distTotalInCats.toLocaleString('en-AU')}</b>
+          </label>
+        )}
+        <div className="segbtns">
+          <button className={chart ? '' : 'on'} onClick={() => setChart(false)}>Table</button>
+          <button className={chart ? 'on' : ''} onClick={() => setChart(true)}>Chart</button>
+        </div>
+      </div>
 
-      <h2>Conversion % by month <span style={{ color: 'var(--wm-muted2)', fontSize: 11, letterSpacing: 0, textTransform: 'none' }}>(cell = jobs / quotes)</span></h2>
-      <div className="gridwrap">
-        <table className="grid">
-          <thead><tr><th>Vehicle</th>{P.months.map(m => <th key={m.k}>{m.label.split(' ')[0]}</th>)}<th>FY</th></tr></thead>
+      {on && (
+        <p className="distNote">
+          Distributor tunes are counted as booked jobs — one per VIN per month, from the Distributor report&apos;s invoices
+          (the PO number is the VIN). They never had a workshop quote, so conversion % reads higher than the workshop&apos;s
+          own performance.{dist && dist.unknown > 0 && <> {dist.unknown} VIN{dist.unknown > 1 ? 's' : ''} couldn&apos;t be matched to a model and {dist.unknown > 1 ? 'are' : 'is'} left out of the vehicle rows.</>}
+        </p>
+      )}
+
+      <h2>By vehicle — full year</h2>
+      {chart ? (
+        <ConvBars rows={rows} COL={COL} NAME={NAME} showDist={on} />
+      ) : (
+        <table>
+          <thead><tr><th>Vehicle</th><th>Quotes</th><th>Quoted $</th><th>Avg quote</th><th>Booked jobs</th>{on && <th>of which dist.</th>}<th>Conv %</th></tr></thead>
           <tbody>
-            {CK.map(c => {
-              const Q = sum(C.qcount[c] || []), J = sum(C.jcount[c] || [])
-              return (
-                <tr key={c}>
-                  <td className="veh"><span className="vd" style={{ background: COL[c] }} />{(NAME[c] || c).replace('LC ', '')}</td>
-                  {Array.from({ length: 12 }, (_, i) => {
-                    const q = (C.qcount[c] || [])[i] || 0, j = (C.jcount[c] || [])[i] || 0, p = q ? 100 * j / q : 0
-                    return (
-                      <td key={i} className="cv" style={{ color: q ? convColor(p) : '#3a4658' }} title={`${j} jobs / ${q} quotes`}>
-                        {q ? p.toFixed(0) + '%' : '–'}
-                        <div style={{ fontSize: 8.5, color: 'var(--wm-muted2)', fontWeight: 400 }}>{j}/{q}</div>
-                      </td>
-                    )
-                  })}
-                  <td className="cv" style={{ color: convColor(Q ? 100 * J / Q : 0) }}>{Q ? (100 * J / Q).toFixed(0) : '0'}%</td>
-                </tr>
-              )
-            })}
+            {rows.map(r => (
+              <tr key={r.c}>
+                <td className="veh"><span className="vd" style={{ background: COL[r.c] }} />{NAME[r.c]}</td>
+                <td className="num">{r.q.toLocaleString('en-AU')}</td>
+                <td className="num">{fmtK(r.v)}</td>
+                <td className="num">{fmtK(r.q ? r.v / r.q : 0)}</td>
+                <td className="num">{r.j}</td>
+                {on && <td className="num" style={{ color: 'var(--wm-muted)' }}>{r.d}</td>}
+                <td className="num" style={{ color: convColor(r.pct) }}>{r.q ? r.pct.toFixed(0) : '0'}%</td>
+              </tr>
+            ))}
+            <tr className="tot">
+              <td>Total</td>
+              <td className="num">{tq.toLocaleString('en-AU')}</td>
+              <td className="num">{fmtK(tv)}</td>
+              <td className="num">{fmtK(tq ? tv / tq : 0)}</td>
+              <td className="num">{tj}</td>
+              {on && <td className="num" style={{ color: 'var(--wm-muted)' }}>{distTotalInCats}</td>}
+              <td className="num">{tq ? (100 * tj / tq).toFixed(0) : '0'}%</td>
+            </tr>
           </tbody>
         </table>
-      </div>
+      )}
+
+      <h2>Conversion % by month <span style={{ color: 'var(--wm-muted2)', fontSize: 11, letterSpacing: 0, textTransform: 'none' }}>(cell = jobs / quotes)</span></h2>
+      {chart ? (
+        <ConvMonthBars C={C} months={P.months} COL={COL} NAME={NAME} />
+      ) : (
+        <div className="gridwrap">
+          <table className="grid">
+            <thead><tr><th>Vehicle</th>{P.months.map(m => <th key={m.k}>{m.label.split(' ')[0]}</th>)}<th>FY</th></tr></thead>
+            <tbody>
+              {CK.map(c => {
+                const Q = sum(C.qcount[c] || []), J = sum(C.jcount[c] || [])
+                return (
+                  <tr key={c}>
+                    <td className="veh"><span className="vd" style={{ background: COL[c] }} />{(NAME[c] || c).replace('LC ', '')}</td>
+                    {Array.from({ length: 12 }, (_, i) => {
+                      const q = (C.qcount[c] || [])[i] || 0, j = (C.jcount[c] || [])[i] || 0, p = q ? 100 * j / q : 0
+                      return (
+                        <td key={i} className="cv" style={{ color: q ? convColor(p) : '#3a4658' }} title={`${j} jobs / ${q} quotes`}>
+                          {q ? p.toFixed(0) + '%' : '–'}
+                          <div style={{ fontSize: 8.5, color: 'var(--wm-muted2)', fontWeight: 400 }}>{j}/{q}</div>
+                        </td>
+                      )
+                    })}
+                    <td className="cv" style={{ color: convColor(Q ? 100 * J / Q : 0) }}>{Q ? (100 * J / Q).toFixed(0) : '0'}%</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
       <p style={{ color: 'var(--wm-muted2)', fontSize: 11, marginTop: 12, lineHeight: 1.6 }}>
         Both sides are 1 per customer per month (largest kept). Quotes by quote date; booked jobs from invoices
         (deposits, diagnostics &amp; internal excluded). Counted independently — a quote may convert in a later month.
         {st !== 'all' && <> <b style={{ color: 'var(--wm-amber)' }}>Filtered to {st === '?' ? 'unknown state' : st}</b> — state figures use geocoded quotes/jobs only, so they can differ slightly from the all-Australia view.</>}
       </p>
+    </div>
+  )
+}
+
+// ── Conversion charts ──────────────────────────────────────────────────────
+// Inline SVG rather than a chart library: five bars and a 5×12 grouped set
+// don't justify the bundle, and hand-rolling keeps the vehicle colours
+// identical to the map dots (colour follows the vehicle, never the rank).
+// Bars carry a 2px surface gap and direct labels — the vehicle hues sit in a
+// narrow lightness band, so shape and labels do the separating, not lightness.
+
+function ConvBars({ rows, COL, NAME, showDist }: {
+  rows: { c: string; q: number; j: number; d: number; pct: number }[]
+  COL: Record<string, string>; NAME: Record<string, string>; showDist: boolean
+}) {
+  const max = Math.max(10, ...rows.map(r => r.pct))
+  return (
+    <div className="cbars">
+      {rows.map(r => (
+        <div key={r.c} className="cbar" title={`${r.j} jobs / ${r.q} quotes${showDist && r.d ? ` — ${r.d} from distributors` : ''}`}>
+          <div className="cbarLbl"><span className="vd" style={{ background: COL[r.c] }} />{NAME[r.c]}</div>
+          <div className="cbarTrack">
+            <div className="cbarFill" style={{ width: `${Math.max(0.5, (100 * r.pct) / max)}%`, background: COL[r.c] }} />
+            {showDist && r.d > 0 && r.j > 0 && (
+              // The distributor slice of this bar, hatched so it reads as a
+              // different kind of job rather than a different vehicle.
+              <div className="cbarDist" style={{
+                width: `${Math.max(0, (100 * r.pct * (r.d / r.j)) / max)}%`,
+                backgroundImage: `repeating-linear-gradient(135deg, rgba(11,14,19,.55) 0 3px, transparent 3px 6px)`,
+              }} />
+            )}
+          </div>
+          <div className="cbarVal">{r.pct.toFixed(0)}%<span>{r.j}/{r.q}</span></div>
+        </div>
+      ))}
+      {showDist && <div className="cbarKey"><span className="hatch" /> hatched = distributor jobs</div>}
+    </div>
+  )
+}
+
+function ConvMonthBars({ C, months, COL, NAME }: {
+  C: ConvCounts; months: { k: string; label: string }[]
+  COL: Record<string, string>; NAME: Record<string, string>
+}) {
+  const pct = (c: string, i: number) => {
+    const q = (C.qcount[c] || [])[i] || 0, j = (C.jcount[c] || [])[i] || 0
+    return { q, j, p: q ? (100 * j) / q : 0 }
+  }
+  const max = Math.max(10, ...months.flatMap((_, i) => CK.map(c => pct(c, i).p)))
+  const W = 1080, H = 260, padL = 34, padB = 26, padT = 8
+  const plotW = W - padL - 8, plotH = H - padB - padT
+  const groupW = plotW / months.length
+  const barW = Math.max(3, (groupW - 8) / CK.length - 2)   // 2px gap between adjacent bars
+
+  return (
+    <div className="cmonth">
+      <div className="cmLegend">
+        {CK.map(c => <span key={c}><span className="vd" style={{ background: COL[c] }} />{(NAME[c] || c).replace('LC ', '')}</span>)}
+      </div>
+      <div className="cmScroll">
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label="Conversion percent by vehicle and month">
+          {[0, 0.25, 0.5, 0.75, 1].map(f => {
+            const y = padT + plotH - f * plotH
+            return (
+              <g key={f}>
+                <line x1={padL} x2={W - 8} y1={y} y2={y} stroke="#243040" strokeWidth={1} />
+                <text x={padL - 6} y={y + 3} textAnchor="end" fontSize={9} fill="#566273">{(max * f).toFixed(0)}%</text>
+              </g>
+            )
+          })}
+          {months.map((m, i) => {
+            const gx = padL + i * groupW
+            return (
+              <g key={m.k}>
+                {CK.map((c, ci) => {
+                  const { q, j, p } = pct(c, i)
+                  const h = max ? (p / max) * plotH : 0
+                  const x = gx + 4 + ci * (barW + 2)
+                  return (
+                    <rect key={c} x={x} y={padT + plotH - h} width={barW} height={Math.max(q ? 1 : 0, h)}
+                      fill={COL[c]} rx={2}>
+                      <title>{`${m.label} · ${NAME[c]}: ${p.toFixed(0)}% (${j}/${q})`}</title>
+                    </rect>
+                  )
+                })}
+                <text x={gx + groupW / 2} y={H - 8} textAnchor="middle" fontSize={9} fill="#7A8696">{m.label.split(' ')[0]}</text>
+              </g>
+            )
+          })}
+        </svg>
+      </div>
     </div>
   )
 }
@@ -981,6 +1159,32 @@ const CSS = `
 .wm-dash .note b{font-family:'Space Mono';font-size:11px}
 .wm-dash .convView{position:absolute;inset:0;overflow-y:auto;padding:18px}
 .wm-dash .cards{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+/* Conversion controls — distributor toggle + table/chart switch */
+.wm-dash .convCtl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0 4px}
+.wm-dash .distTog{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--wm-txt);background:var(--wm-panel);border:1px solid var(--wm-line);border-radius:8px;padding:7px 11px;cursor:pointer}
+.wm-dash .distTog.off{opacity:.45;cursor:not-allowed}
+.wm-dash .distTog input{accent-color:var(--wm-mint);cursor:inherit}
+.wm-dash .distTog b{color:var(--wm-mint);font-weight:600}
+.wm-dash .segbtns{display:inline-flex;border:1px solid var(--wm-line);border-radius:8px;overflow:hidden;margin-left:auto}
+.wm-dash .segbtns button{background:var(--wm-panel);border:0;color:var(--wm-muted);font-family:inherit;font-size:12px;padding:7px 14px;cursor:pointer}
+.wm-dash .segbtns button.on{background:var(--wm-panel2);color:var(--wm-txt);font-weight:600}
+.wm-dash .distNote{color:var(--wm-amber);font-size:11px;line-height:1.6;margin:8px 0 0;max-width:900px}
+/* Horizontal conversion bars */
+.wm-dash .cbars{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.wm-dash .cbar{display:grid;grid-template-columns:150px 1fr 92px;align-items:center;gap:12px}
+.wm-dash .cbarLbl{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--wm-txt);white-space:nowrap}
+.wm-dash .cbarTrack{position:relative;height:20px;background:var(--wm-panel);border-radius:4px;overflow:hidden}
+.wm-dash .cbarFill{position:absolute;left:0;top:0;bottom:0;border-radius:0 4px 4px 0}
+.wm-dash .cbarDist{position:absolute;left:0;top:0;bottom:0;border-radius:0 4px 4px 0}
+.wm-dash .cbarVal{font-size:13px;font-weight:600;color:var(--wm-txt);text-align:right}
+.wm-dash .cbarVal span{display:block;font-size:10px;font-weight:400;color:var(--wm-muted2)}
+.wm-dash .cbarKey{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--wm-muted2);margin-top:2px}
+.wm-dash .cbarKey .hatch{width:22px;height:10px;border-radius:2px;background:var(--wm-muted);background-image:repeating-linear-gradient(135deg,rgba(11,14,19,.55) 0 3px,transparent 3px 6px)}
+/* Grouped monthly bars */
+.wm-dash .cmonth{margin-top:6px}
+.wm-dash .cmLegend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--wm-muted);margin-bottom:6px}
+.wm-dash .cmLegend span{display:inline-flex;align-items:center;gap:6px}
+.wm-dash .cmScroll{overflow-x:auto}
 .wm-dash .card{flex:1 1 150px;background:var(--wm-panel);border:1px solid var(--wm-line);border-radius:10px;padding:14px 16px}
 .wm-dash .card .v{font-family:'Space Mono';font-weight:700;font-size:23px;color:var(--wm-blue)}
 .wm-dash .card .k{font-size:10px;color:var(--wm-muted);letter-spacing:1.5px;text-transform:uppercase;margin-top:5px}

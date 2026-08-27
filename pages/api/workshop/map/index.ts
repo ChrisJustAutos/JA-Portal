@@ -7,6 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
+import { distributorJobsForFy } from '../../../../lib/workshop-map/distributor-jobs'
 
 export default withAuth('view:reports', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'GET only' }) }
@@ -34,6 +35,30 @@ export default withAuth('view:reports', async (req: NextApiRequest, res: NextApi
     .select('fy, payload, synced_at').eq('fy', fy).single()
   if (error) return res.status(500).json({ error: error.message })
 
+  // ── Comparison years ───────────────────────────────────────────────────
+  // ?compare=2025,2024 returns those FYs' payloads alongside the primary one,
+  // so Conversion / By State / Vehicle Trend can show several years together.
+  // The maps stay single-year (overlapping dots are unreadable), so the extra
+  // payloads are only ever consumed by the non-map views.
+  const compareFys = String(req.query.compare || '')
+    .split(',').map(s => Number(s.trim()))
+    .filter(n => Number.isFinite(n) && fys.includes(n) && n !== fy)
+    .slice(0, 4)
+
+  const comparisons = compareFys.length
+    ? await Promise.all(compareFys.map(async cfy => {
+        const { data: c } = await db.from('md_workshop_map_cache')
+          .select('fy, payload, synced_at').eq('fy', cfy).single()
+        if (!c) return null
+        return {
+          fy: c.fy,
+          payload: c.payload,
+          synced_at: c.synced_at,
+          distributor_jobs: await distributorJobsForFy(db, c.fy),
+        }
+      }))
+    : []
+
   res.setHeader('Cache-Control', 'private, max-age=300')
   return res.status(200).json({
     fy: cache.fy,
@@ -41,6 +66,11 @@ export default withAuth('view:reports', async (req: NextApiRequest, res: NextApi
     payload: cache.payload,
     synced_at: cache.synced_at,
     deposits: await depositTotals(db, fy),
+    // Distributor tunes as jobs — one per VIN per month, off the Distributor
+    // report's invoices (PO number = VIN). The Conversion view folds these into
+    // booked jobs when the toggle is on.
+    distributor_jobs: await distributorJobsForFy(db, fy),
+    comparisons: comparisons.filter(Boolean),
     last_run: await lastRun(db),
   })
 })
