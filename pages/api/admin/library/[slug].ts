@@ -28,7 +28,11 @@ export default withAuth('admin:settings', async (req: NextApiRequest, res: NextA
     return res.status(404).json({ error: `${doc.title}: PDF not built. Run scripts/render-doc-pdf.js and redeploy.` })
   }
 
-  const filename = `${doc.slug === 'sop' ? 'JA-Portal-SOP' : 'JA-Portal-Handover'}.pdf`
+  // Was a two-way ternary, so ANY third document downloaded as
+  // "JA-Portal-Handover.pdf" - the confidential internal one. Caught when the
+  // distributor install guide was added (2026-08-28): staff would have emailed
+  // it to distributors under that name. Name comes off the doc now.
+  const filename = `${doc.downloadName || doc.slug}.pdf`
   const disposition = req.query.download ? 'attachment' : 'inline'
 
   res.setHeader('Content-Type', 'application/pdf')

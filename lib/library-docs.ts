@@ -28,6 +28,12 @@ export interface LibraryDoc {
   pdf: string
   /** Sensitive docs are called out in the UI so nobody forwards them casually. */
   confidential?: boolean
+  /**
+   * Filename (no extension) the PDF saves as. Set it for anything that leaves
+   * the building: the file lands in someone else's inbox with this name on it.
+   * Defaults to the slug, which is safe but ugly.
+   */
+  downloadName?: string
 }
 
 export const LIBRARY_DOCS: LibraryDoc[] = [
@@ -38,6 +44,7 @@ export const LIBRARY_DOCS: LibraryDoc[] = [
     audience: 'All staff',
     md: 'docs/SOP.md',
     pdf: 'docs/SOP.pdf',
+    downloadName: 'JA-Portal-SOP',
   },
   {
     slug: 'distributor-app-install',
@@ -46,6 +53,8 @@ export const LIBRARY_DOCS: LibraryDoc[] = [
     audience: 'Distributors (send them the PDF)',
     md: 'docs/distributor-app-install-sop.md',
     pdf: 'docs/distributor-app-install-sop.pdf',
+    // This one is emailed to distributors - it must arrive named as what it is.
+    downloadName: 'Just-Autos-Wholesale-App-Install-Guide',
   },
   {
     slug: 'handover',
@@ -55,6 +64,7 @@ export const LIBRARY_DOCS: LibraryDoc[] = [
     md: 'docs/HANDOVER.md',
     pdf: 'docs/HANDOVER.pdf',
     confidential: true,
+    downloadName: 'JA-Portal-Handover',
   },
 ]
 

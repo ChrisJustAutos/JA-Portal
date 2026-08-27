@@ -430,21 +430,30 @@ function applyTotalQty(results: MatchResultEntry[], universe: InStockItem[]): nu
 }
 
 /**
- * Last line of defence: any row still carrying a PROVISIONAL figure (i.e. the
- * SKU search's `available`, because Stock Value had no total for it) that is
- * NEGATIVE is set to 0.
+ * A stocktake's system QTY is never negative. Ever. Whatever the source.
  *
- * A negative here always means "zero on hand with an open allocation" — it is
- * never a real on-hand baseline, and pushing it to MD makes the stocktake
- * variance wrong by the allocated amount. A genuine negative that came from
- * MD's own `quantity` is NOT touched: MD lets stock go negative when something
- * is sold before it is received, and that is a real figure.
+ * ⚠ THIS SUPERSEDES the 2026-08-27 rule that a negative from MD's own
+ * `quantity` was "genuine" and should be preserved. Chris, 2026-08-28, on the
+ * two rows still showing −1 after a refresh: *"on hand should be 0. the -1
+ * comes from an allocated part in the future thats not yet received."*
+ *
+ * That is the whole point. A negative is a TIMING artefact — something
+ * committed or sold against stock that has not arrived — not a quantity on a
+ * shelf. A stocktake reconciles what is physically there, and you cannot count
+ * minus one of something. Leaving it negative also inflates the variance by the
+ * allocated amount and paints the row red for a discrepancy that does not
+ * exist.
+ *
+ * Applied as a sweep immediately before every save rather than at each
+ * assignment, because md_current_qty is written from four different places
+ * (SKU search, Stock Value, refresh, and the MD stocktake read-back) and a rule
+ * enforced in three of the four is not a rule.
  */
-function zeroProvisionalNegatives(results: MatchResultEntry[]): string[] {
+function clampSystemQtys(results: MatchResultEntry[]): string[] {
   const fixed: string[] = []
   for (const r of results) {
-    if (r.md_qty_provisional && typeof r.md_current_qty === 'number' && r.md_current_qty < 0) {
-      fixed.push(`${r.md_stock_number || r.sku} (${r.md_current_qty} → 0)`)
+    if (typeof r.md_current_qty === 'number' && r.md_current_qty < 0) {
+      fixed.push(`${r.md_stock_number || r.sku} (${r.md_current_qty} → 0${r.md_qty_provisional ? ', provisional' : ''})`)
       r.md_current_qty = 0
     }
   }
@@ -499,9 +508,9 @@ async function runMatchPostPass(client: MdClient, results: MatchResultEntry[]): 
   // something was allocated against it (Chris, 2026-08-27).
   const universeAll = await fetchInStockUniverse(client, { log, includeAll: true, onSample: (r) => { sample = r } })
   const n = applyTotalQty(results, universeAll)
-  const zeroed = zeroProvisionalNegatives(results)
+  const zeroed = clampSystemQtys(results)
   if (zeroed.length > 0) {
-    log(`Match: ${zeroed.length} row(s) had a negative "available" figure and no total in Stock Value — set to 0: ${zeroed.join(', ')}`)
+    log(`Match: ${zeroed.length} row(s) had a negative system qty — set to 0 (nothing is minus-one on a shelf): ${zeroed.join(', ')}`)
   }
   if (n > 0 || zeroed.length > 0) {
     await patchUpload({ match_results: results })
@@ -580,6 +589,9 @@ async function runRecheck(client: MdClient, stocktakeId: string, results: MatchR
     added++
   }
   const matchedCount = results.filter(r => r.status === 'matched').length
+  // Never save a negative system qty — see clampSystemQtys.
+  const negs = clampSystemQtys(results)
+  if (negs.length > 0) log(`Set ${negs.length} negative system qty to 0: ${negs.join(', ')}`)
   await patchUpload({ match_results: results, matched_count: matchedCount, matched_at: new Date().toISOString() })
   log(`Recheck: counts synced — ${updated} matched rows updated (${changed} changed), ${added} added from MD`)
 
@@ -604,8 +616,14 @@ async function runRecheck(client: MdClient, stocktakeId: string, results: MatchR
 // where the report endpoint glitched and returned a partial list.
 async function runRefresh(client: MdClient, results: MatchResultEntry[]): Promise<void> {
   log('Refresh: pulling MD Stock Value for current total system qty…')
-  const universe = await fetchInStockUniverse(client, { log })
-  const updated = applyTotalQty(results, universe)
+  // Same fix as the match post-pass (2026-08-27) — this path was missed and is
+  // the one behind the "I refreshed and it is still -1" report: a part at ZERO
+  // on hand is not "in stock", so the filtered universe skipped it and its qty
+  // was never corrected. Pull everything, then take the in-stock VIEW for the
+  // orphan question, which is genuinely about what MD still stocks.
+  const universeAll = await fetchInStockUniverse(client, { log, includeAll: true })
+  const updated = applyTotalQty(results, universeAll)
+  const universe = universeAll.filter(u => u.available > 0)
   const universeBySku = new Set<string>()
   for (const u of universe) if (u.stock_number) universeBySku.add(normSku(u.stock_number))
 
@@ -616,6 +634,9 @@ async function runRefresh(client: MdClient, results: MatchResultEntry[]): Promis
   // Safety guard — refuse to drop everything if Stock Value looks broken.
   if (matchedRows.length >= 50 && survivors.length < matchedRows.length * 0.1) {
     log(`  ⚠ Refusing to drop ${orphans} rows — only ${survivors.length}/${matchedRows.length} matched rows survived (Stock Value may have glitched). Updated qty only.`)
+    // Never save a negative system qty — see clampSystemQtys.
+    const negs = clampSystemQtys(results)
+    if (negs.length > 0) log(`Set ${negs.length} negative system qty to 0: ${negs.join(', ')}`)
     await patchUpload({ match_results: results, matched_at: new Date().toISOString() })
     await notifySlack(`Refresh: ${updated} updated · skipped removing ${orphans} orphans (Stock Value looked anomalous)`, false)
     return
@@ -638,6 +659,9 @@ async function runRefresh(client: MdClient, results: MatchResultEntry[]): Promis
   const removedCount = results.length - kept.length
   const spared = orphans - removedCount
 
+  // Never save a negative system qty — see clampSystemQtys.
+  const negs = clampSystemQtys(kept)
+  if (negs.length > 0) log(`Set ${negs.length} negative system qty to 0: ${negs.join(', ')}`)
   await patchUpload({ match_results: kept, matched_at: new Date().toISOString() })
 
   log(`Refresh: qty updated on ${updated} from Stock Value; removed ${removedCount} uncounted rows no longer in Stock Value${spared > 0 ? ` (${spared} counted rows kept despite missing from Stock Value)` : ''}`)
