@@ -36,13 +36,24 @@ interface DistributorJobs {
   rejected: number
   sourceComputedAt: string | null
 }
+interface ConvBlock { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }
+interface CompareYear {
+  fy: number
+  synced_at: string | null
+  months: { k: string; label: string }[]
+  conv: ConvBlock
+  convByState: Record<string, ConvBlock>
+  distributor_jobs?: DistributorJobs | null
+}
 interface ApiResp {
   fy: number | null
   fys: number[]
   payload: Payload | null
   synced_at: string | null
   distributor_jobs?: DistributorJobs | null
-  comparisons?: { fy: number; payload: Payload; synced_at: string | null; distributor_jobs?: DistributorJobs | null }[]
+  // Comparison years arrive COMPACT — counts only, never the points arrays
+  // (a full payload is 1-2MB and the comparison views only read counts).
+  comparisons?: CompareYear[]
   // Booking-deposit invoices for the FY — excluded from the job totals (noise),
   // shown as a sub-line under the Revenue stat. byMonth is FY-indexed (Jul=0).
   deposits?: { total: number; count: number; byMonth: number[] } | null
@@ -534,7 +545,7 @@ interface ConvCounts { qcount: Record<string, number[]>; qval: Record<string, nu
 function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons }: {
   P: Payload; COL: Record<string, string>; NAME: Record<string, string>; st: string
   dist: DistributorJobs | null; distOn: boolean; setDistOn: (v: boolean) => void
-  comparisons: { fy: number; payload: Payload; distributor_jobs?: DistributorJobs | null }[]
+  comparisons: CompareYear[]
 }) {
   const [chart, setChart] = useState(false)
 
@@ -583,26 +594,19 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons
   // filter and the distributor fold included — so the percentages are
   // like-for-like rather than one year counting things the other doesn't.
   const cmp = useMemo(() => comparisons.map(cy => {
-    const cp = cy.payload
-    let cc: ConvCounts
-    if (st === 'all') cc = cp.conv
-    else {
-      const qcount: Record<string, number[]> = {}, qval: Record<string, number[]> = {}, jcount: Record<string, number[]> = {}
-      cp.quotes.points.forEach(pt => {
-        if (pcState(pt.pc) !== st) return
-        ;(qcount[pt.g] ||= Array(12).fill(0))[pt.m]++
-        ;(qval[pt.g] ||= Array(12).fill(0))[pt.m] += pt.a
-      })
-      cp.jobs.points.forEach(pt => { if (pcState(pt.pc) === st) (jcount[pt.g] ||= Array(12).fill(0))[pt.m]++ })
-      cc = { qcount, qval, jcount }
-    }
+    // The server pre-rolled the per-state counts so it didn't have to ship the
+    // points; a state with no activity that year is simply absent.
+    const cc: ConvCounts = st === 'all'
+      ? cy.conv
+      : (cy.convByState?.[st] || { qcount: {}, qval: {}, jcount: {} })
     const cd = cy.distributor_jobs
     const useDist = distOn && st === 'all' && !!cd && cd.total > 0
     const byVeh = CK.map(c => {
       const q = sum(cc.qcount[c] || [])
       const jBase = sum(cc.jcount[c] || [])
-      const j = jBase + (useDist && cd ? sum(cd.jcount[c] || []) : 0)
-      return { c, q, j, pct: q ? (100 * j) / q : 0 }
+      const d = cd ? sum(cd.jcount[c] || []) : 0
+      const j = jBase + (useDist ? d : 0)
+      return { c, q, j, d, pct: q ? (100 * j) / q : 0 }
     })
     const tq2 = byVeh.reduce((a, b) => a + b.q, 0)
     const tj2 = byVeh.reduce((a, b) => a + b.j, 0)
@@ -664,7 +668,7 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons
                   const delta = pv && pv.q ? r.pct - pv.pct : null
                   return (
                     <td key={cy.fy} className="num" style={{ color: 'var(--wm-muted)' }}
-                        title={pv ? `FY${cy.fy}: ${pv.j} jobs / ${pv.q} quotes` : ''}>
+                        title={pv ? `FY${cy.fy}: ${pv.j} jobs / ${pv.q} quotes${on ? ` — includes ${pv.d} distributor` : pv.d ? ` (${pv.d} distributor jobs not counted)` : ''}` : ''}>
                       {pv && pv.q ? `${pv.pct.toFixed(0)}%` : '–'}
                       {delta != null && (
                         <span style={{ display: 'block', fontSize: 9.5, color: delta >= 0 ? 'var(--wm-mint)' : '#e0707a' }}>
@@ -739,7 +743,7 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons
 function ConvBars({ rows, COL, NAME, showDist, cmp, fy }: {
   rows: { c: string; q: number; j: number; d: number; pct: number }[]
   COL: Record<string, string>; NAME: Record<string, string>; showDist: boolean
-  cmp: { fy: number; byVeh: { c: string; q: number; j: number; pct: number }[] }[]
+  cmp: { fy: number; byVeh: { c: string; q: number; j: number; d: number; pct: number }[] }[]
   fy: number
 }) {
   // The scale spans every year on screen, or a comparison year taller than the

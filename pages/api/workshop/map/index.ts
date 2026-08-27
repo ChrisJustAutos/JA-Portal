@@ -8,6 +8,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { distributorJobsForFy } from '../../../../lib/workshop-map/distributor-jobs'
+import { pcState } from '../../../../lib/workshop-map/postcode-state'
 
 export default withAuth('view:reports', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'GET only' }) }
@@ -45,15 +46,24 @@ export default withAuth('view:reports', async (req: NextApiRequest, res: NextApi
     .filter(n => Number.isFinite(n) && fys.includes(n) && n !== fy)
     .slice(0, 4)
 
+  // A comparison year is sent COMPACT — the conv counts, a per-state rollup of
+  // the same, and its distributor jobs. Never the points arrays: those are the
+  // whole bulk of a payload (FY2026 is 2.1MB, FY2025 1.2MB), and shipping two
+  // of them alongside the primary year runs at Vercel's response ceiling for a
+  // view that only ever reads the counts. This keeps a comparison year at a few
+  // KB while still supporting the state filter.
   const comparisons = compareFys.length
     ? await Promise.all(compareFys.map(async cfy => {
         const { data: c } = await db.from('md_workshop_map_cache')
           .select('fy, payload, synced_at').eq('fy', cfy).single()
         if (!c) return null
+        const p: any = c.payload || {}
         return {
           fy: c.fy,
-          payload: c.payload,
           synced_at: c.synced_at,
+          months: p.months || [],
+          conv: p.conv || { qcount: {}, qval: {}, jcount: {} },
+          convByState: rollupByState(p),
           distributor_jobs: await distributorJobsForFy(db, c.fy),
         }
       }))
@@ -74,6 +84,24 @@ export default withAuth('view:reports', async (req: NextApiRequest, res: NextApi
     last_run: await lastRun(db),
   })
 })
+
+// Per-state conversion counts for a comparison year, built server-side from the
+// payload's points so the client can honour the state filter WITHOUT us shipping
+// the points themselves. Same shape as payload.conv, keyed by state.
+function rollupByState(p: any): Record<string, { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }> {
+  const out: Record<string, { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }> = {}
+  const bucket = (stt: string) => (out[stt] ||= { qcount: {}, qval: {}, jcount: {} })
+  for (const pt of (p?.quotes?.points || [])) {
+    const b = bucket(pcState(pt.pc))
+    ;(b.qcount[pt.g] ||= Array(12).fill(0))[pt.m]++
+    ;(b.qval[pt.g] ||= Array(12).fill(0))[pt.m] += Number(pt.a) || 0
+  }
+  for (const pt of (p?.jobs?.points || [])) {
+    const b = bucket(pcState(pt.pc))
+    ;(b.jcount[pt.g] ||= Array(12).fill(0))[pt.m]++
+  }
+  return out
+}
 
 // Booking deposits AWAITING JOBS for the FY. The map's job totals now fold
 // each customer's deposit(s) into their next completed job (build-payload —
