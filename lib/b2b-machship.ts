@@ -319,7 +319,6 @@ export async function manifestConsignments(
   }
   const close = new Date(pickup)
   close.setUTCHours(17, 0, 0, 0)
-  const toUtcIso = (d: Date) => new Date(d.getTime() - BRIS_OFFSET_MS).toISOString()
 
   // Step 1 — let MachShip build the manifest groups.
   const grouped: any = await machshipFetch<any>(
@@ -330,14 +329,32 @@ export async function manifestConsignments(
     return { ok: false, manifestId: null, raw: grouped, errors: ['MachShip grouped these consignments into nothing — they may already be manifested, or deleted.'] }
   }
 
-  // Step 2 — send those groups back, with our pickup window.
-  const payload = groups.map(g => ({
-    ...g,
-    companyId: g?.companyId || opts.companyId || undefined,
-    pickupDateTime: toUtcIso(pickup),
-    pickupClosingTime: toUtcIso(close),
-    pickupAlreadyBooked: false,
-  }))
+  // Step 2 — send those groups back.
+  //
+  // KEEP MACHSHIP'S OWN pickup window. It computes it from the FROM-LOCATION's
+  // configured operating hours, which we do not know; overwriting it produced
+  // "Pickup Time must be before the locations closing time" (2026-08-27).
+  //
+  // Note the format difference that made this worse: the grouped response
+  // returns naive LOCAL times ("2021-02-05T07:15:19.337", no Z) while we were
+  // sending UTC with a Z. Read as local, our 23:00Z became 11pm — after every
+  // location's closing time. Any value we generate below is therefore written
+  // in the same naive-local form, in Brisbane time.
+  const localNaive = (d: Date) => new Date(d.getTime()).toISOString().replace(/Z$/, '')
+  const payload = groups.map(g => {
+    const out: any = { ...g, companyId: g?.companyId || opts.companyId || undefined }
+    // Only fill these in when MachShip didn't — never override what it chose.
+    if (!out.pickupDateTime) out.pickupDateTime = localNaive(pickup)
+    if (!out.pickupClosingTime) out.pickupClosingTime = localNaive(close)
+    if (out.pickupAlreadyBooked == null) out.pickupAlreadyBooked = false
+    return out
+  })
+  console.warn('[machship] manifest groups:', JSON.stringify(groups.map((g: any) => ({
+    consignments: Array.isArray(g?.consignmentIds) ? g.consignmentIds.length : 0,
+    companyId: g?.companyId, carrierName: g?.carrierName, palletSpaces: g?.palletSpaces,
+    pickupDateTime: g?.pickupDateTime, pickupClosingTime: g?.pickupClosingTime,
+    pickupAlreadyBooked: g?.pickupAlreadyBooked,
+  }))).slice(0, 800))
   const res: any = await machshipFetch<any>('POST', '/apiv2/manifests/manifest', payload)
   const rows: any[] = Array.isArray(res) ? res : (res ? [res] : [])
 
