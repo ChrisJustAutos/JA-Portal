@@ -360,7 +360,8 @@ export interface InStockItem {
   stock_id: number
   stock_number: string
   name: string
-  available: number     // on-hand qty (> 0)
+  available: number     // TOTAL on-hand (misnamed for history; see totalOnHandFromStock).
+                        // > 0 unless the pull was made with includeAll.
   buy_price: number
   value: number         // available × buy_price
   bin: string | null
@@ -376,6 +377,35 @@ function pickNum(obj: any, keys: string[]): number | undefined {
     if (typeof v === 'string' && v.trim() !== '' && isFinite(Number(v))) return Number(v)
   }
   return undefined
+}
+
+/**
+ * TOTAL ON-HAND for an MD stock object — the stocktake "system QTY".
+ *
+ * ⚠ DELIBERATELY EXCLUDES every available-style key. "Available" is on-hand
+ * MINUS allocated, so it goes NEGATIVE on a zero-stock part with an open
+ * allocation. Reading it as the on-hand baseline is what put -1 on
+ * 04111-11431 and FFVDJ79-EXH-DBK-JA in the 2026-08-27 count when both are
+ * really 0 (Chris: "should only ever pick up current quantity not available").
+ *
+ * Returns undefined when the object carries no total — `/stocks.json` has both
+ * `quantity` and `available_quantity`, but `/auto_workshop/resource_search`
+ * (which the SKU match uses) returns available ONLY, with no allocated figure
+ * to add back. undefined means "unknown", never "assume available".
+ */
+export function totalOnHandFromStock(s: any): number | undefined {
+  const total = pickNum(s, ['quantity', 'total_quantity', 'total_qty', 'on_hand', 'on_hand_quantity', 'quantity_on_hand', 'stock_on_hand', 'soh', 'current_quantity'])
+  if (total != null) return total
+  // Available + allocated reconstructs the total exactly, where both exist.
+  const avail = pickNum(s, ['available', 'available_quantity'])
+  const alloc = pickNum(s, ['allocated_quantity', 'allocated', 'reserved_quantity'])
+  if (avail != null && alloc != null) return avail + alloc
+  return undefined
+}
+
+/** Available (on-hand − allocated). NOT the stocktake baseline — see above. */
+export function availableFromStock(s: any): number | undefined {
+  return pickNum(s, ['available', 'available_quantity'])
 }
 
 /** First present non-empty string from a candidate list. */
@@ -398,7 +428,11 @@ function pickStr(obj: any, keys: string[]): string | null {
  */
 export async function fetchInStockUniverse(
   client: MdClient,
-  opts: { log?: (...a: any[]) => void; maxPages?: number; onSample?: (raw: any) => void } = {},
+  // includeAll keeps ZERO and NEGATIVE on-hand rows too. The coverage check
+  // wants in-stock only, but the stocktake's system-QTY pass needs every part
+  // it counted — a part sitting at 0 was being skipped here and so kept the
+  // available-derived figure from the SKU search (2026-08-27 fix).
+  opts: { log?: (...a: any[]) => void; maxPages?: number; onSample?: (raw: any) => void; includeAll?: boolean } = {},
 ): Promise<InStockItem[]> {
   const log = opts.log || (() => {})
   const maxPages = opts.maxPages || 500
@@ -418,10 +452,11 @@ export async function fetchInStockUniverse(
     if (stocks.length === 0) break
 
     for (const s of stocks) {
-      // Total on-hand qty (NOT "available" = total − allocated). Prefer the
-      // total/quantity fields; fall back to available only if that's all MD gives.
-      const available = pickNum(s, ['quantity', 'total_quantity', 'total_qty', 'on_hand', 'on_hand_quantity', 'quantity_on_hand', 'stock_on_hand', 'soh', 'current_quantity', 'available', 'qty']) ?? 0
-      if (!(available > 0)) continue   // in-stock only
+      // Total on-hand (NEVER available — see totalOnHandFromStock).
+      const total = totalOnHandFromStock(s)
+      if (total == null) continue      // no usable quantity at all
+      const available = total
+      if (!opts.includeAll && !(available > 0)) continue   // in-stock only
       const buy = pickNum(s, ['average_buy_price', 'buy_price', 'cost_price', 'price']) ?? 0
       items.push({
         stock_id: Number(s.id) || 0,

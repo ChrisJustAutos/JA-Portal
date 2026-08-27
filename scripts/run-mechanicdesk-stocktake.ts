@@ -43,6 +43,8 @@ import {
   fetchInStockUniverse,
   type MdClient,
   type MdStocktake,
+  totalOnHandFromStock,
+  availableFromStock,
   type InStockItem,
 } from '../lib/mechanicdesk-stocktake'
 
@@ -72,6 +74,12 @@ interface MatchResultEntry {
   sheet_location?: string
   candidates?: Array<{ id: number; stock_number: string; name: string }>
   error?: string
+  // md_current_qty came from the SKU search's "available" figure, which is
+  // on-hand MINUS allocated — a guess, not the baseline. Cleared the moment the
+  // Stock Value pass supplies the real total. Any still-provisional NEGATIVE is
+  // zeroed before saving: a negative on-hand baseline derived from available is
+  // never right (2026-08-27).
+  md_qty_provisional?: boolean
   count_source?: 'md_stocktake'  // counted qty was pulled from the live MD stocktake entry
   added_from_md?: boolean        // row was counted directly in MD, not present in our sheet
 }
@@ -235,10 +243,15 @@ async function matchSingleRow(
     if (r.kind === 'matched' && r.stock) {
       const st: any = r.stock
       if (!loggedStockKeys) { loggedStockKeys = true; log(`  match: MD stock fields = ${Object.keys(st).join(', ')} (quantity=${st.quantity}, available=${st.available}, allocated=${st.allocated_quantity})`) }
-      // System QTY = TOTAL on hand, not "available" (= total − allocated).
-      const total = typeof st.quantity === 'number' ? st.quantity
-        : (typeof st.available === 'number' && typeof st.allocated_quantity === 'number') ? st.available + st.allocated_quantity
-        : (typeof st.available === 'number' ? st.available : undefined)
+      // System QTY = TOTAL on hand, NEVER "available" (= total − allocated).
+      // resource_search returns available ONLY (no quantity, no allocated), so
+      // totalOnHandFromStock comes back undefined for nearly every row here and
+      // the real figure arrives from the Stock Value pass below. We still keep
+      // available as a PROVISIONAL stand-in so a failed Stock Value pull leaves
+      // a rough baseline rather than blanking every row — but it is flagged, and
+      // a provisional negative gets zeroed rather than saved.
+      const total = totalOnHandFromStock(st)
+      const provisional = total == null ? availableFromStock(st) : undefined
       return {
         entry: {
           ...baseEntry,
@@ -246,7 +259,8 @@ async function matchSingleRow(
           md_stock_id: r.stock.id,
           md_stock_name: r.stock.name || '',
           md_stock_number: r.stock.stock_number || '',
-          md_current_qty: total,
+          md_current_qty: total != null ? total : provisional,
+          ...(total == null && provisional != null ? { md_qty_provisional: true } : {}),
           md_bin: r.stock.bin || undefined,
           md_location: r.stock.location || undefined,
         },
@@ -410,9 +424,31 @@ function applyTotalQty(results: MatchResultEntry[], universe: InStockItem[]): nu
   for (const r of results) {
     if (r.status !== 'matched') continue
     const q = qtyByNum.get(normSku(r.md_stock_number || r.sku))
-    if (q != null) { r.md_current_qty = q; n++ }
+    if (q != null) { r.md_current_qty = q; delete r.md_qty_provisional; n++ }
   }
   return n
+}
+
+/**
+ * Last line of defence: any row still carrying a PROVISIONAL figure (i.e. the
+ * SKU search's `available`, because Stock Value had no total for it) that is
+ * NEGATIVE is set to 0.
+ *
+ * A negative here always means "zero on hand with an open allocation" — it is
+ * never a real on-hand baseline, and pushing it to MD makes the stocktake
+ * variance wrong by the allocated amount. A genuine negative that came from
+ * MD's own `quantity` is NOT touched: MD lets stock go negative when something
+ * is sold before it is received, and that is a real figure.
+ */
+function zeroProvisionalNegatives(results: MatchResultEntry[]): string[] {
+  const fixed: string[] = []
+  for (const r of results) {
+    if (r.md_qty_provisional && typeof r.md_current_qty === 'number' && r.md_current_qty < 0) {
+      fixed.push(`${r.md_stock_number || r.sku} (${r.md_current_qty} → 0)`)
+      r.md_current_qty = 0
+    }
+  }
+  return fixed
 }
 
 // Pull MD's in-stock universe and store the items NOT in `counted`. `source`
@@ -457,12 +493,25 @@ async function storeCoverage(client: MdClient, counted: Set<string>, source: str
 async function runMatchPostPass(client: MdClient, results: MatchResultEntry[]): Promise<void> {
   log('Match: pulling MD Stock Value to set total system qty…')
   let sample: any = null
-  const universe = await fetchInStockUniverse(client, { log, onSample: (r) => { sample = r } })
-  const n = applyTotalQty(results, universe)
-  if (n > 0) { await patchUpload({ match_results: results }); log(`Match: set total system qty on ${n} matched rows from Stock Value`) }
+  // includeAll: a part sitting at ZERO on hand is not "in stock", but the
+  // stocktake still counted it and still needs its true system QTY. Without
+  // this it kept the SKU search's available figure and showed -1 whenever
+  // something was allocated against it (Chris, 2026-08-27).
+  const universeAll = await fetchInStockUniverse(client, { log, includeAll: true, onSample: (r) => { sample = r } })
+  const n = applyTotalQty(results, universeAll)
+  const zeroed = zeroProvisionalNegatives(results)
+  if (zeroed.length > 0) {
+    log(`Match: ${zeroed.length} row(s) had a negative "available" figure and no total in Stock Value — set to 0: ${zeroed.join(', ')}`)
+  }
+  if (n > 0 || zeroed.length > 0) {
+    await patchUpload({ match_results: results })
+    log(`Match: set total system qty on ${n} matched rows from Stock Value (${universeAll.length} stocks incl. zero/negative on hand)`)
+  }
   const counted = new Set<string>()
   for (const r of results) { if (r.md_stock_number) counted.add(normSku(r.md_stock_number)); if (r.sku) counted.add(normSku(r.sku)) }
-  await storeCoverage(client, counted, 'uploaded sheet', universe, sample)
+  // Coverage is an IN-STOCK question — filter here rather than re-pulling.
+  const inStock = universeAll.filter(u => u.available > 0)
+  await storeCoverage(client, counted, 'uploaded sheet', inStock, sample)
 }
 
 // Re-check: read what's actually in the MD stocktake now and pull the changes
