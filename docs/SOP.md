@@ -388,6 +388,16 @@ The portal now recovers from this by itself. When the id stops resolving it look
 | Booking blocked on an unsettled BECS payment | Deliberate — the money hasn't cleared. If you accept the risk, the Book button offers "Book anyway"; the decision is stamped on the order timeline. |
 | Rates look wrong | Admin → B2B → Settings → freight zones / carriers / packaging. Drop-ship rates have their own calibration panel. |
 
+### 4.3a Pallet options (Admin → B2B → Settings → Freight packaging)
+
+You can configure **as many pallets as you actually ship on**, not just one. Each has a name, a deck size, the tallest stack you will build on it, and a max weight. Add a *Half pallet* alongside the standard one and the system will use whichever suits the order.
+
+**How it picks.** When an order palletises, it takes the pallet that ships it in the **fewest pallets**. If two pallets both do it in the same number, it takes the **smaller deck** — that is normally the cheaper freight. So a 900 kg order goes on two 1000 kg pallets rather than three 600 kg ones, and a 100 kg order that fits either goes on the half pallet.
+
+**Palletise over (kg)** sits underneath the list and is deliberately separate. It decides whether an order goes on pallets *at all* instead of boxes, which is a decision about the whole order rather than about any one pallet — so it is set once. An order containing an item marked as pallet-packaging always palletises, whatever it weighs.
+
+**⚠** Deleting or switching off every pallet means orders ship in cartons no matter how heavy they are. The list warns you when it is empty.
+
 ### 4.4 Drop-ship orders
 
 Items we don't hold are ordered from the supplier automatically at payment. When the supplier replies to that PO email, the portal reads the reply and does the rest: bills the PO, flips the sale order to an invoice, receipts payment, passes the ETA to the distributor and posts to `#jaws-orders`.

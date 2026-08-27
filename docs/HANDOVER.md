@@ -490,6 +490,7 @@ The key reason this was cheap: freight booking, MYOB `ShipToAddress`, the invoic
 **SOPs**
 - **Onboard a distributor**: Admin → B2B → Distributors → Add (live MYOB customer typeahead links the card) → open the distributor → Invite users (magic-link / welcome token email). Owners manage their own team after that.
 - **Over-limit orders**: quantities above `over_limit_qty` route to a quote-or-dropship flow instead of straight checkout.
+- **Pallets are a table** (`b2b_freight_pallets`, migration 206), mirroring `b2b_freight_boxes` — CRUD at `/api/b2b/admin/freight-pallets`, edited in Settings → Freight packaging. `packItems()` takes a LIST and picks the pallet that ships the order in the fewest units, tie-breaking on the smaller deck; `opts.palletId` forces a specific one. The palletise-over-weight threshold stays on `b2b_settings.freight_pallet_threshold_g` — it decides pallet vs cartons for the order, not which pallet. The legacy `b2b_settings.freight_pallet_*` columns are retained and `loadFreightPallets()` falls back to them when the table is empty, so a deploy landing ahead of the migration cannot leave freight unquotable.
 - **Bundles**: "includes" children ship inside the parent's box (affects freight cartonization).
 - **Refunds**: admin order page → Refund modal → **Items mode** (pick lines + quantities; amount derived server-side from checkout-exact pricing; `refunded_qty` prevents double refunds) or amount modes (covers freight/surcharge). Mirrored to MYOB as a credit note with negative item lines (Xero path posts on B2B_SALES).
 - **Drop-ship receiving**: supplier replies to the PO email → `b2b-dropship-confirm` cron reads it → auto-bills the PO, flips the sale order to invoice, receipts payment, relays ETA to the distributor, posts to `#jaws-orders`. Manual MYOB conversions are adopted rather than duplicated.
@@ -776,7 +777,7 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 
 **Consistency / drift**
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
-- Migrations `148` and `153` are duplicated numbers; latest applied is `204_b2b_distributor_addresses`, so next is `205`.
+- Migrations `148` and `153` are duplicated numbers; latest applied is `206_b2b_freight_pallets`, so next is `207`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.
