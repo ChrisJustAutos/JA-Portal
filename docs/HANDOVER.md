@@ -207,6 +207,17 @@ Admin surfaces:
 - **Incoming webhooks** (one env URL per channel): `SLACK_WEBHOOK_URL` plus `SLACK_WEBHOOK_{JAWS_PAYMENTS,VPS_PAYMENTS,JAWS_PAYOUTS,AP_VPS}` and per-tenant B2B order webhook in `b2b_settings`.
 - **Bot** (`lib/slack-bot/*`): env `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_CHANNEL_IDS`, `SLACK_PARTS_ONLY_CHANNEL_IDS` (parts-only channels get exactly one stock-availability answer per top-level message, no thread replies, no clarifying questions), `SLACK_PARTS_CONTACT`. Single endpoint `POST /api/slack/ask` handles events, mentions, `/ask`, and interactive buttons; HMAC verified; acks in <3s then continues via `waitUntil`.
 - The parts bot answers from `md_stock_cache`, refreshed every 30 min by the `md-stock-sync` GitHub Action.
+**“On cars” checker (Stocktake MD).** `md-oncar` → `scripts/pull-md-oncar.ts` → `collectPartsOnCars()` → `POST /api/workshop/oncar/ingest` (service token `stocktake:write`) → `md_oncar_runs` / `_items` / `_jobs` / `_job_items` (migration 205). `GET /api/workshop/oncar` serves the newest **done** run (so a refresh in flight never blanks the screen) while reporting the newest run's state for the spinner; `POST /api/workshop/oncar/refresh` (`edit:stocktakes`) pre-creates the pending row then `repository_dispatch`es `oncar-pull`. Panel: `components/workshop/PartsOnCarsPanel.tsx` on `/stocktake`.
+
+**What qualifies, and why it was probed rather than assumed.** A part counts only when it is on a **started** job — MD diary status `new`, whose date has arrived, whose invoice is **not finalized** (`invoice.finalized` is MD's stock-deduction gate), carrying tracked stock lines. Probed 2026-08-27:
+
+- MD has exactly three job statuses: `new`, `preparing`, `finished`.
+- **`preparing` is MD's forward forecast** — jobs booked ahead with parts prepped — and is EXCLUDED. It held 48 jobs / 404 units against a real figure of 17 jobs / 185.5 units, so counting it would more than triple the answer.
+- **There is no usable jobs-list endpoint.** `/auto_workshop/{jobs,job_list,open_jobs,job_board,wip,kanban}` all 404 and `/jobs.json` 504s. Enumeration is a day-by-day diary sweep (`/auto_workshop/diary`), **backwards only** — which is also what makes “the booking date has arrived” automatic. Default lookback 365 days; the oldest qualifying job when probed was 209 days old.
+- **`on_hand − available_quantity == allocated_quantity` exactly** (30/30 sampled). So MD's allocation is computable from the cached stock list — but it counts future bookings too, making it an **upper bound**, not this figure. Don't be tempted to swap the job walk for it.
+
+The worker shares the `mechanicdesk-session` concurrency group and re-logs in on eviction: a truncated sweep would render as “nothing is on a car”, the most misleading answer this screen can give. `days_failed` is surfaced in the UI for the same reason.
+
 - **The cache is all-or-nothing.** MechanicDesk allows one session per employee account, so a human (or another worker) logging in mid-run evicts the scraper. `fetchAllStock` therefore re-logs in and retries the same page on a 401, and **throws** if it finishes short of the page count MD reported on page 1 — the run is marked `error` and the previous cache is left alone. Before this (fixed 2026-08-27) a mid-run eviction silently truncated the catalogue and wrote the partial set over a good one: on 2026-08-26 the cache dropped from 856 items to 270 and reported success, leaving the front counter unable to find two-thirds of the catalogue. If the parts bot starts saying "not found" for stock you know exists, check `md_stock_sync_runs.item_count` against recent runs first.
 
 **What we post where.** Slack is the business's alerting surface — most automation reports into it rather than email, so a dead webhook is a silent failure. The channels built so far:
@@ -348,6 +359,7 @@ MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,U
 | `md-stock-sync` | every 30 min, 06:00–19:30 Mon–Sat | Full MD stock catalogue → `md_stock_cache` (Slack parts bot) |
 | `md-workshop-map` | 03:30 nightly | Full invoices/quotes/customers pull → workshop map (FY2025 was a one-time backfill; nightly FROM = 2025-07-01) |
 | `mechanicdesk-prepick` | 06/11/15:00 weekdays | Diary-job parts demand → Pre Pick snapshot |
+| `md-oncar` | 05:40 Mon–Sat, + on demand | Parts on STARTED jobs → `md_oncar_*` (“On cars” panel on Stocktake (MD)) |
 | `sales-recap` | Mon 07:00 full+email; ~7 intraday MD refreshes | Weekly Sales Recap (Monday boards + MD scrape → email Ryan) |
 | `md-customer-import` | 02:00 nightly | Monday quote-channel leads → MD customers (MD can't search phones) |
 | `tune-jobs-md` | 02:30 nightly | Submitted tune jobs → MD customer + vehicle + note |

@@ -120,6 +120,25 @@ A thank-you letter and envelope are queued automatically for every newly finalis
   **⚠ Counted rows are sacred.** If a count looks wrong, investigate before applying — applying writes the variance away.
 - **Stocktake (MD)** counts against Mechanics Desk instead, and is report-only.
 
+#### “On cars” — why the shelf is short, before you re-count it
+
+Stocktake (MD) has an **On cars** panel above the uploads. It lists the parts already fitted to cars sitting in the
+workshop on jobs that haven't been invoiced yet. Mechanics Desk still counts those parts as on-hand, so **your shelf
+count will be short by exactly that much, and that is correct** — nothing is missing.
+
+Read it before you start chasing a variance:
+
+- **By part** — every part number with units on cars, MD's on-hand, and a **Should count** column: what the shelf
+  ought to physically hold. Count against that number, not MD's on-hand. Click a row to see which cars.
+- **By car** — each vehicle with parts on it, oldest first, and how many days it has been open. A car that has been
+  sitting for months is usually a job somebody forgot to invoice; that is worth chasing on its own.
+- **↻ Check Mechanics Desk** re-runs it (a couple of minutes). It also runs by itself early each weekday morning, so
+  it is normally current before anyone starts counting.
+
+**Cars booked in for later are deliberately NOT counted**, even when their parts have already been picked — the car
+isn't here, so those parts should still be on the shelf for you to find. If the panel says it's over a day old, or
+warns that some days didn't load, press Check before you trust the numbers.
+
 ### 3.5 Stock transfer
 
 **Stock Transfer** moves stock between JAWS and VPS, raising the paired invoice and bill and the matching MD purchase order.
@@ -745,6 +764,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Dead stock drops sharply between two months | Months before September 2026 counted never-sold kit parts as dead stock; from 25 Aug 2026 they're excluded | Not a data loss — the old month is on the old basis. Reports → Stock EOM → pick that month → **Rebuild from MYOB** restates it so the two compare like for like |
 | The month-end stock email didn't arrive on the 2nd | Either the MYOB connection or the recipient list | Admin → Connections for MYOB health, then Reports → Stock EOM → **Email this report** to send it by hand |
 | The Slack parts bot says it can't find a part you know is in stock | The 30-minute stock sync was interrupted part-way and cached only some of the catalogue | Fixed 2026-08-27 — the sync now refuses to save a partial catalogue and keeps the last good one instead. If it happens again the bot's numbers will be *stale* rather than missing, so check when it last synced and tell Chris. Don't re-count the shelf over it. |
+| A stocktake count is short and nobody can explain it | Parts fitted to cars on jobs that haven't been invoiced — MD still counts them as on-hand | Stocktake (MD) → the **On cars** panel. Use its **Should count** column as the target, not MD's on-hand. If it's stale, press **Check Mechanics Desk** first |
 | Someone can't see a tab | Permissions, working as designed | Ask Chris |
 
 **Where to look first, always:** Admin → Connections. It shows every integration and when it last succeeded.
@@ -774,6 +794,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 3. **"Sales" in the weekly recap means orders, not turnover.**
 4. **A never-quoted lead is not a lost quote.**
 5. **Counted stocktake rows are sacred** — investigate before applying a variance.
+6. **Check “On cars” before chasing a stocktake variance** — parts fitted to cars in the shop are still on MD's books. A short shelf is usually the answer, not a problem.
 6. **The workshop runs on Mechanics Desk** — the portal handles parts, letters, counting and reporting around it.
 7. **Credentials change in the portal**, not in environment variables.
 8. **Reload when the new-version banner appears.**
