@@ -211,7 +211,14 @@ async function finaliseShipment(c: SupabaseClient, order: OrderRow): Promise<str
  */
 export async function shipNowForOrders(
   orderIds: string[],
-  opts: { actorId?: string | null; acceptUnsettled?: boolean } = {},
+  opts: {
+    actorId?: string | null
+    acceptUnsettled?: boolean
+    /** Chosen pickup as naive local "YYYY-MM-DDTHH:mm" (Brisbane). Blank = let
+     *  MachShip pick the window, rolling to the next business day if the
+     *  carrier's cut-off has passed. */
+    pickupAt?: string | null
+  } = {},
 ): Promise<ShipNowResult> {
   const c = svc()
   const ids = Array.from(new Set(orderIds.map(s => String(s || '').trim()).filter(Boolean)))
@@ -419,11 +426,13 @@ async function resolveConsignmentForOrder(o: OrderRow): Promise<Consignment | nu
       // The outcome is decided by bookingSuccessful/errorMessage in the
       // response, NOT by the HTTP status — a 200 has been returned for a
       // manifest that was never created.
-      const outcome = await manifestConsignments(consignmentIds, { companyId })
+      const outcome = await manifestConsignments(consignmentIds, { companyId, pickupAt: opts.pickupAt })
       manifestId = outcome.manifestId
       pickupNote = outcome.rolledToNextDay
         ? `Carrier cut-off for today had passed — pickup booked for ${String(outcome.pickupDateTime || '').slice(0, 16).replace('T', ' ')}.`
-        : null
+        : opts.pickupAt
+          ? `Pickup booked for ${String(opts.pickupAt).slice(0, 16).replace('T', ' ')} (chosen by ${opts.actorId ? 'admin' : 'system'}).`
+          : null
 
       // Belt and braces: ask the carrier. MachShip has reported success for a
       // consignment it left Unmanifested, and marking an order shipped when the

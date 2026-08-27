@@ -961,6 +961,11 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   const [bookingBusy,  setBookingBusy]  = useState(false)
   const [refreshBusy,  setRefreshBusy]  = useState(false)
   const [pickBusy,     setPickBusy]     = useState(false)
+  // Optional carrier pickup. Blank = let MachShip choose its own window (and
+  // roll to the next business day if today's cut-off has gone). Filled in = we
+  // send exactly this and MachShip's refusal, if any, is reported as-is.
+  const [pickupAt, setPickupAt] = useState('')
+  const [showPickup, setShowPickup] = useState(false)
   const [pickDone,     setPickDone]     = useState(false)
   // Ship Now — manifests the consignment with MachShip (which also books the
   // carrier pickup) and then converts the MYOB order to a tax invoice, receipts
@@ -968,7 +973,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   async function shipNow(acceptUnsettled = false) {
     const ok = acceptUnsettled ? true : await confirmDialog({
       title: 'Ship now?',
-      message: `This manifests consignment ${order.machship_consignment_number || order.machship_consignment_id} with the carrier (booking a pickup), raises the MYOB tax invoice and emails the distributor. It can't be undone from here.`,
+      message: `This manifests consignment ${order.machship_consignment_number || order.machship_consignment_id} with the carrier (${pickupAt ? `pickup ${pickupAt.replace('T', ' ')}` : 'pickup booked at the carrier’s next available time'}), raises the MYOB tax invoice and emails the distributor. It can't be undone from here.`,
       confirmLabel: 'Ship now',
     })
     if (!ok) return
@@ -977,7 +982,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
       const r = await fetch('/api/b2b/admin/orders/ship-now', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: [order.id], ...(acceptUnsettled ? { accept_unsettled: true } : {}) }),
+        body: JSON.stringify({ ids: [order.id], ...(acceptUnsettled ? { accept_unsettled: true } : {}), ...(pickupAt ? { pickup_at: pickupAt } : {}) }),
       })
       const j = await r.json()
       const first = Array.isArray(j?.results) ? j.results[0] : null
@@ -1230,6 +1235,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
           ...extra,
         })
         return (
+          <>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center' }}>
               {awaitingDespatch ? (
@@ -1256,6 +1262,14 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                 className="al-press al-focus"
                 style={mb({ background: A.accent, color: '#fff', cursor: shipNowBusy ? 'wait' : 'pointer' })}>
                 {shipNowBusy ? 'Shipping…' : 'Ship now'}
+              </button>
+            )}
+            {awaitingDespatch && !showPickup && (
+              <button onClick={() => setShowPickup(true)}
+                title="Choose exactly when the carrier collects, instead of letting MachShip pick the next available window"
+                className="al-press al-focus al-ghost"
+                style={mb({ background: 'transparent', color: A.accent })}>
+                Set pickup time…
               </button>
             )}
             {hasConsignment && (
@@ -1293,6 +1307,27 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
               </span>
             )}
           </div>
+          {awaitingDespatch && showPickup && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8, padding: '10px 12px', background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8 }}>
+              <span style={{ fontSize: 12, color: T.text2, fontWeight: 600 }}>Carrier pickup</span>
+              <input type="date" value={pickupAt.slice(0, 10)}
+                onChange={e => setPickupAt(`${e.target.value}T${(pickupAt.slice(11) || '09:00')}`)}
+                style={{ background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12.5, padding: '6px 9px', fontFamily: 'inherit' }} />
+              <input type="time" value={pickupAt.slice(11) || ''}
+                onChange={e => setPickupAt(`${(pickupAt.slice(0, 10) || new Date().toISOString().slice(0, 10))}T${e.target.value}`)}
+                style={{ background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12.5, padding: '6px 9px', fontFamily: 'inherit' }} />
+              <button onClick={() => { setPickupAt(''); setShowPickup(false) }}
+                className="al-press al-focus al-ghost"
+                style={{ background: 'transparent', border: 'none', color: T.text3, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Clear
+              </button>
+              <span style={{ fontSize: 11, color: T.text3, flex: 1, minWidth: 220, lineHeight: 1.5 }}>
+                Brisbane time. Leave blank and MachShip books its next available window, rolling to the next business day if today&rsquo;s cut-off has passed.
+                A time you set is sent as-is — if the carrier refuses it (TNT collects from Burnside until 2:00pm) you&rsquo;ll get their reason back.
+              </span>
+            </div>
+          )}
+          </>
         )
       })()}
 

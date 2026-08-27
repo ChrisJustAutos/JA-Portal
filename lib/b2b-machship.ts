@@ -309,7 +309,18 @@ export interface ManifestOutcome {
  */
 export async function manifestConsignments(
   consignmentIds: number[],
-  opts: { companyId?: number | null } = {},
+  opts: {
+    companyId?: number | null
+    /**
+     * Explicit pickup, as naive local "YYYY-MM-DDTHH:mm" (Brisbane). When set,
+     * this REPLACES MachShip's suggested window and the missed-cut-off retry is
+     * skipped — if the carrier refuses the time someone deliberately chose, say
+     * so rather than quietly moving it.
+     */
+    pickupAt?: string | null
+    /** Optional closing time to pair with pickupAt; defaults to 5pm that day. */
+    pickupCloseAt?: string | null
+  } = {},
 ): Promise<ManifestOutcome> {
   const BRIS_OFFSET_MS = 10 * 3600_000
   const nowBris = new Date(Date.now() + BRIS_OFFSET_MS)
@@ -345,11 +356,21 @@ export async function manifestConsignments(
   // location's closing time. Any value we generate below is therefore written
   // in the same naive-local form, in Brisbane time.
   const localNaive = (d: Date) => new Date(d.getTime()).toISOString().replace(/Z$/, '')
+  // An explicitly chosen pickup wins over MachShip's suggestion.
+  const chosen = String(opts.pickupAt || '').trim() || null
+  const chosenClose = String(opts.pickupCloseAt || '').trim()
+    || (chosen ? `${chosen.slice(0, 10)}T17:00` : '')
+
   const payload = groups.map(g => {
     const out: any = { ...g, companyId: g?.companyId || opts.companyId || undefined }
-    // Only fill these in when MachShip didn't — never override what it chose.
-    if (!out.pickupDateTime) out.pickupDateTime = localNaive(pickup)
-    if (!out.pickupClosingTime) out.pickupClosingTime = localNaive(close)
+    if (chosen) {
+      out.pickupDateTime = chosen
+      out.pickupClosingTime = chosenClose
+    } else {
+      // Only fill these in when MachShip didn't — never override what it chose.
+      if (!out.pickupDateTime) out.pickupDateTime = localNaive(pickup)
+      if (!out.pickupClosingTime) out.pickupClosingTime = localNaive(close)
+    }
     if (out.pickupAlreadyBooked == null) out.pickupAlreadyBooked = false
     return out
   })
@@ -383,7 +404,8 @@ export async function manifestConsignments(
   // someone — it just means the pickup belongs on the next business day. Roll
   // it forward once and re-send. Nothing was booked by the refused attempt, so
   // this cannot double-book.
-  const missedCutoff = errs.some(e => /latest .* pickup time|before the locations? closing time/i.test(e))
+  // Never auto-move a pickup someone chose by hand.
+  const missedCutoff = !chosen && errs.some(e => /latest .* pickup time|before the locations? closing time/i.test(e))
   if (missedCutoff) {
     const next = new Date(pickup)
     next.setUTCDate(next.getUTCDate() + 1)

@@ -4,6 +4,8 @@
 // shipped email/push). Core logic in lib/b2b-ship-now.ts.
 //
 // POST /api/b2b/admin/orders/ship-now   body { ids: string[] }  (or { id })
+//   optional { pickup_at: '2026-08-28T09:00' } — chosen carrier pickup (Brisbane
+//   local). Omit to let MachShip choose, rolling past a missed cut-off.
 //
 // Handles one order or a whole despatch run. A batch is deliberately ONE
 // MachShip manifest per company, not one per order, because manifesting also
@@ -36,7 +38,15 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   // after the gate's per-order refusal). The acceptance is logged on each order.
   const acceptUnsettled = body.accept_unsettled === true
 
-  const r = await shipNowForOrders(ids, { actorId: user.id, acceptUnsettled })
+  // Optional chosen pickup, naive local "YYYY-MM-DDTHH:mm". Validated here so a
+  // malformed value can't reach MachShip as a silently-wrong booking time.
+  const rawPickup = String(body.pickup_at || '').trim()
+  if (rawPickup && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(rawPickup)) {
+    return res.status(400).json({ error: 'pickup_at must look like 2026-08-28T09:00' })
+  }
+  const pickupAt = rawPickup || null
+
+  const r = await shipNowForOrders(ids, { actorId: user.id, acceptUnsettled, pickupAt })
   if (!r.ok) return res.status(r.httpStatus).json({ error: r.error, detail: r.detail, not_configured: r.notConfigured, results: r.results })
 
   const shipped = r.results.filter(x => x.ok && !x.already)
