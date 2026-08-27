@@ -22,12 +22,23 @@ export interface PickListLine {
   // parent's box — picked, but never packed separately).
   components?: PickListLine[]
 }
+// PALLETS ONLY: one carton stacked on the pallet. The packer boxes these first,
+// then loads them onto the deck, so the sheet has to show both levels.
+export interface PickListCarton {
+  boxName: string
+  dims: string
+  weightKg: number
+  lines: PickListLine[]
+}
 export interface PickListBox {
   title: string          // "CONSIGNMENT 1" / "CONSIGNMENTS 2–4 — pack 3 identical"
   boxName?: string       // the box/pallet being used, e.g. "Medium Carton"
   dims: string           // "400 × 300 × 250 mm"
   weightKg: number       // packed weight of this unit (group total for pallets)
   lines: PickListLine[]
+  // When set (pallets), the sheet lists each box and what goes in it instead of
+  // one flat list of products; `lines` stays populated as the flat equivalent.
+  cartons?: PickListCarton[]
 }
 export interface PickListDropShipGroup {
   supplier: string
@@ -76,6 +87,9 @@ const s = StyleSheet.create({
   boxSpecRow: { backgroundColor: '#f6f7f9', paddingVertical: 4, paddingHorizontal: 8, borderBottom: `0.5pt solid ${C.line}` },
   boxSpec: { fontSize: 10, color: C.ink2 },
   boxSpecStrong: { fontWeight: 700, color: C.ink },
+  cartonHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', backgroundColor: '#f0f1f4', paddingVertical: 3, paddingHorizontal: 8, marginTop: 6, borderLeft: `2pt solid ${C.ink2}` },
+  cartonTitle: { fontSize: 10, fontWeight: 700 },
+  cartonMeta: { fontSize: 8, color: C.ink2 },
 
   line: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 4, paddingHorizontal: 8, borderBottom: `0.5pt solid ${C.line}` },
   checkbox: { width: 11, height: 11, border: `1pt solid ${C.ink}`, marginRight: 8, marginTop: 0.5 },
@@ -169,7 +183,17 @@ function PickListPdf({ data }: { data: PickListData }) {
                 {box.dims}
               </Text>
             </View>
-            {box.lines.map((l, j) => <LineRow key={j} line={l} />)}
+            {box.cartons && box.cartons.length > 0
+              ? box.cartons.map((ct, k) => (
+                  <View key={k}>
+                    <View style={s.cartonHead} wrap={false}>
+                      <Text style={s.cartonTitle}>BOX {k + 1} — {ct.boxName}</Text>
+                      <Text style={s.cartonMeta}>{ct.dims} · {kg(ct.weightKg)}</Text>
+                    </View>
+                    {ct.lines.map((l, j) => <LineRow key={j} line={l} />)}
+                  </View>
+                ))
+              : box.lines.map((l, j) => <LineRow key={j} line={l} />)}
           </View>
         ))}
 

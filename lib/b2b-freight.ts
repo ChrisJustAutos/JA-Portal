@@ -337,6 +337,18 @@ export function parsePackPlanUnits(raw: any): PackedUnit[] | null {
       contents: Array.isArray(u.contents)
         ? u.contents.map((cl: any) => ({ sku: String(cl?.sku ?? ''), name: String(cl?.name ?? ''), qty: Number(cl?.qty) || 0 }))
         : undefined,
+      // Carry a pallet's stacked-box plan through a saved override, or the pick
+      // list loses its boxes the moment anyone edits the plan.
+      boxes: Array.isArray(u.boxes)
+        ? u.boxes.map((b: any) => ({
+            name: String(b?.name ?? ''), ownPackaging: b?.ownPackaging === true,
+            weight_g: Number(b?.weight_g) || 0,
+            length_mm: Number(b?.length_mm) || 0, width_mm: Number(b?.width_mm) || 0, height_mm: Number(b?.height_mm) || 0,
+            contents: Array.isArray(b?.contents)
+              ? b.contents.map((cl: any) => ({ sku: String(cl?.sku ?? ''), name: String(cl?.name ?? ''), qty: Number(cl?.qty) || 0 }))
+              : [],
+          }))
+        : undefined,
     })
   }
   return units

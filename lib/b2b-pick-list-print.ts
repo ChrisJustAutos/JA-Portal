@@ -162,10 +162,21 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
         // ownPackaging = the item fits no configured box (or is unboxed/too
         // heavy) and ships as-is — say so instead of parroting the product
         // name as a "box" (Chris 2026-08-11: "con 1-7 all say Box: <product>").
-        boxName: isPallet ? 'Pallet' : (u.ownPackaging ? 'No standard box fits — ships in own packaging' : u.name),
+        boxName: isPallet ? (u.name || 'Pallet') : (u.ownPackaging ? 'No standard box fits — ships in own packaging' : u.name),
         dims: dimsLabel(u.length_mm, u.width_mm, u.height_mm) + (n > 1 ? ' each' : ''),
         weightKg: (u.weight_g * n) / 1000,
         lines: (u.contents || []).map(cl => toPickLine(cl.sku, cl.name, cl.qty)),
+        // Pallets carry a box plan: the items are boxed FIRST, then the boxes go
+        // on the deck. Show both levels so the packer knows what goes in which
+        // box before it is loaded (Chris 2026-08-27).
+        ...(u.boxes && u.boxes.length > 0 ? {
+          cartons: u.boxes.map(b => ({
+            boxName: b.ownPackaging ? `${b.name} — own packaging` : b.name,
+            dims: dimsLabel(b.length_mm, b.width_mm, b.height_mm),
+            weightKg: b.weight_g / 1000,
+            lines: (b.contents || []).map(cl => toPickLine(cl.sku, cl.name, cl.qty)),
+          })),
+        } : {}),
       })
     }
   } else if (packInput.length > 0) {

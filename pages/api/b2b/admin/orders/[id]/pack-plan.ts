@@ -112,6 +112,11 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
       for (const i of uniq) {
         if (!Number.isInteger(i) || i < 0 || i >= units.length) return res.status(400).json({ error: `Invalid consignment index ${i}.` })
         if (units[i].quantity > 1) return res.status(400).json({ error: 'A grouped pallet unit can’t be combined — switch pack mode instead.' })
+        // Pallets are one unit each now that the packer stacks real cartons on
+        // them (2026-08-27), so they reach this loop where a grouped unit used
+        // to be blocked. Combining a pallet into a carton would ship it at the
+        // envelope of the selected units and throw away its box plan.
+        if (units[i].itemType === 'Pallet') return res.status(400).json({ error: 'A pallet can’t be combined into a carton — switch pack mode to Cartons instead.' })
       }
 
       const selected = uniq.map(i => units[i])
@@ -176,6 +181,11 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
       const target = units[index]
       if (target.quantity > 1) {
         return res.status(400).json({ error: 'A grouped pallet unit can’t be re-boxed — switch pack mode instead.' })
+      }
+      // See the combine guard above: a pallet is not a box, and re-boxing one
+      // would keep its stacked-carton plan while claiming carton dimensions.
+      if (target.itemType === 'Pallet') {
+        return res.status(400).json({ error: 'A pallet can’t be re-boxed — switch pack mode to Cartons, or change the pallet in Settings → Freight packaging.' })
       }
 
       let replacement: PackedUnit

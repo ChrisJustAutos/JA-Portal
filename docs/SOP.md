@@ -313,10 +313,15 @@ If you land on one from an old bookmark you get a short "not in use" notice expl
    - **Change a box:** use the **ships in** dropdown on any consignment to move it into a different standard box, or to "Own packaging" for an item that travels in its own carton.
    - **Merge consignments:** tick two or more, choose the shared box, **Combine** - e.g. oil and a sump together to save a consignment.
    - **Reset** returns the whole order to automatic packing.
+   - **Pallets can't be re-boxed or merged** - their tickbox and dropdown are disabled. A pallet is not a box: change **pack mode**, or change the pallet itself in Settings → Freight packaging.
 
    Every change saves against the order, and freight booking and the pick list both use it verbatim, so what MachShip charges is what the warehouse packs. Reprint the pick list after changing anything.
 
    **Where it is:** inside the **Shipping** card, as a collapsed link - click **Boxes and consignments** to open it. Until 25 August 2026 that link was hidden entirely once freight was booked, and never appeared at all on orders using static or satchel freight, which is why it may look new.
+
+   **On a palletised order the plan has two levels (new 27 August 2026).** Each pallet lists **the boxes stacked on it**, and each box lists what goes in it. Pack it in that order: fill the boxes first, then load the boxes onto the deck. The printed pick list shows the same two levels - **BOX 1**, **BOX 2** and so on underneath each pallet - so tick items off box by box. Before this the sheet listed a pallet and then every product in the order in one flat list, which told you nothing about what went in which box.
+
+   **An item too big for the deck ships beside the pallet.** If something will not sit on the pallet in any orientation - a long exhaust, for instance - it appears as its own consignment next to the pallets rather than being pretended onto them. That is correct: the carrier is expecting it as a separate item.
 
    **You can still change the boxes after booking, until the order is manifested.** A booked consignment exists in MachShip, but nothing has reached the carrier and no label is in anyone's hands - so re-boxing then is normal packing work. Change the boxes, press **Re-book freight**, then reprint the pick list and labels. Once the order has been manifested by **Ship Now** the boxes are fixed and the panel goes read-only: the carrier has been told exactly what is coming.
 3. **Book Freight.** This creates the MachShip consignment and prints the pick slip, consignment note and labels. The consignment sits **Unmanifested** — the carrier does not know about it yet.
@@ -392,7 +397,11 @@ The portal now recovers from this by itself. When the id stops resolving it look
 
 You can configure **as many pallets as you actually ship on**, not just one. Each has a name, a deck size, the tallest stack you will build on it, and a max weight. Add a *Half pallet* alongside the standard one and the system will use whichever suits the order.
 
-**How it picks.** When an order palletises, it takes the pallet that ships it in the **fewest pallets**. If two pallets both do it in the same number, it takes the **smaller deck** — that is normally the cheaper freight. So a 900 kg order goes on two 1000 kg pallets rather than three 600 kg ones, and a 100 kg order that fits either goes on the half pallet.
+**How it picks (corrected 27 August 2026).** The order is **boxed first**, then those boxes are stacked onto pallets. Whichever pallet ships the order in the **fewest units** wins; if two do it in the same number, the **smaller deck** wins, because that is normally the cheaper freight.
+
+A pallet is now filled by **weight *and* by space**, and it is only offered if the boxes physically fit on its deck. That matters: until this change the system only counted weight, so a bulky-but-light order was declared as one pallet it could never have fitted on, and a deck too short for the goods could be chosen because it was the smaller of two on the same weight limit. A real Hunter Mechanical cart - 289 kg, 2.3 m³, with 1650 mm exhausts - was being quoted as **one 1100×1100 pallet**; it is now two 1800×1200 pallets, which is what it actually takes.
+
+**⚠ Get the max weight right.** The weight you enter is taken literally. Enter 400 kg and the system will happily load 400 kg onto one pallet - check that both the carrier and your forklift will take it.
 
 **Palletise over (kg)** sits underneath the list and is deliberately separate. It decides whether an order goes on pallets *at all* instead of boxes, which is a decision about the whole order rather than about any one pallet — so it is set once. An order containing an item marked as pallet-packaging always palletises, whatever it weighs.
 
@@ -778,6 +787,8 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Live monitor says "not configured" | Monitor hasn't reported in >20s | Same page |
 | Dashboard figures look stale | Overnight cache refresh | The 02:00 refresh cron, then the health page |
 | Workshop map or vehicle trend looks out of date | The nightly MD pull | Reports → Workshop Map shows "synced"; "Pull from MechanicDesk now" forces it (~2–4 min) |
+| A pallet quote looks far too cheap for the size of the order, or the goods clearly won't fit the pallet on the plan | Before 27 Aug 2026 pallets were counted by weight alone and chosen without checking the goods fit the deck | Fixed — the order is boxed first and pallets are filled by weight *and* space. If it still looks wrong, check the pallet's deck size and **max weight** in Settings → Freight packaging (§4.3a): the weight you enter is taken literally. |
+| An item shows as its own consignment next to the pallets | It won't sit on the deck in any orientation, so it isn't pretended onto one | Correct behaviour, not a fault — pack and label it as the separate item the carrier is expecting. |
 | A distributor says they never got tracking | Ship Now hasn't been pressed | §4.2 |
 | An AP invoice never arrived | Supplier sent a link, not an attachment | §5 — link-only emails are invisible |
 | An AP Slack card is still orange but the bill *is* in MYOB | Somebody entered it by hand; the automation has no way of knowing | Press **🔍 Entered manually?** on the card — it finds the bill, links it and turns the card green (§5.2) |
@@ -821,8 +832,9 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 4. **A never-quoted lead is not a lost quote.**
 5. **Counted stocktake rows are sacred** — investigate before applying a variance.
 6. **Check “On cars” before chasing a stocktake variance** — parts fitted to cars in the shop are still on MD's books. A short shelf is usually the answer, not a problem.
-6. **The workshop runs on Mechanics Desk** — the portal handles parts, letters, counting and reporting around it.
-7. **Credentials change in the portal**, not in environment variables.
-8. **Reload when the new-version banner appears.**
-9. **Leave is approved on the application, not on a note.** Pressing Approved on an item in Leave Applications emails the applicant; a line typed into a payroll group emails nobody.
-10. **Check “Entered manually?” before approving an AP flag card** — approving one that was already keyed in by hand posts the bill twice.
+7. **Boxes first, then the deck.** On a palletised order pack each box from the pick list, then load the boxes onto the pallet — and a pallet's max weight in Settings is taken literally, so only enter what the carrier and the forklift will really take.
+8. **The workshop runs on Mechanics Desk** — the portal handles parts, letters, counting and reporting around it.
+9. **Credentials change in the portal**, not in environment variables.
+10. **Reload when the new-version banner appears.**
+11. **Leave is approved on the application, not on a note.** Pressing Approved on an item in Leave Applications emails the applicant; a line typed into a payroll group emails nobody.
+12. **Check “Entered manually?” before approving an AP flag card** — approving one that was already keyed in by hand posts the bill twice.
