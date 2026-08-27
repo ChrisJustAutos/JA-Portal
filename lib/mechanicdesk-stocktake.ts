@@ -1014,6 +1014,12 @@ export async function collectPartsOnCars(
   //    found is dated today-or-earlier because we never look forward.
   const jobDay = new Map<number, string>()
   const jobStatus = new Map<number, string>()
+  // Customer / vehicle / rego live on the DIARY row, not on the job payload —
+  // the same fields extractJobMeta() already reads for Pre Pick. Capture them
+  // during the sweep: the job's `booking` object does not carry them, and
+  // without this the "By car" view falls back to the job title, which defeats
+  // the point of being able to say "it's on the white Hilux".
+  const jobMeta = new Map<number, Omit<MdPrePickJob, 'md_job_id' | 'parts_count' | 'parts_qty'>>()
   let daysFailed = 0
   await mapPool(days, 6, async (d) => {
     try {
@@ -1032,6 +1038,13 @@ export async function collectPartsOnCars(
           const prev = jobDay.get(jid)
           if (!prev || ymd(d) > prev) jobDay.set(jid, ymd(d))
           jobStatus.set(jid, st)
+          const meta = extractJobMeta(row)
+          const existing = jobMeta.get(jid)
+          if (!existing) jobMeta.set(jid, meta)
+          else for (const k of Object.keys(meta) as (keyof typeof meta)[]) {
+            // Fill blanks from another diary row for the same job.
+            if ((existing as any)[k] == null && meta[k] != null) (existing as any)[k] = meta[k]
+          }
         }
       }
     } catch (e: any) {
@@ -1105,19 +1118,17 @@ export async function collectPartsOnCars(
     unitsTotal += qty
     valueTotal += value
 
-    const b = job?.booking || {}
-    const vehicle = [b?.make, b?.model, b?.year].filter(Boolean).join(' ').trim()
-      || (job?.title ? String(job.title).split('\n')[0] : '')
+    const dm = jobMeta.get(jid)
     jobsOut.push({
       md_job_id: jid,
-      job_number: job?.number != null ? String(job.number) : null,
-      customer_name: b?.name || b?.customer?.name || null,
-      vehicle: vehicle || null,
-      rego: b?.registration_number || job?.registration_number || null,
-      description: job?.description || job?.job_types_title || null,
+      job_number: dm?.job_number || (job?.number != null ? String(job.number) : null),
+      customer_name: dm?.customer_name || null,
+      vehicle: dm?.vehicle || null,
+      rego: dm?.rego || null,
+      description: dm?.description || job?.description || job?.job_types_title || null,
       diary_status: jobStatus.get(jid) || null,
       invoice_number: inv?.number != null ? String(inv.number) : null,
-      scheduled_at: job?.time || `${day}T00:00:00+10:00`,
+      scheduled_at: dm?.scheduled_at || job?.time || `${day}T00:00:00+10:00`,
       days_open: daysOpen,
       parts_count: perJob.size,
       parts_qty: Math.round(qty * 100) / 100,
