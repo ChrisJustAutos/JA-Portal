@@ -273,6 +273,21 @@ export async function createConsignment(req: CreateConsignmentRequest): Promise<
 // (Chris 2026-08-06, first live order). Pickup window: if booked before 2pm
 // Brisbane, today from an hour ahead until 5pm; otherwise next weekday
 // 9am–5pm.
+/**
+ * The next business day strictly AFTER the given YYYY-MM-DD, as YYYY-MM-DD.
+ *
+ * Extracted and tested because getting it wrong is not obvious from reading it:
+ * a first version advanced from an already-rolled date, so a Thursday-afternoon
+ * despatch booked the following MONDAY instead of Friday (2026-08-27).
+ * Saturday and Sunday are skipped; public holidays are not known here.
+ */
+export function nextBusinessDay(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`)
+  if (isNaN(d.getTime())) throw new Error(`nextBusinessDay: bad date "${ymd}"`)
+  do { d.setUTCDate(d.getUTCDate() + 1) } while ([0, 6].includes(d.getUTCDay()))
+  return d.toISOString().slice(0, 10)
+}
+
 export interface ManifestOutcome {
   ok: boolean
   manifestId: string | null
@@ -407,24 +422,26 @@ export async function manifestConsignments(
   // Never auto-move a pickup someone chose by hand.
   const missedCutoff = !chosen && errs.some(e => /latest .* pickup time|before the locations? closing time/i.test(e))
   if (missedCutoff) {
-    const next = new Date(pickup)
-    next.setUTCDate(next.getUTCDate() + 1)
-    while ([0, 6].includes(next.getUTCDay())) next.setUTCDate(next.getUTCDate() + 1)
-    next.setUTCHours(9, 0, 0, 0)
-    const nextClose = new Date(next)
-    nextClose.setUTCHours(17, 0, 0, 0)
+    // Advance from the date we ACTUALLY SENT, not from `pickup`. When it is
+    // already past the cut-off, `pickup` has itself rolled to tomorrow, so
+    // adding a day here again lands two days out — on Thursday afternoon that
+    // produced Saturday, which the weekend skip pushed to MONDAY. Sent-date +1
+    // business day gives tomorrow, which is what "next pickup" means.
+    const sentDay = String(payload[0]?.pickupDateTime || '').slice(0, 10)
+    const fallbackDay = new Date(Date.now() + BRIS_OFFSET_MS).toISOString().slice(0, 10)
+    const nextDay = nextBusinessDay(/^\d{4}-\d{2}-\d{2}$/.test(sentDay) ? sentDay : fallbackDay)
 
     const retry = payload.map(g => ({
       ...g,
-      pickupDateTime: localNaive(next),
-      pickupClosingTime: localNaive(nextClose),
+      pickupDateTime: `${nextDay}T09:00:00`,
+      pickupClosingTime: `${nextDay}T17:00:00`,
     }))
-    console.warn(`[machship] pickup cut-off missed (${errs.join('; ')}) — retrying for ${localNaive(next)}`)
+    console.warn(`[machship] pickup cut-off missed (${errs.join('; ')}) — retrying for ${nextDay}T09:00`)
     const second = await send(retry)
     if (second.errs.length === 0) {
       return {
         ok: true, manifestId: second.mid, errors: [], raw: second.res,
-        pickupDateTime: localNaive(next),
+        pickupDateTime: `${nextDay}T09:00:00`,
         rolledToNextDay: true,
       }
     }

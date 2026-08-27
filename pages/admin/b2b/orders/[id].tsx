@@ -1071,7 +1071,10 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   // (saved override or a fresh cartonizer run), lets admin tick 2+ consignments
   // and merge them into one box; booking + the pick list then use the saved
   // plan verbatim (e.g. oil + sump in one box to save a consignment).
-  type PlanUnit = { itemType: string; name: string; ownPackaging?: boolean; quantity: number; weight_g: number; length_mm: number; width_mm: number; height_mm: number; contents?: { sku: string; name: string; qty: number }[] }
+  type PlanContent = { sku: string; name: string; qty: number }
+  // `boxes` is set on pallets only: the cartons stacked on the deck.
+  type PlanBox = { name: string; ownPackaging?: boolean; weight_g: number; length_mm: number; width_mm: number; height_mm: number; contents?: PlanContent[] }
+  type PlanUnit = { itemType: string; name: string; ownPackaging?: boolean; quantity: number; weight_g: number; length_mm: number; width_mm: number; height_mm: number; contents?: PlanContent[]; boxes?: PlanBox[] }
   const [planOpen,       setPlanOpen]       = useState(false)
   const [planBusy,       setPlanBusy]       = useState(false)
   const [planUnits,      setPlanUnits]      = useState<PlanUnit[] | null>(null)
@@ -1378,7 +1381,10 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                     const qty = Math.max(1, u.quantity)
                     const first = n + 1; n += qty
                     const label = qty > 1 ? `${first}-${n}` : String(first)
-                    const selectable = qty === 1
+                    // A pallet is not a box: it can't be merged or re-boxed
+                    // here (the packer stacks real cartons on it) - pack mode
+                    // and the pallet config decide those.
+                    const selectable = qty === 1 && u.itemType !== 'Pallet'
                     const checked = planSel.includes(i)
                     return (
                       <label key={i} style={{display:'flex', alignItems:'flex-start', gap:8, padding:'6px 4px', borderTop: i > 0 ? `1px dashed ${T.border}` : 'none', cursor: selectable ? 'pointer' : 'default', opacity: selectable ? 1 : 0.6}}>
@@ -1387,8 +1393,19 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                           style={{marginTop:2, accentColor:A.accent}}/>
                         <span style={{fontSize:12, lineHeight:1.5}}>
                           <span style={{fontWeight:600}}>Consignment {label}</span>
-                          <span style={{color:T.text3}}> — {u.itemType === 'Pallet' ? 'Pallet' : (u.ownPackaging ? 'own packaging' : u.name)} · {Math.round(u.length_mm)}×{Math.round(u.width_mm)}×{Math.round(u.height_mm)} mm · {((u.weight_g * qty) / 1000).toFixed(1)} kg</span>
-                          {(u.contents || []).length > 0 && (
+                          <span style={{color:T.text3}}> — {u.itemType === 'Pallet' ? (u.name || 'Pallet') : (u.ownPackaging ? 'own packaging' : u.name)} · {Math.round(u.length_mm)}×{Math.round(u.width_mm)}×{Math.round(u.height_mm)} mm · {((u.weight_g * qty) / 1000).toFixed(1)} kg</span>
+                          {/* Pallets show the boxes stacked on them; everything
+                              else shows the products packed in it. */}
+                          {(u.boxes || []).length > 0 ? (
+                            <span style={{display:'block', fontSize:12, color:T.text2, marginTop:2}}>
+                              {(u.boxes || []).length} {(u.boxes || []).length === 1 ? 'box' : 'boxes'} on this pallet:
+                              {(u.boxes || []).map((b, bi) => (
+                                <span key={bi} style={{display:'block', paddingLeft:10}}>
+                                  {b.ownPackaging ? `${b.name} (own packaging)` : b.name} — {(b.contents || []).map(cl => `${cl.qty}× ${cl.name}`).join(' · ')}
+                                </span>
+                              ))}
+                            </span>
+                          ) : (u.contents || []).length > 0 && (
                             <span style={{display:'block', fontSize:12, color:T.text2}}>
                               {(u.contents || []).map(cl => `${cl.qty}× ${cl.name}`).join(' · ')}
                             </span>
