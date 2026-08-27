@@ -411,6 +411,9 @@ async function resolveConsignmentForOrder(o: OrderRow): Promise<Consignment | nu
   for (const { companyId, orders: group } of Array.from(groups.values())) {
     const consignmentIds = group.map(o => Number(o.machship_consignment_id))
     let manifestId: string | null = null
+    // Set when the pickup had to move to the next business day, so the order
+    // says so rather than the warehouse expecting a truck that isn't coming.
+    let pickupNote: string | null = null
     try {
       // MachShip's documented two-step flow (group, then manifest the groups).
       // The outcome is decided by bookingSuccessful/errorMessage in the
@@ -418,6 +421,9 @@ async function resolveConsignmentForOrder(o: OrderRow): Promise<Consignment | nu
       // manifest that was never created.
       const outcome = await manifestConsignments(consignmentIds, { companyId })
       manifestId = outcome.manifestId
+      pickupNote = outcome.rolledToNextDay
+        ? `Carrier cut-off for today had passed — pickup booked for ${String(outcome.pickupDateTime || '').slice(0, 16).replace('T', ' ')}.`
+        : null
 
       // Belt and braces: ask the carrier. MachShip has reported success for a
       // consignment it left Unmanifested, and marking an order shipped when the
@@ -458,6 +464,15 @@ async function resolveConsignmentForOrder(o: OrderRow): Promise<Consignment | nu
         patch.shipped_by = opts.actorId || null
         patch.status = 'shipped'
         patch.carrier = o.freight_service_label || 'MachShip'
+      }
+      if (pickupNote) {
+        try {
+          await c.from('b2b_order_events').insert({
+            order_id: o.id, event_type: 'note',
+            actor_type: opts.actorId ? 'admin' : 'system', actor_id: opts.actorId || null,
+            notes: pickupNote,
+          })
+        } catch { /* best-effort audit */ }
       }
       let uErr: any = null
       for (let attempt = 0; attempt < 3; attempt++) {

@@ -278,6 +278,10 @@ export interface ManifestOutcome {
   manifestId: string | null
   errors: string[]
   raw: any
+  /** The pickup the carrier actually accepted (naive local). */
+  pickupDateTime?: string
+  /** True when today's cut-off had passed and the pickup moved to the next business day. */
+  rolledToNextDay?: boolean
 }
 
 /**
@@ -355,22 +359,65 @@ export async function manifestConsignments(
     pickupDateTime: g?.pickupDateTime, pickupClosingTime: g?.pickupClosingTime,
     pickupAlreadyBooked: g?.pickupAlreadyBooked,
   }))).slice(0, 800))
-  const res: any = await machshipFetch<any>('POST', '/apiv2/manifests/manifest', payload)
-  const rows: any[] = Array.isArray(res) ? res : (res ? [res] : [])
-
-  const errors: string[] = []
-  let manifestId: string | null = null
-  for (const row of rows) {
-    if (row?.bookingSuccessful === false) {
-      errors.push(String(row?.errorMessage || 'booking unsuccessful (no reason given)'))
+  const send = async (body: any[]) => {
+    const res: any = await machshipFetch<any>('POST', '/apiv2/manifests/manifest', body)
+    const rows: any[] = Array.isArray(res) ? res : (res ? [res] : [])
+    const errs: string[] = []
+    let mid: string | null = null
+    for (const row of rows) {
+      if (row?.bookingSuccessful === false) {
+        errs.push(String(row?.errorMessage || 'booking unsuccessful (no reason given)'))
+      }
+      const id = row?.id
+      // id 0 is "nothing created" — never a manifest reference.
+      if (mid == null && id != null && Number(id) !== 0) mid = String(id)
     }
-    const id = row?.id
-    // id 0 is "nothing created" — never a manifest reference.
-    if (manifestId == null && id != null && Number(id) !== 0) manifestId = String(id)
+    if (!rows.length) errs.push('MachShip returned no manifest rows')
+    return { res, errs, mid }
   }
-  if (!rows.length) errors.push('MachShip returned no manifest rows')
 
-  return { ok: errors.length === 0, manifestId, errors, raw: res }
+  let { res, errs, mid } = await send(payload)
+
+  // The carrier's cut-off for TODAY has passed ("The latest TNT pickup time for
+  // BURNSIDE, 4560, QLD is 2:00 pm"). That is not a failure to report at
+  // someone — it just means the pickup belongs on the next business day. Roll
+  // it forward once and re-send. Nothing was booked by the refused attempt, so
+  // this cannot double-book.
+  const missedCutoff = errs.some(e => /latest .* pickup time|before the locations? closing time/i.test(e))
+  if (missedCutoff) {
+    const next = new Date(pickup)
+    next.setUTCDate(next.getUTCDate() + 1)
+    while ([0, 6].includes(next.getUTCDay())) next.setUTCDate(next.getUTCDate() + 1)
+    next.setUTCHours(9, 0, 0, 0)
+    const nextClose = new Date(next)
+    nextClose.setUTCHours(17, 0, 0, 0)
+
+    const retry = payload.map(g => ({
+      ...g,
+      pickupDateTime: localNaive(next),
+      pickupClosingTime: localNaive(nextClose),
+    }))
+    console.warn(`[machship] pickup cut-off missed (${errs.join('; ')}) — retrying for ${localNaive(next)}`)
+    const second = await send(retry)
+    if (second.errs.length === 0) {
+      return {
+        ok: true, manifestId: second.mid, errors: [], raw: second.res,
+        pickupDateTime: localNaive(next),
+        rolledToNextDay: true,
+      }
+    }
+    // Still refused — report the SECOND attempt's reason, which is the current one.
+    res = second.res; errs = second.errs; mid = second.mid
+  }
+
+  return {
+    ok: errs.length === 0,
+    manifestId: mid,
+    errors: errs,
+    raw: res,
+    pickupDateTime: String(payload[0]?.pickupDateTime || ''),
+    rolledToNextDay: false,
+  }
 }
 
 export async function getConsignment(consignmentId: string | number): Promise<Consignment> {
