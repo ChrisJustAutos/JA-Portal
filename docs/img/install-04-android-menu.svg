@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 300" width="620" height="300">
+<rect width="620" height="300" fill="white"/>
+<g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect x="120" y="14" width="250" height="272" rx="20" fill="white" stroke="#111827" stroke-width="2.5"/>
+  <rect x="132" y="32" width="200" height="24" rx="12" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="232" y="49" text-anchor="middle" font-size="10.5" fill="#6b7280">justautos.app/b2b/login</text>
+  <g fill="#111827"><circle cx="348" cy="38" r="2.6"/><circle cx="348" cy="45" r="2.6"/><circle cx="348" cy="52" r="2.6"/></g>
+  <circle cx="348" cy="45" r="15" fill="none" stroke="#d92b2b" stroke-width="2.5"/>
+  <rect x="196" y="70" width="200" height="150" rx="8" fill="white" stroke="#d1d5db" stroke-width="1.5"/>
+  <text x="212" y="96" font-size="12.5" fill="#6b7280">New tab</text>
+  <text x="212" y="126" font-size="12.5" fill="#6b7280">History</text>
+  <text x="212" y="156" font-size="12.5" fill="#6b7280">Downloads</text>
+  <rect x="198" y="168" width="196" height="34" fill="#fdeaea"/>
+  <text x="212" y="190" font-size="13.5" font-weight="700" fill="#111827">Install app</text>
+  <rect x="198" y="168" width="196" height="34" fill="none" stroke="#d92b2b" stroke-width="2.5"/>
+  <text x="212" y="216" font-size="12.5" fill="#6b7280">Settings</text>
+  <text x="410" y="42" font-size="13.5" font-weight="700" fill="#d92b2b">1. Tap the menu</text>
+  <text x="410" y="60" font-size="12" fill="#6b7280">three dots, top right</text>
+  <text x="410" y="188" font-size="13.5" font-weight="700" fill="#d92b2b">2. Install app</text>
+  <text x="410" y="206" font-size="12" fill="#6b7280">may read</text>
+  <text x="410" y="222" font-size="12" fill="#6b7280">"Add to Home screen"</text>
+</g></svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 300" width="620" height="300">
+<rect width="620" height="300" fill="white"/>
+<g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect x="200" y="14" width="220" height="272" rx="26" fill="white" stroke="#111827" stroke-width="2.5"/>
+  <rect x="212" y="34" width="196" height="24" rx="12" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="310" y="51" text-anchor="middle" font-size="11" fill="#6b7280">justautos.app/b2b/login</text>
+  <rect x="212" y="70" width="196" height="150" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="310" y="140" text-anchor="middle" font-size="12" fill="#6b7280">wholesale portal</text>
+  <rect x="212" y="232" width="196" height="42" rx="8" fill="#f9fafb" stroke="#d1d5db"/>
+  <g transform="translate(296,242)">
+    <rect x="-4" y="-4" width="30" height="30" rx="8" fill="none" stroke="#d92b2b" stroke-width="2.5"/>
+    <path d="M11 20 V6 M11 6 L6 11 M11 6 L16 11" stroke="#111827" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M4 14 v8 h14 v-8" stroke="#111827" stroke-width="2" fill="none" stroke-linecap="round"/>
+  </g>
+  <path d="M455 258 L360 258" stroke="#d92b2b" stroke-width="2.5" fill="none" marker-end="url(#a2)"/>
+  <defs><marker id="a2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+    <path d="M0 0 L9 4.5 L0 9 z" fill="#d92b2b"/></marker></defs>
+  <text x="463" y="250" font-size="13.5" font-weight="700" fill="#d92b2b">1. Tap Share</text>
+  <text x="463" y="270" font-size="12" fill="#6b7280">bottom of the screen</text>
+  <text x="463" y="286" font-size="12" fill="#6b7280">(top-right on iPad)</text>
+</g></svg>
