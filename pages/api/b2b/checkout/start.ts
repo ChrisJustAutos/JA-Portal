@@ -509,6 +509,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       eta_utc:                 match.eta_utc,
       transit_days:            match.transit_days,
       route_snapshot:          match.machship.routeSnapshot,
+      // The packing this price was quoted on — booking and the pick list
+      // use it verbatim rather than re-packing and possibly choosing a
+      // different (differently priced) plan.
+      pack_plan_units:         match.machship.packPlanUnits,
     }
     freightQuoteMarkupPct = match.markup_pct
     subtotalEx += freightExGst

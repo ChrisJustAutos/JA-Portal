@@ -22,7 +22,7 @@ import {
   type RouteOption,
   type MachShipItem,
 } from './b2b-machship'
-import { packItems, type FreightBox, type PalletSpec, type PackMode, type PackResult, type PackedUnit } from './b2b-cartonizer'
+import { packItems, packCandidates, type FreightBox, type PalletSpec, type PackMode, type PackResult, type PackedUnit, type PackCandidateKey } from './b2b-cartonizer'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -200,11 +200,20 @@ export interface LiveQuoteRate {
   eta_utc: string | null            // ISO; provider-reported best-effort
   // The full bag we'll persist on the order at checkout so book-freight
   // can rebuild the request without re-quoting.
+  // WHICH packing produced this price. One order can ship several legitimate
+  // ways and only the carrier knows which is cheapest, so every plan is priced
+  // and the winner is kept per carrier/service — see getLiveQuote.
+  pack_key:   PackCandidateKey
+  pack_label: string
   machship: {
     carrierId:                number
     carrierServiceId:         number
     companyCarrierAccountId?: number
     routeSnapshot:            RouteOption
+    // The units this price was quoted on. Persisted into the order's chosen
+    // quote at checkout so booking and the pick list ship exactly what was
+    // priced instead of re-packing and drifting.
+    packPlanUnits:            PackedUnit[]
   }
 }
 
@@ -319,6 +328,22 @@ async function loadFreightPallets(): Promise<PalletSpec[]> {
   return legacy.length_mm && legacy.width_mm && legacy.max_weight_g ? [legacy] : []
 }
 
+/**
+ * The units an order should actually ship as, in priority order:
+ *   1. freight_pack_plan  — the admin's MANUAL override from "Combine
+ *      consignments". Always wins; that is the point of it.
+ *   2. freight_chosen_quote.pack_plan_units — the packing the chosen rate was
+ *      PRICED on. Since 2026-08-27 a quote compares several plans (pallets vs
+ *      part-pallet vs all parcels), so re-packing at booking time could pick a
+ *      different plan than the money was collected for.
+ * null means nothing stored — callers re-pack, which is correct for orders
+ * quoted before this existed and for static/satchel freight.
+ */
+export function orderPlanUnits(order: any): PackedUnit[] | null {
+  return parsePackPlanUnits(order?.freight_pack_plan)
+      ?? parsePackPlanUnits(order?.freight_chosen_quote?.pack_plan_units)
+}
+
 // Validate a stored freight_pack_plan (jsonb from b2b_orders) back into
 // PackedUnits. The plan is the admin's manual override from the "Combine
 // consignments" tool — one entry per physical consignment, quantity 1 each.
@@ -352,6 +377,47 @@ export function parsePackPlanUnits(raw: any): PackedUnit[] | null {
     })
   }
   return units
+}
+
+// Every plan worth pricing for these items, each with the MachShip payload to
+// quote it and the PackedUnits to persist if it wins. Mirrors packForMachShip's
+// unit->MachShipItem mapping so a candidate's price and its booking match.
+export interface MachShipCandidate {
+  key: PackCandidateKey
+  label: string
+  units: PackedUnit[]
+  machshipItems: MachShipItem[]
+}
+
+export async function packCandidatesForMachShip(
+  items: PackForMachShipItem[],
+  opts: { packMode?: PackMode } = {},
+): Promise<MachShipCandidate[]> {
+  const anyManualHandling = items.some(i => i.manual_handling)
+  const [boxes, pallets] = await Promise.all([loadFreightBoxes(), loadFreightPallets()])
+  const cands = packCandidates(
+    items.map(it => ({
+      sku: it.sku, name: it.name, qty: it.qty,
+      weight_g: it.weight_g, length_mm: it.length_mm, width_mm: it.width_mm, height_mm: it.height_mm,
+      packaging: it.packaging,
+    })),
+    boxes, pallets, { mode: opts.packMode },
+  )
+  return cands.map(c => ({
+    key: c.key,
+    label: c.label,
+    units: c.result.units,
+    machshipItems: c.result.units.map(u => ({
+      itemType: u.itemType as any,
+      name:     u.name,
+      quantity: u.quantity,
+      weight:   round3(u.weight_g / 1000),
+      length:   round1(u.length_mm / 10),
+      width:    round1(u.width_mm / 10),
+      height:   round1(u.height_mm / 10),
+      ...(anyManualHandling ? { manualHandling: true } : {}),
+    })),
+  }))
 }
 
 export async function packForMachShip(
@@ -441,30 +507,54 @@ export async function getLiveQuote(
     return { mode: 'unavailable', reason: 'MachShip sender address not configured in B2B Settings' }
   }
 
-  // Pack the items into real shipping units (cartons/pallets). Shared with the
-  // booking path so the consignment matches the quote.
-  const machshipItems = await packForMachShip(items.map(it => ({
+  // Pack the items EVERY sensible way and price them all: two pallets, one
+  // pallet with the neat boxes as parcels, or all parcels. Geometry cannot tell
+  // which is cheapest — de-palletising cuts declared cube but multiplies
+  // per-item handling — so the carrier decides. An explicit packMode collapses
+  // this to a single candidate (see packCandidates).
+  const candidates = await packCandidatesForMachShip(items.map(it => ({
     sku: it.sku, name: it.name, qty: it.qty,
     weight_g: it.freight_weight_g, length_mm: it.freight_length_mm,
     width_mm: it.freight_width_mm, height_mm: it.freight_height_mm,
     packaging: it.freight_packaging, manual_handling: it.manual_handling,
   })), { packMode: opts.packMode })
+  if (candidates.length === 0) {
+    return { mode: 'unavailable', reason: 'Nothing to pack' }
+  }
 
-  let routes: RouteOption[]
-  try {
-    const r = await getRoutes({
-      fromLocation: { suburb: settings.machship_from_suburb, postcode: settings.machship_from_postcode },
-      toLocation:   { suburb: dest.suburb,                   postcode: dest.postcode },
-      items: machshipItems,
-    })
-    routes = r.routes || []
-  } catch (e: any) {
+  const from = { suburb: settings.machship_from_suburb, postcode: settings.machship_from_postcode }
+  const to   = { suburb: dest.suburb,                   postcode: dest.postcode }
+  const quoted = await Promise.all(candidates.map(async c => {
+    try {
+      const r = await getRoutes({ fromLocation: from, toLocation: to, items: c.machshipItems })
+      return { cand: c, routes: r.routes || [], err: null as any }
+    } catch (e: any) {
+      // One candidate failing must not lose the others — a hybrid plan the
+      // carrier will not accept should cost us that option, not the quote.
+      return { cand: c, routes: [] as RouteOption[], err: e }
+    }
+  }))
+
+  const usable = quoted.filter(q => q.routes.length > 0)
+  if (usable.length === 0) {
+    const e = quoted.find(q => q.err)?.err
     if (e instanceof MachShipNotConfiguredError) return { mode: 'unavailable', reason: e.message }
     if (e instanceof MachShipApiError)            return { mode: 'unavailable', reason: e.message }
-    return { mode: 'unavailable', reason: `MachShip getRoutes failed: ${e?.message || e}` }
-  }
-  if (routes.length === 0) {
+    if (e) return { mode: 'unavailable', reason: `MachShip getRoutes failed: ${e?.message || e}` }
     return { mode: 'unavailable', reason: 'No MachShip routes available for this destination' }
+  }
+
+  // Cheapest packing per carrier/service. Comparing within a service keeps the
+  // choice honest: the distributor still picks a carrier, and each carrier is
+  // shown at its best possible packing rather than at whichever plan we guessed.
+  const best = new Map<string, { route: RouteOption; cand: MachShipCandidate; base: number }>()
+  for (const q of usable) {
+    for (const r of q.routes) {
+      const key = `${r.carrier.id}:${r.carrierService.id}`
+      const base = Number(r.consignmentTotal?.totalSellPrice || 0)
+      const cur = best.get(key)
+      if (!cur || base < cur.base) best.set(key, { route: r, cand: q.cand, base })
+    }
   }
 
   // Inbound-freight per-unit surcharge, charged to the distributor. Summed
@@ -477,8 +567,7 @@ export async function getLiveQuote(
   }, 0))
 
   const markupMultiplier = 1 + (markup / 100)
-  const rates: LiveQuoteRate[] = routes.map(r => {
-    const base   = Number(r.consignmentTotal?.totalSellPrice || 0)
+  const rates: LiveQuoteRate[] = Array.from(best.values()).map(({ route: r, cand, base }) => {
     const marked = round2(round2(base * markupMultiplier) + surchargeExGst)
     const eta    = r.despatchOptions?.[0]?.etaUtc || r.despatchOptions?.[0]?.etaLocal || null
     const days   = r.despatchOptions?.[0]?.totalBusinessDays ?? r.despatchOptions?.[0]?.totalDays ?? null
@@ -492,11 +581,14 @@ export async function getLiveQuote(
       markup_pct:        markup,
       transit_days:      days,
       eta_utc:           eta,
+      pack_key:          cand.key,
+      pack_label:        cand.label,
       machship: {
         carrierId:               r.carrier.id,
         carrierServiceId:        r.carrierService.id,
         companyCarrierAccountId: r.companyCarrierAccountId,
         routeSnapshot:           r,
+        packPlanUnits:           cand.units,
       },
     }
   })

@@ -35,6 +35,11 @@ const validMode = (m: any): 'auto' | 'pallet' | 'cartons' | undefined =>
 async function effectiveUnits(c: SupabaseClient, order: any): Promise<{ units: PackedUnit[]; overridden: boolean } | { httpStatus: number; error: string; detail?: any }> {
   const saved = parsePackPlanUnits(order.freight_pack_plan)
   if (saved) return { units: saved, overridden: true }
+  // The packing the chosen rate was priced on. Not an "override" — nobody
+  // edited it by hand — but it IS what books and prints, so the panel must show
+  // it rather than re-packing and displaying a plan the order is not shipping as.
+  const quoted = parsePackPlanUnits(order.freight_chosen_quote?.pack_plan_units)
+  if (quoted) return { units: quoted, overridden: false }
   const loaded = await loadOrderPackInput(c, order.id)
   if ('error' in loaded) return loaded
   const packed = loaded.packInput.length > 0
@@ -61,7 +66,7 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
   const c = svc()
 
   const { data: order, error: oErr } = await c.from('b2b_orders')
-    .select('id, order_number, status, machship_consignment_id, machship_manifest_id, freight_status, freight_pack_mode, freight_pack_plan')
+    .select('id, order_number, status, machship_consignment_id, machship_manifest_id, freight_status, freight_pack_mode, freight_pack_plan, freight_chosen_quote')
     .eq('id', orderId).maybeSingle()
   if (oErr) return res.status(500).json({ error: oErr.message })
   if (!order) return res.status(404).json({ error: 'Order not found' })

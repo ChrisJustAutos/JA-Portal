@@ -10,7 +10,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { createConsignment, getLabelPdfBase64, MachShipApiError, MachShipNotConfiguredError, type CreateConsignmentRequest } from './b2b-machship'
-import { packForMachShip, parsePackPlanUnits, type PackForMachShipItem } from './b2b-freight'
+import { packForMachShip, orderPlanUnits, type PackForMachShipItem } from './b2b-freight'
 
 const LABELS_BUCKET = 'b2b-shipping-labels'
 
@@ -160,7 +160,7 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   const validMode = (m: any): 'auto' | 'pallet' | 'cartons' | undefined =>
     (m === 'pallet' || m === 'cartons' || m === 'auto') ? m : undefined
   const effPackMode = validMode(opts.packMode) || validMode((order as any).freight_pack_mode)
-  const planUnits = parsePackPlanUnits((order as any).freight_pack_plan)
+  const planUnits = orderPlanUnits(order)
   const items: CreateConsignmentRequest['items'] = await packForMachShip(packInput, { packMode: effPackMode, planUnits })
 
   const reference = order.order_number + (order.customer_po ? ` / ${order.customer_po}` : '')

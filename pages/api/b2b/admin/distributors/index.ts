@@ -45,6 +45,8 @@ async function handleList(res: NextApiResponse) {
       is_active,
       checkout_enabled,
       notes,
+      ship_suburb,
+      ship_postcode,
       created_at,
       updated_at,
       tier:b2b_tiers!b2b_distributors_tier_id_fkey ( id, name )

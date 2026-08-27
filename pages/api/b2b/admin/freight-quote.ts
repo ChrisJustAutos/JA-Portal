@@ -119,7 +119,10 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     source: 'satchel' as const,
   }))
 
-  type Rate = { id: string; label: string; price_ex_gst: number; transit_days: number | null; source: 'machship' | 'static' | 'satchel' | 'dropship'; eta_utc?: string | null; base_price_ex_gst?: number; markup_pct?: number }
+  // pack_label / pack_units expose WHICH plan produced each price, so the
+  // freight quote screen can show the pallets and boxes behind the number
+  // instead of a bare dollar figure (Chris 2026-08-27).
+  type Rate = { id: string; label: string; price_ex_gst: number; transit_days: number | null; source: 'machship' | 'static' | 'satchel' | 'dropship'; eta_utc?: string | null; base_price_ex_gst?: number; markup_pct?: number; pack_label?: string; pack_key?: string; pack_units?: any[] }
   let baseRates: Rate[] = []
   let baseMode: 'live' | 'static' | 'blocked' | 'no_zone'
   let zone: { id: string; name: string } | null = null
@@ -130,6 +133,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       id: r.id, label: r.label, price_ex_gst: r.price_ex_gst, transit_days: r.transit_days,
       source: 'machship' as const, eta_utc: r.eta_utc,
       base_price_ex_gst: r.base_price_ex_gst, markup_pct: r.markup_pct,
+      pack_label: r.pack_label, pack_key: r.pack_key, pack_units: r.machship.packPlanUnits,
     }))
   } else if (live.mode === 'blocked') {
     baseMode = 'blocked'

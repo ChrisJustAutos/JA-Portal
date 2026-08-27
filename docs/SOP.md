@@ -321,6 +321,10 @@ If you land on one from an old bookmark you get a short "not in use" notice expl
 
    **On a palletised order the plan has two levels (new 27 August 2026).** Each pallet lists **the boxes stacked on it**, and each box lists what goes in it. Pack it in that order: fill the boxes first, then load the boxes onto the deck. The printed pick list shows the same two levels - **BOX 1**, **BOX 2** and so on underneath each pallet - so tick items off box by box. Before this the sheet listed a pallet and then every product in the order in one flat list, which told you nothing about what went in which box.
 
+   **A mix of pallets and cartons on one order is normal.** Since 27 August 2026 the quote compares packing it all on pallets against palletising only the bulky items and sending the boxes as parcels, and takes whichever the carrier prices cheaper. So an order can legitimately show, say, one pallet and sixteen cartons. **Do not "fix" it** - that is the plan the distributor was charged for and the one the carrier is expecting.
+
+   **Pallet loads may look unevenly filled.** One pallet stacked high and another barely used is usually the cheapest arrangement, because a part-used layer costs the same height as a full one. The system does try to even them out and only leaves them lopsided when levelling would cost more.
+
    **Long items still go ON the pallet.** A 1650 mm exhaust lies flat on an 1800 × 1200 deck, and that is where the plan puts it - Hunter Mechanical's three exhausts all ride on pallet 1. The system tries every orientation before giving up on a pallet.
 
    **Only something that fits no deck at all ships beside the pallets** - a 2.4 m bar, say, which overhangs every pallet you have. It then appears as its own consignment next to them rather than being pretended onto one, which is correct: the carrier is expecting it as a separate item. If you see this on an order where you would expect the item to fit, check that the pallet it needs is still switched **on** in Settings → Freight packaging: switch off the 1800 × 1200 and a 1650 mm exhaust has nowhere to go but its own consignment.
@@ -410,6 +414,16 @@ A pallet is now filled by **weight *and* by space**, and it is only offered if t
 **Palletise over (kg)** sits underneath the list and is deliberately separate. It decides whether an order goes on pallets *at all* instead of boxes, which is a decision about the whole order rather than about any one pallet — so it is set once. An order containing an item marked as pallet-packaging always palletises, whatever it weighs.
 
 **⚠** Deleting or switching off every pallet means orders ship in cartons no matter how heavy they are. The list warns you when it is empty.
+
+### 4.3b Freight quote (Admin → B2B → Freight quote)
+
+**New 27 August 2026.** A calculator: add products, type a suburb and postcode, press **Quote freight**, get live MachShip rates. No order is created and nothing is saved - use it freely for "what would this cost to send to X". It replaces having to open the test-order builder just to see a price.
+
+Pick a distributor to prefill their address (you can still edit it, so quoting a one-off delivery is fine). **Pack as** is normally left on *Auto*.
+
+**Each price can be expanded to show what it was priced on** - press *Show the N consignments*. You get every pallet and carton, and for a pallet, the boxes on its deck and what goes in each. If a number looks wrong, that is where the answer is.
+
+**Auto now prices more than one packing and takes the cheapest.** The same order can go out as two pallets, as one pallet with the neat boxes travelling as parcels, or as all parcels - and which is cheapest is genuinely not predictable: fewer, bigger units means less declared cube but more handling per item. Each carrier is shown at its own cheapest packing, and the packing named under the rate is the one that would be booked and printed. Hunter Mechanical's cart, for scale: 2 pallets = 4.47 m³, one pallet plus 16 parcels = 3.68 m³, 36 parcels = 2.47 m³.
 
 ### 4.4 Drop-ship orders
 

@@ -264,7 +264,58 @@ function stackOnPallet(cartons: PackedUnit[], pallet: PalletSpec): StackPlan {
       })
     }
   }
-  return { pallet, slots, loose }
+  return { pallet, slots: balanceSlots(slots, deckL, deckW, usableH, capW), loose }
+}
+
+/**
+ * Spread the cartons more evenly across the pallets FFD already decided on.
+ *
+ * FFD fills pallet 1 to its height limit and dumps the remainder on pallet 2,
+ * which is why Hunter's order came out 258.5 kg / 1320 mm against 30.5 kg /
+ * 450 mm. Because deck area is fixed, declared cube is proportional to the SUM
+ * of the stack heights, and two evener stacks quantise into fewer wasted layers
+ * than one full and one nearly empty — so balancing is usually cheaper freight
+ * as well as a more sensible thing to hand the warehouse.
+ *
+ * Longest-processing-time first: biggest carton to the shortest stack that will
+ * take it. The slot COUNT is never allowed to grow — that is FFD's decision and
+ * re-deciding it here would let a cheaper-looking balance add a pallet. If any
+ * carton cannot be placed within those slots (layer packing is order-dependent,
+ * so this is possible), the original FFD layout is kept untouched.
+ */
+function balanceSlots(
+  slots: PalletSlot[], deckL: number, deckW: number, usableH: number, capW: number,
+): PalletSlot[] {
+  if (slots.length < 2) return slots   // nothing to balance
+
+  const all = slots.flatMap(s => s.boxes)
+  const fresh: PalletSlot[] = slots.map(() => ({ boxes: [], usedW: 0, stackH: 0 }))
+  // Biggest first, so the awkward items are placed while every slot is empty.
+  const desc = [...all].sort((a, b) => unitVolume(b) - unitVolume(a))
+
+  for (const box of desc) {
+    // Shortest stack first, then lightest, so weight evens out on ties (a
+    // 1470mm/259kg + 600mm/31kg split is legal but nobody wants to lift it).
+    const order = fresh
+      .map((slot, i) => ({ slot, i }))
+      .sort((a, b) => a.slot.stackH - b.slot.stackH || a.slot.usedW - b.slot.usedW)
+    let placed = false
+    for (const { slot } of order) {
+      if (slot.usedW + box.weight_g > capW) continue
+      const h = stackHeightMm([...slot.boxes, box], deckL, deckW, usableH)
+      if (h <= usableH) {
+        slot.boxes.push(box); slot.usedW += box.weight_g; slot.stackH = h; placed = true; break
+      }
+    }
+    if (!placed) return slots          // balance failed — FFD's layout stands
+  }
+  // An empty slot would mean FFD over-counted; keep its result rather than
+  // silently shipping fewer pallets than were quoted geometrically.
+  if (fresh.some(s => s.boxes.length === 0)) return slots
+
+  const before = slots.reduce((n, s) => n + s.stackH, 0)
+  const after  = fresh.reduce((n, s) => n + s.stackH, 0)
+  return after <= before ? fresh : slots
 }
 
 /**
@@ -361,6 +412,32 @@ function packCartons(units: Unit[], boxes: FreightBox[]): PackedUnit[] {
   return out
 }
 
+// Turn a stacking plan into shipping units: one Pallet per slot, carrying its
+// real weight, the height it actually stands at and the boxes on its deck, plus
+// any carton no deck would take travelling beside them as its own item.
+function palletUnitsFrom(plan: StackPlan): PackedUnit[] {
+  const p = plan.pallet
+  const out: PackedUnit[] = plan.slots.map(slot => ({
+    itemType: 'Pallet' as const,
+    name: p.name || 'Pallet',
+    quantity: 1,
+    // The real weight of what is on THIS pallet, not an even share.
+    weight_g: Math.max(1, Math.round(slot.usedW)),
+    length_mm: Number(p.length_mm),
+    width_mm: Number(p.width_mm),
+    // The height it actually stands at, not the pallet's ceiling.
+    height_mm: declaredPalletHeightMm(slot.stackH, Number(p.max_height_mm || 1200)),
+    contents: mergeBoxContents(slot.boxes),
+    boxes: slot.boxes.map(b => ({
+      name: b.name, ownPackaging: b.ownPackaging === true, weight_g: b.weight_g,
+      length_mm: b.length_mm, width_mm: b.width_mm, height_mm: b.height_mm,
+      contents: b.contents || [],
+    })),
+  }))
+  for (const l of plan.loose) out.push(l)
+  return out
+}
+
 // Merge per-carton content lines into one flat per-SKU list for a pallet, so
 // `contents` keeps its old meaning for every existing consumer.
 function mergeBoxContents(boxes: PackedUnit[]): PackedContent[] {
@@ -417,27 +494,7 @@ export function packItems(
     const cartons = packCartons(units, boxes)
     const plan = pickStackPlan(candidates, cartons)
     if (plan && plan.slots.length > 0) {
-      const p = plan.pallet
-      const out: PackedUnit[] = plan.slots.map(slot => ({
-        itemType: 'Pallet' as const,
-        name: p.name || 'Pallet',
-        quantity: 1,
-        // The real weight of what is on THIS pallet, not an even share.
-        weight_g: Math.max(1, Math.round(slot.usedW)),
-        length_mm: Number(p.length_mm),
-        width_mm: Number(p.width_mm),
-        // The height it actually stands at, not the pallet's ceiling.
-        height_mm: declaredPalletHeightMm(slot.stackH, Number(p.max_height_mm || 1200)),
-        contents: mergeBoxContents(slot.boxes),
-        boxes: slot.boxes.map(b => ({
-          name: b.name, ownPackaging: b.ownPackaging === true, weight_g: b.weight_g,
-          length_mm: b.length_mm, width_mm: b.width_mm, height_mm: b.height_mm,
-          contents: b.contents || [],
-        })),
-      }))
-      // Anything no deck would take travels beside the pallets as its own item.
-      for (const l of plan.loose) out.push(l)
-      return { mode: 'pallet', totalWeightG, units: out }
+      return { mode: 'pallet', totalWeightG, units: palletUnitsFrom(plan) }
     }
     // Nothing stackable at all → fall through to cartons.
   }
@@ -447,4 +504,96 @@ export function packItems(
   const out = packCartons(units, boxes)
   if (out.length === 0) return null
   return { units: out, mode: 'cartons', totalWeightG }
+}
+
+// ── Candidate plans ────────────────────────────────────────────────
+// One order can be shipped several legitimate ways, and which is CHEAPEST is a
+// question only the carrier can answer — a 36-parcel consignment can beat two
+// pallets, and palletising just the bulky items while the neat boxes travel as
+// parcels can beat both. Geometry cannot decide it, so the packer stops trying:
+// it hands the quoter every sensible plan and the quoter prices them all.
+//
+// Deliberately a SMALL fixed set. Each candidate is one extra MachShip routes
+// call on every quote, so this is not the place for a search space.
+
+export type PackCandidateKey = 'pallet' | 'hybrid' | 'cartons'
+
+export interface PackCandidate {
+  key: PackCandidateKey
+  label: string
+  result: PackResult
+}
+
+/**
+ * Palletise only what wants a pallet, and let the standard boxes travel as
+ * parcels. "Wants a pallet" = a carton in its own packaging (too big or too
+ * heavy for any configured box, or flagged unboxed/already-boxed) plus anything
+ * whose catalogue packaging is 'pallet'. Returns null when that split is
+ * degenerate — nothing to palletise, or nothing left over — because then it is
+ * just the all-pallet or all-cartons candidate under a different name.
+ */
+function packHybrid(units: Unit[], boxes: FreightBox[], pallets: PalletSpec[]): PackResult | null {
+  const mustPalletise = new Set(
+    units.filter(u => u.item.packaging === 'pallet').map(u => u.item.sku || u.item.name),
+  )
+  const cartons = packCartons(units, boxes)
+  const onDeck: PackedUnit[] = []
+  const asParcels: PackedUnit[] = []
+  for (const c of cartons) {
+    const forced = (c.contents || []).some(cl => mustPalletise.has(cl.sku || cl.name))
+    if (c.ownPackaging === true || forced) onDeck.push(c)
+    else asParcels.push(c)
+  }
+  if (onDeck.length === 0 || asParcels.length === 0) return null
+
+  const plan = pickStackPlan(pallets, onDeck)
+  if (!plan || plan.slots.length === 0) return null
+
+  const totalWeightG = units.reduce((s, u) => s + u.weight_g, 0)
+  return {
+    mode: 'pallet',
+    totalWeightG,
+    units: [...palletUnitsFrom(plan), ...asParcels],
+  }
+}
+
+/**
+ * Every plan worth pricing for this order, cheapest-looking first is NOT
+ * implied — the caller prices them. An explicit pack mode short-circuits the
+ * whole thing: if staff have said "cartons", we do not quietly quote pallets.
+ */
+export function packCandidates(
+  items: PackInputItem[],
+  boxes: FreightBox[],
+  palletIn: PalletSpec | PalletSpec[] | null,
+  opts: { mode?: PackMode; palletId?: string | null } = {},
+): PackCandidate[] {
+  const mode: PackMode = opts.mode || 'auto'
+  const base = packItems(items, boxes, palletIn, opts)
+  if (!base) return []
+  // Staff forced a mode, or the order was never going to palletise — one plan.
+  if (mode !== 'auto' || base.mode !== 'pallet') {
+    return [{ key: base.mode === 'pallet' ? 'pallet' : 'cartons', label: base.mode === 'pallet' ? 'Pallets' : 'Cartons', result: base }]
+  }
+
+  const out: PackCandidate[] = [{ key: 'pallet', label: 'Pallets', result: base }]
+
+  const units: Unit[] = []
+  for (const it of items) {
+    const q = Math.max(0, Math.floor(Number(it.qty) || 0))
+    for (let i = 0; i < q; i++) units.push({ item: it, weight_g: Math.max(0, Number(it.weight_g) || 0) })
+  }
+  const pallets = (Array.isArray(palletIn) ? palletIn : palletIn ? [palletIn] : [])
+    .filter(p => p && p.length_mm && p.width_mm && p.max_weight_g)
+
+  const hybrid = packHybrid(units, boxes, pallets)
+  if (hybrid) out.push({ key: 'hybrid', label: 'Bulky items on a pallet, boxes as parcels', result: hybrid })
+
+  // All-cartons is only offered when nothing MUST go on a pallet.
+  const hasPalletItem = units.some(u => u.item.packaging === 'pallet')
+  if (!hasPalletItem) {
+    const cartons = packItems(items, boxes, palletIn, { ...opts, mode: 'cartons' })
+    if (cartons) out.push({ key: 'cartons', label: 'All cartons, no pallet', result: cartons })
+  }
+  return out
 }

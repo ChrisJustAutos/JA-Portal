@@ -17,7 +17,7 @@
 // retries / the admin mark-paid shortcut never double-print.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { packOrderUnits, parsePackPlanUnits, type PackForMachShipItem } from './b2b-freight'
+import { packOrderUnits, orderPlanUnits, type PackForMachShipItem } from './b2b-freight'
 import type { PackMode } from './b2b-cartonizer'
 import { renderPickListPdf, type PickListBox, type PickListData, type PickListDropShipGroup, type PickListLine } from './b2b-pick-list'
 
@@ -60,7 +60,7 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
   // ── Load order + distributor + lines ───────────────────────────────────
   const { data: order, error: oErr } = await c.from('b2b_orders').select(`
       id, order_number, status, customer_po, distributor_id, is_test,
-      shipping_address_snapshot, freight_pack_mode, freight_pack_plan, created_at, paid_at
+      shipping_address_snapshot, freight_pack_mode, freight_pack_plan, freight_chosen_quote, created_at, paid_at
     `).eq('id', orderId).maybeSingle()
   if (oErr) return { status: 'failed', reason: oErr.message }
   if (!order) return { status: 'failed', reason: 'Order not found' }
@@ -124,7 +124,7 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
   const packMode = validMode((order as any).freight_pack_mode)
   // Manual consignment plan (admin combined boxes) wins over the cartonizer —
   // must match what book-freight sends to MachShip.
-  const planUnits = parsePackPlanUnits((order as any).freight_pack_plan)
+  const planUnits = orderPlanUnits(order)
   const packed = planUnits
     ? { units: planUnits, mode: 'cartons' as const, totalWeightG: planUnits.reduce((s, u) => s + u.weight_g * Math.max(1, u.quantity), 0) }
     : (packInput.length > 0 ? await packOrderUnits(packInput, { packMode }) : null)

@@ -15,7 +15,7 @@ import { A, RADIUS, AlloyStyles } from './ui'
 // eslint-disable-next-line @typescript-eslint/no-var-requires -- shared with next.config.js, which cannot import TS
 const { isB2BSectionActive } = require('../../lib/b2b-sections')
 
-export type B2BAdminSection = 'dashboard' | 'catalogue' | 'reorder' | 'stocktake' | 'stock_overview' | 'distributors' | 'suppliers' | 'orders' | 'tune_jobs' | 'assets' | 'training' | 'settings'
+export type B2BAdminSection = 'dashboard' | 'catalogue' | 'reorder' | 'stocktake' | 'stock_overview' | 'distributors' | 'suppliers' | 'orders' | 'tune_jobs' | 'freight' | 'assets' | 'training' | 'settings'
 
 // Stock Wall and Suppliers are filtered out below via lib/b2b-sections —
 // they stay in this list so reviving them is one boolean, not a re-add.
@@ -29,6 +29,7 @@ const TABS: Array<{ id: B2BAdminSection; label: string; href: string; icon: stri
   { id: 'suppliers',      label: 'Suppliers',      href: '/admin/b2b/suppliers',      icon: 'distributors' },
   { id: 'orders',         label: 'Orders',         href: '/admin/b2b/orders',         icon: 'orders' },
   { id: 'tune_jobs',      label: 'Tune Jobs',      href: '/admin/b2b/tune-jobs',      icon: 'jobs' },
+  { id: 'freight',        label: 'Freight quote',  href: '/admin/b2b/freight-quote',  icon: 'truck' },
   { id: 'assets',         label: 'Resources',      href: '/admin/b2b/assets',         icon: 'reports' },
   { id: 'training',       label: 'Training',       href: '/admin/b2b/training',       icon: 'call-coaching' },
   { id: 'settings',       label: 'Settings',       href: '/admin/b2b/settings',       icon: 'settings' },

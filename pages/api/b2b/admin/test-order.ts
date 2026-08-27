@@ -178,6 +178,8 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       label: match.label, price_ex_gst: match.price_ex_gst, base_price_ex_gst: match.base_price_ex_gst,
       markup_pct: match.markup_pct, eta_utc: match.eta_utc, transit_days: match.transit_days,
       route_snapshot: match.machship.routeSnapshot,
+      // See checkout/start.ts — the packing this price was quoted on.
+      pack_plan_units: match.machship.packPlanUnits,
     }
   }
   if (freightExGst > 0) { subtotalEx += freightExGst; gst += round2(freightExGst * GST_RATE) }
