@@ -270,24 +270,53 @@ export interface PackForMachShipItem {
 // exactly the plan freight will book.
 export async function packOrderUnits(
   items: PackForMachShipItem[],
-  opts: { packMode?: PackMode } = {},
+  opts: { packMode?: PackMode; palletId?: string | null } = {},
 ): Promise<PackResult | null> {
-  const [boxes, settings] = await Promise.all([loadFreightBoxes(), loadFreightSettings()])
-  const pallet: PalletSpec = {
-    length_mm:     settings?.freight_pallet_length_mm ?? null,
-    width_mm:      settings?.freight_pallet_width_mm ?? null,
-    max_height_mm: settings?.freight_pallet_max_height_mm ?? null,
-    max_weight_g:  settings?.freight_pallet_max_weight_g ?? null,
-    threshold_g:   settings?.freight_pallet_threshold_g ?? null,
-  }
+  const [boxes, pallets] = await Promise.all([loadFreightBoxes(), loadFreightPallets()])
   return packItems(
     items.map(it => ({
       sku: it.sku, name: it.name, qty: it.qty,
       weight_g: it.weight_g, length_mm: it.length_mm, width_mm: it.width_mm, height_mm: it.height_mm,
       packaging: it.packaging,
     })),
-    boxes, pallet, { mode: opts.packMode },
+    boxes, pallets, { mode: opts.packMode, palletId: opts.palletId },
   )
+}
+
+// The configured pallet options. Reads b2b_freight_pallets (migration 206);
+// falls back to the legacy single b2b_settings.freight_pallet_* spec when that
+// table is empty, so freight stays quotable if the table is ever cleared or a
+// deploy lands ahead of the migration. The palletise-over-weight threshold is
+// an order-level setting either way, so it is stamped onto every row.
+async function loadFreightPallets(): Promise<PalletSpec[]> {
+  const c = sb()
+  const settings = await loadFreightSettings()
+  const threshold = settings?.freight_pallet_threshold_g ?? null
+
+  const { data } = await c
+    .from('b2b_freight_pallets')
+    .select('id, name, length_mm, width_mm, max_height_mm, max_weight_g')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+
+  if (data && data.length) {
+    return data.map((p: any) => ({
+      id: p.id, name: p.name,
+      length_mm: p.length_mm, width_mm: p.width_mm,
+      max_height_mm: p.max_height_mm, max_weight_g: p.max_weight_g,
+      threshold_g: threshold,
+    }))
+  }
+
+  const legacy: PalletSpec = {
+    id: null, name: 'Pallet',
+    length_mm:     settings?.freight_pallet_length_mm ?? null,
+    width_mm:      settings?.freight_pallet_width_mm ?? null,
+    max_height_mm: settings?.freight_pallet_max_height_mm ?? null,
+    max_weight_g:  settings?.freight_pallet_max_weight_g ?? null,
+    threshold_g:   threshold,
+  }
+  return legacy.length_mm && legacy.width_mm && legacy.max_weight_g ? [legacy] : []
 }
 
 // Validate a stored freight_pack_plan (jsonb from b2b_orders) back into

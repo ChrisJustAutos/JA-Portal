@@ -24,13 +24,19 @@ const incFromEx = (ex: any) => (ex == null || ex === '' ? '' : String(Math.round
 const exFromInc = (inc: string) => { const n = parseFloat(inc); return Number.isFinite(n) ? Math.round((n / 1.1) * 100) / 100 : null }
 
 interface Box { id: string; name: string; length_mm: number; width_mm: number; height_mm: number; max_weight_g: number; sort_order: number; is_active: boolean }
+interface Pallet { id: string; name: string; length_mm: number; width_mm: number; max_height_mm: number; max_weight_g: number; sort_order: number; is_active: boolean }
 interface Satchel { id: string; name: string; max_weight_g: number; max_length_mm: number | null; max_width_mm: number | null; max_height_mm: number | null; cost_ex_gst: number; sell_ex_gst: number; sort_order: number; is_active: boolean }
 
 export default function FreightPackagingManager() {
   const confirmDialog = useConfirm()
   const [boxes, setBoxes] = useState<Box[]>([])
   const [satchels, setSatchels] = useState<Satchel[]>([])
-  const [pallet, setPallet] = useState({ length_mm: '', width_mm: '', max_height_mm: '', max_weight_kg: '', threshold_kg: '' })
+  const [pallets, setPallets] = useState<Pallet[]>([])
+  // Only the palletise-over threshold still lives on settings — it decides
+  // pallet vs cartons for the order, not which pallet.
+  const [threshold, setThreshold] = useState('')
+  const [addingPallet, setAddingPallet] = useState(false)
+  const [newPallet, setNewPallet] = useState({ name: '', length_mm: '', width_mm: '', max_height_mm: '', max_weight_kg: '' })
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState('')
   const [savingPallet, setSavingPallet] = useState(false)
@@ -43,19 +49,17 @@ export default function FreightPackagingManager() {
 
   async function load() {
     setLoading(true)
-    const [bx, sat, st] = await Promise.all([
+    const [bx, sat, pl, st] = await Promise.all([
       fetch('/api/b2b/admin/freight-boxes').then(r => r.ok ? r.json() : { boxes: [] }),
       fetch('/api/b2b/admin/freight-satchels').then(r => r.ok ? r.json() : { satchels: [] }),
+      fetch('/api/b2b/admin/freight-pallets').then(r => r.ok ? r.json() : { pallets: [] }),
       fetch('/api/b2b/admin/settings').then(r => r.ok ? r.json() : null),
     ])
+    setPallets(pl.pallets || [])
     setBoxes(bx.boxes || [])
     setSatchels(sat.satchels || [])
     const s = st?.settings || {}
-    setPallet({
-      length_mm: cm(s.freight_pallet_length_mm), width_mm: cm(s.freight_pallet_width_mm),
-      max_height_mm: cm(s.freight_pallet_max_height_mm), max_weight_kg: kg(s.freight_pallet_max_weight_g),
-      threshold_kg: kg(s.freight_pallet_threshold_g),
-    })
+    setThreshold(kg(s.freight_pallet_threshold_g))
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -103,17 +107,40 @@ export default function FreightPackagingManager() {
     else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Add failed') }
   }
 
-  async function savePallet() {
+  async function saveThreshold() {
     setSavingPallet(true)
-    const body = {
-      freight_pallet_length_mm: toMm(pallet.length_mm), freight_pallet_width_mm: toMm(pallet.width_mm),
-      freight_pallet_max_height_mm: toMm(pallet.max_height_mm), freight_pallet_max_weight_g: toG(pallet.max_weight_kg),
-      freight_pallet_threshold_g: toG(pallet.threshold_kg),
-    }
-    const r = await fetch('/api/b2b/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const r = await fetch('/api/b2b/admin/settings', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ freight_pallet_threshold_g: toG(threshold) }),
+    })
     setSavingPallet(false)
-    if (r.ok) flashMsg('Pallet settings saved'); else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Save failed') }
+    if (r.ok) flashMsg('Threshold saved'); else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Save failed') }
   }
+
+  // ── Pallets ──
+  async function patchPallet(id: string, patch: Record<string, any>) {
+    const r = await fetch(`/api/b2b/admin/freight-pallets?id=${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    if (r.ok) flashMsg('Saved'); else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Save failed') }
+  }
+  function updatePalletLocal(id: string, p: Partial<Pallet>) { setPallets(ps => ps.map(x => x.id === id ? { ...x, ...p } : x)) }
+  async function removePallet(id: string, name: string) {
+    if (!(await confirmDialog({ title: `Delete pallet "${name}"?`, danger: true }))) return
+    const r = await fetch(`/api/b2b/admin/freight-pallets?id=${id}`, { method: 'DELETE' })
+    if (r.ok) { setPallets(ps => ps.filter(x => x.id !== id)); flashMsg('Deleted') }
+  }
+  async function addPallet() {
+    const payload = {
+      name: newPallet.name.trim(), length_mm: toMm(newPallet.length_mm), width_mm: toMm(newPallet.width_mm),
+      max_height_mm: toMm(newPallet.max_height_mm), max_weight_g: toG(newPallet.max_weight_kg),
+    }
+    if (!payload.name || !payload.length_mm || !payload.width_mm || !payload.max_height_mm || !payload.max_weight_g) { flashMsg('Fill all pallet fields'); return }
+    setAddingPallet(true)
+    const r = await fetch('/api/b2b/admin/freight-pallets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, sort_order: (pallets.length + 1) * 10 }) })
+    setAddingPallet(false)
+    if (r.ok) { setNewPallet({ name: '', length_mm: '', width_mm: '', max_height_mm: '', max_weight_kg: '' }); await load(); flashMsg('Pallet added') }
+    else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Add failed') }
+  }
+
 
   if (loading) return <SkeletonRows rows={8} />
 
@@ -200,20 +227,54 @@ export default function FreightPackagingManager() {
         )
       })()}
 
-      {/* Pallet + threshold */}
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Pallet &amp; threshold</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
-          {([['length_mm', 'Pallet L (cm)'], ['width_mm', 'Pallet W (cm)'], ['max_height_mm', 'Max stack H (cm)'], ['max_weight_kg', 'Max kg'], ['threshold_kg', 'Palletise over (kg)']] as const).map(([k, label]) => (
-            <label key={k} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ ...hdr }}>{label}</span>
-              <input style={inp} inputMode="decimal" value={(pallet as any)[k]} onChange={e => setPallet(p => ({ ...p, [k]: e.target.value }))} />
-            </label>
-          ))}
-        </div>
-        <div style={{ fontSize: 12, color: T.text3, margin: '8px 0' }}>An order whose total weight exceeds <strong>Palletise over</strong> ships on a pallet instead of boxes.</div>
-        <Btn size="sm" onClick={savePallet} disabled={savingPallet}>{savingPallet ? 'Saving…' : 'Save pallet settings'}</Btn>
-      </div>
+      {/* Pallets + threshold */}
+      {(() => {
+        const pCols = '1.5fr 64px 64px 70px 70px 50px 64px'
+        return (
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 4 }}>Pallets <span style={{ color: T.text3, fontWeight: 400 }}>· add as many as you ship on</span></div>
+            <div style={{ fontSize: 12, color: T.text3, marginBottom: 8, lineHeight: 1.5 }}>
+              When an order palletises, the cartonizer picks the pallet that ships it in the <strong>fewest pallets</strong>, and where two do it in the same number, the <strong>smaller deck</strong> — usually the cheaper freight. Max stack H is the tallest we will build on that pallet.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: pCols, gap: 6, padding: '0 2px 6px' }}>
+              <div style={hdr}>Name</div><div style={hdr}>L cm</div><div style={hdr}>W cm</div><div style={hdr}>Max H cm</div><div style={hdr}>Max kg</div><div style={{ ...hdr, textAlign: 'center' }}>On</div><div />
+            </div>
+            {pallets.length === 0 && <div style={{ fontSize: 12.5, color: T.text3, padding: '4px 0 10px' }}>No pallets configured — orders will ship in cartons regardless of weight until you add one.</div>}
+            {pallets.map(pl => (
+              <div key={pl.id} style={{ display: 'grid', gridTemplateColumns: pCols, gap: 6, padding: '5px 0', alignItems: 'center', borderTop: `1px solid ${T.border}` }}>
+                <input style={inp} value={pl.name} onChange={e => updatePalletLocal(pl.id, { name: e.target.value })} onBlur={e => patchPallet(pl.id, { name: e.target.value })} />
+                <input style={inp} inputMode="decimal" value={cm(pl.length_mm)} onChange={e => updatePalletLocal(pl.id, { length_mm: toMm(e.target.value) ?? 0 })} onBlur={e => patchPallet(pl.id, { length_mm: toMm(e.target.value) })} />
+                <input style={inp} inputMode="decimal" value={cm(pl.width_mm)} onChange={e => updatePalletLocal(pl.id, { width_mm: toMm(e.target.value) ?? 0 })} onBlur={e => patchPallet(pl.id, { width_mm: toMm(e.target.value) })} />
+                <input style={inp} inputMode="decimal" value={cm(pl.max_height_mm)} onChange={e => updatePalletLocal(pl.id, { max_height_mm: toMm(e.target.value) ?? 0 })} onBlur={e => patchPallet(pl.id, { max_height_mm: toMm(e.target.value) })} />
+                <input style={inp} inputMode="decimal" value={kg(pl.max_weight_g)} onChange={e => updatePalletLocal(pl.id, { max_weight_g: toG(e.target.value) ?? 0 })} onBlur={e => patchPallet(pl.id, { max_weight_g: toG(e.target.value) })} />
+                <input type="checkbox" checked={pl.is_active} onChange={e => { updatePalletLocal(pl.id, { is_active: e.target.checked }); patchPallet(pl.id, { is_active: e.target.checked }) }} style={{ justifySelf: 'center', cursor: 'pointer' }} />
+                <button onClick={() => removePallet(pl.id, pl.name)} title="Delete" className="al-press al-focus" style={rowDelete}>Delete</button>
+              </div>
+            ))}
+            {/* Add row */}
+            <div style={{ display: 'grid', gridTemplateColumns: pCols, gap: 6, padding: '8px 0 0', alignItems: 'center', borderTop: `1px solid ${T.border}`, marginTop: 4 }}>
+              <input style={inp} placeholder="e.g. Half pallet" value={newPallet.name} onChange={e => setNewPallet(x => ({ ...x, name: e.target.value }))} />
+              <input style={inp} placeholder="L" inputMode="decimal" value={newPallet.length_mm} onChange={e => setNewPallet(x => ({ ...x, length_mm: e.target.value }))} />
+              <input style={inp} placeholder="W" inputMode="decimal" value={newPallet.width_mm} onChange={e => setNewPallet(x => ({ ...x, width_mm: e.target.value }))} />
+              <input style={inp} placeholder="H" inputMode="decimal" value={newPallet.max_height_mm} onChange={e => setNewPallet(x => ({ ...x, max_height_mm: e.target.value }))} />
+              <input style={inp} placeholder="kg" inputMode="decimal" value={newPallet.max_weight_kg} onChange={e => setNewPallet(x => ({ ...x, max_weight_kg: e.target.value }))} />
+              <div style={{ gridColumn: '6 / 8' }}>
+                <Btn size="sm" full onClick={addPallet} disabled={addingPallet}>{addingPallet ? '…' : 'Add'}</Btn>
+              </div>
+            </div>
+
+            {/* Threshold — an order-level setting, not a property of any pallet */}
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 180 }}>
+                <span style={hdr}>Palletise over (kg)</span>
+                <input style={inp} inputMode="decimal" value={threshold} onChange={e => setThreshold(e.target.value)} />
+              </label>
+              <Btn size="sm" onClick={saveThreshold} disabled={savingPallet}>{savingPallet ? 'Saving…' : 'Save threshold'}</Btn>
+              <div style={{ fontSize: 12, color: T.text3, lineHeight: 1.5, flex: 1 }}>An order heavier than this ships on pallets instead of boxes. Applies to the order as a whole, so it is set once rather than per pallet.</div>
+            </div>
+          </div>
+        )
+      })()}
 
       <div style={{ fontSize: 12, color: T.text3, lineHeight: 1.6, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
         These feed the freight cartonizer (coming next): it packs an order's items into the fewest cartons that fit by volume + weight, or onto a pallet once total weight passes the threshold — then quotes/books that. Box edits save as you leave each field.

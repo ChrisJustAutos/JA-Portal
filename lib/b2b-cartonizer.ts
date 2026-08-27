@@ -1,7 +1,7 @@
 // lib/b2b-cartonizer.ts
 // SERVER-ONLY. Packs a set of order/cart line items into shipping units
 // (cartons or pallets) for a MachShip quote/booking, using the admin-configured
-// standard boxes (b2b_freight_boxes) and pallet spec (b2b_settings.freight_pallet_*).
+// standard boxes (b2b_freight_boxes) and pallet options (b2b_freight_pallets).
 //
 // Deterministic heuristic (NOT AI) so a freight price is reproducible:
 //   1. Expand each line into individual units (qty copies).
@@ -11,7 +11,8 @@
 //        - mode 'auto'    → pallets if a pallet is configured AND
 //                           (any item is packaging='pallet' OR total weight
 //                            exceeds freight_pallet_threshold_g); else cartons.
-//   3. Pallets: ceil(totalWeight / pallet.max_weight_g) pallets, weight shared.
+//   3. Pallets: pick the pallet that ships the order in the fewest units
+//      (tie → smaller deck), then ceil(totalWeight / max_weight_g), weight shared.
 //   4. Cartons: first-fit-decreasing by weight into the smallest box that fits
 //      the largest item; an item too big for any box ships on its own.
 //        - packaging='other' means the item is ALREADY BOXED — it ships at its
@@ -42,10 +43,15 @@ export interface FreightBox {
 }
 
 export interface PalletSpec {
+  id?: string | null
+  name?: string | null
   length_mm: number | null
   width_mm: number | null
   max_height_mm: number | null
   max_weight_g: number | null
+  // Order weight above which we palletise at all. A property of the ORDER, not
+  // of any one pallet, so every pallet carries the same value (it comes off
+  // b2b_settings) and only the first is read.
   threshold_g: number | null
 }
 
@@ -105,11 +111,33 @@ export interface PackResult {
   totalWeightG: number
 }
 
+/**
+ * Fewest pallets wins; on a tie, the smaller deck. Returns null when nothing is
+ * usable, which is what makes the caller fall back to cartons.
+ */
+function pickPallet(pallets: PalletSpec[], totalWeightG: number): PalletSpec | null {
+  if (pallets.length === 0) return null
+  if (pallets.length === 1) return pallets[0]
+  const score = (p: PalletSpec) => {
+    const cap = Number(p.max_weight_g) || 1
+    const n = Math.max(1, Math.ceil(totalWeightG / cap))
+    return { n, area: (Number(p.length_mm) || 0) * (Number(p.width_mm) || 0) }
+  }
+  return pallets.slice().sort((a, b) => {
+    const sa = score(a), sb = score(b)
+    return sa.n - sb.n || sa.area - sb.area
+  })[0]
+}
+
 export function packItems(
   items: PackInputItem[],
   boxes: FreightBox[],
-  pallet: PalletSpec | null,
-  opts: { mode?: PackMode } = {},
+  // One or many. More than one and we pick the one that ships the order in the
+  // fewest pallets, breaking ties on the smaller footprint — a 900-kg order on
+  // two 1000-kg pallets beats three 600-kg ones, and where both do it in one,
+  // the smaller deck is the cheaper freight.
+  palletIn: PalletSpec | PalletSpec[] | null,
+  opts: { mode?: PackMode; palletId?: string | null } = {},
 ): PackResult | null {
   // Expand to individual units.
   type Unit = { item: PackInputItem; weight_g: number }
@@ -122,8 +150,15 @@ export function packItems(
 
   const totalWeightG = units.reduce((s, u) => s + u.weight_g, 0)
   const hasPalletItem = units.some(u => u.item.packaging === 'pallet')
-  const palletOk = !!(pallet && pallet.length_mm && pallet.width_mm && pallet.max_weight_g)
-  const threshold = pallet?.threshold_g != null ? Number(pallet.threshold_g) : null
+
+  const allPallets = (Array.isArray(palletIn) ? palletIn : palletIn ? [palletIn] : [])
+    .filter(p => p && p.length_mm && p.width_mm && p.max_weight_g)
+  // Staff can force a specific pallet from the pack plan; otherwise choose.
+  const forced = opts.palletId ? allPallets.find(p => p.id === opts.palletId) : undefined
+  const pallet: PalletSpec | null = forced || pickPallet(allPallets, totalWeightG)
+  const palletOk = !!pallet
+  // The threshold is an order-level setting; every row carries the same value.
+  const threshold = allPallets[0]?.threshold_g != null ? Number(allPallets[0].threshold_g) : null
 
   const mode: PackMode = opts.mode || 'auto'
   let palletize: boolean
@@ -141,7 +176,7 @@ export function packItems(
       totalWeightG,
       units: [{
         itemType: 'Pallet',
-        name: 'Pallet',
+        name: pallet!.name || 'Pallet',
         quantity: n,
         weight_g: per,
         length_mm: Number(pallet!.length_mm),
