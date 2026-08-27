@@ -41,7 +41,7 @@ interface OnCarJob {
   parts_qty: number
   parts_value: number
 }
-interface OnCarJobItem { md_job_id: number; md_stock_id: number | null; sku: string | null; quantity: number }
+interface OnCarJobItem { md_job_id: number; md_stock_id: number | null; sku: string | null; name: string | null; quantity: number }
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
 const n2 = (v: number) => (Math.round(v * 100) / 100).toLocaleString('en-AU')
@@ -131,6 +131,81 @@ export default function PartsOnCarsPanel({ canEdit }: { canEdit: boolean }) {
   const totalValue = run ? Number(run.value_total || 0) : 0
   const stale = run?.completed_at ? (Date.now() - new Date(run.completed_at).getTime()) / 3600000 : null
 
+  // ── CSV export ──────────────────────────────────────────────────────────
+  // Exports exactly what the screen is showing — current view and search — so
+  // what you print is what you were looking at. "By car" is flattened to one
+  // row per car per part: on the shop floor you want the part list beside each
+  // rego, not a count you then have to click into.
+  const csvCell = (v: any) => {
+    const s = v == null ? '' : String(v)
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const csvRow = (cells: any[]) => cells.map(csvCell).join(',')
+
+  function download(rows: string[], suffix: string) {
+    const stamp = (run?.completed_at ? new Date(run.completed_at) : new Date()).toISOString().slice(0, 10)
+    // BOM so Excel opens UTF-8 (part names carry °, ½, × and the like) correctly.
+    const blob = new Blob(['﻿' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `on-cars-${suffix}-${stamp}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function exportCsv() {
+    const checked = run?.completed_at ? new Date(run.completed_at).toLocaleString('en-AU') : 'unknown'
+    const head = [
+      csvRow(['Just Autos — parts on cars, not yet off the books']),
+      csvRow([`Checked ${checked}`, `${run?.days_swept || 0} days back to ${run?.from_date || ''}`]),
+      csvRow(['Counts parts on started jobs only. Cars booked in for later are excluded.']),
+      csvRow([]),
+    ]
+
+    if (view === 'parts') {
+      const rows = [
+        ...head,
+        csvRow(['SKU', 'Part', 'On cars', 'Cars', 'MD on-hand', 'Should count', 'Location', 'Bin', 'Buy price', 'Value on cars']),
+        ...filteredItems.map(i => csvRow([
+          i.sku || '', i.name || '', i.on_cars, i.jobs_count,
+          i.on_hand ?? '', i.on_hand != null ? i.on_hand - i.on_cars : '',
+          i.location || '', i.bin || '',
+          i.buy_price ?? '',
+          i.buy_price != null ? Math.round(i.on_cars * i.buy_price * 100) / 100 : '',
+        ])),
+        csvRow([]),
+        csvRow(['TOTAL', '', filteredItems.reduce((s, i) => s + i.on_cars, 0)]),
+      ]
+      download(rows, 'by-part')
+      return
+    }
+
+    const rows = [
+      ...head,
+      csvRow(['Rego', 'Vehicle', 'Customer', 'Job', 'Days open', 'SKU', 'Part', 'Units']),
+    ]
+    for (const j of filteredJobs) {
+      const lines = jobItems.filter(li => li.md_job_id === j.md_job_id).sort((a, b) => b.quantity - a.quantity)
+      if (!lines.length) {
+        rows.push(csvRow([j.rego || '', j.vehicle || '', j.customer_name || '', j.job_number || j.md_job_id, j.days_open ?? '', '', '', '']))
+        continue
+      }
+      for (const li of lines) {
+        rows.push(csvRow([
+          j.rego || '', j.vehicle || '', j.customer_name || '',
+          j.job_number || j.md_job_id, j.days_open ?? '',
+          li.sku || '', li.name || '', li.quantity,
+        ]))
+      }
+    }
+    rows.push(csvRow([]))
+    rows.push(csvRow(['TOTAL', '', '', '', '', '', '', filteredJobs.reduce((s, j) => s + j.parts_qty, 0)]))
+    download(rows, 'by-car')
+  }
+
+  const exportCount = view === 'parts' ? filteredItems.length : filteredJobs.length
+
   return (
     <div style={{ marginTop: 30 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
@@ -197,6 +272,16 @@ export default function PartsOnCarsPanel({ canEdit }: { canEdit: boolean }) {
             <input value={q} onChange={e => setQ(e.target.value)}
               placeholder={view === 'parts' ? 'Search SKU, name or bin…' : 'Search rego, vehicle or customer…'}
               style={{ flex: 1, minWidth: 200, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12, padding: '6px 10px', fontFamily: 'inherit' }} />
+            <button onClick={exportCsv} disabled={exportCount === 0}
+              title={view === 'parts' ? 'One row per part' : 'One row per part on each car'}
+              style={{
+                background: 'none', border: `1px solid ${T.border2}`, borderRadius: 6,
+                color: exportCount ? T.text2 : T.text3, fontSize: 12, padding: '6px 11px',
+                cursor: exportCount ? 'pointer' : 'not-allowed', opacity: exportCount ? 1 : 0.5,
+                fontFamily: 'inherit', whiteSpace: 'nowrap',
+              }}>
+              ⬇ Export CSV
+            </button>
           </div>
 
           {view === 'parts' ? (
