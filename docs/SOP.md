@@ -401,6 +401,8 @@ You can configure **as many pallets as you actually ship on**, not just one. Eac
 
 A pallet is now filled by **weight *and* by space**, and it is only offered if the boxes physically fit on its deck. That matters: until this change the system only counted weight, so a bulky-but-light order was declared as one pallet it could never have fitted on, and a deck too short for the goods could be chosen because it was the smaller of two on the same weight limit. A real Hunter Mechanical cart - 289 kg, 2.3 m³, with 1650 mm exhausts - was being quoted as **one 1100×1100 pallet**; it is now two 1800×1200 pallets, which is what it actually takes.
 
+**The tallest stack you enter is a ceiling, not the quote.** Freight is quoted on the height the goods **actually** stack to, plus the pallet base - so a half-empty pallet is priced as a half-empty pallet. Until 27 August 2026 every pallet was declared at its full height, which overcharged the distributor on any order that did not fill the deck: Hunter Mechanical's second pallet was being declared at 1500 mm for a 450 mm stack, and now reads 600 mm.
+
 **⚠ Get the max weight right.** The weight you enter is taken literally. Enter 400 kg and the system will happily load 400 kg onto one pallet - check that both the carrier and your forklift will take it.
 
 **Palletise over (kg)** sits underneath the list and is deliberately separate. It decides whether an order goes on pallets *at all* instead of boxes, which is a decision about the whole order rather than about any one pallet — so it is set once. An order containing an item marked as pallet-packaging always palletises, whatever it weighs.

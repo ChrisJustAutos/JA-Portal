@@ -12,11 +12,13 @@
 //                           (any item is packaging='pallet' OR total weight
 //                            exceeds freight_pallet_threshold_g); else cartons.
 //   3. Pallets: the items are CARTONISED FIRST (step 4), then those cartons are
-//      stacked onto pallets. Only pallets whose deck can actually take every
-//      carton are considered; the pallet count is the worse of the weight bound
-//      and the cube bound, so a light-but-bulky order isn't declared as one
-//      pallet it physically won't fit on. A carton no pallet deck can take
-//      ships loose alongside the pallets.
+//      stacked onto pallets in LAYERS (tallest carton sets each layer's height,
+//      footprints fill the deck to AREA_FILL). A pallet is full when the stack
+//      reaches its usable height or its weight cap, so a light-but-bulky order
+//      is no longer declared as one pallet it won't fit on. The SAME layer
+//      model gives the height we declare to the carrier, so a pallet is never
+//      accepted on one measure and billed on another. A carton no deck can take
+//      in any orientation ships loose alongside the pallets.
 //   4. Cartons: first-fit-decreasing by weight into the smallest box that fits
 //      the largest item; an item too big for any box ships on its own.
 //        - packaging='other' means the item is ALREADY BOXED — it ships at its
@@ -133,33 +135,81 @@ export interface PackResult {
   totalWeightG: number
 }
 
-// A pallet's deck sits on ~150mm of timber, so the goods only get the rest of
-// the declared max height. We still DECLARE max_height_mm to the carrier (an
-// under-declared pallet gets re-cubed at the depot); this is purely how much
-// stack the cube bound is allowed to assume.
+// A pallet's deck sits on ~150mm of timber, which is part of the height the
+// carrier measures but none of the height the goods get.
 const PALLET_BASE_MM = 150
-// You cannot hand-stack cartons to 100% of the envelope. The carton packer uses
-// 0.85 inside a single box; a pallet stack is looser again, so 0.80.
-const PALLET_FILL = 0.80
+// You cannot tile a deck to its last square millimetre, so each layer of a
+// stack only gets this much of the deck area.
+const AREA_FILL = 0.85
 
 type Unit = { item: PackInputItem; weight_g: number }
 
-// Can a box of these dimensions sit on this deck in ANY orientation? Tries each
-// dimension as the vertical one, both ways round on the deck. A zero/missing
-// dimension trivially fits (the carton packer already defaults item dims).
-function fitsDeck(l: number, w: number, h: number, deckL: number, deckW: number, usableH: number): boolean {
-  const dims = [l, w, h]
-  for (let v = 0; v < 3; v++) {
-    if (dims[v] > usableH) continue
-    const f = dims.filter((_, i) => i !== v)
-    if ((f[0] <= deckL && f[1] <= deckW) || (f[1] <= deckL && f[0] <= deckW)) return true
+// How a carton sits on the deck: `h` is its vertical dimension, `area` the
+// footprint it occupies. NATURAL ORIENTATION FIRST (length × width down, height
+// up) because cartons have a this-way-up; we only lie one on its side when
+// upright will not fit. Returns null when no orientation works at all, which is
+// what makes the carton ship loose beside the pallets.
+function chooseOrientation(
+  l: number, w: number, h: number, deckL: number, deckW: number, usableH: number,
+): { h: number; area: number } | null {
+  const onDeck = (a: number, b: number) => (a <= deckL && b <= deckW) || (b <= deckL && a <= deckW)
+  // Natural first, then the two tip-overs, in increasing disruption.
+  const tries: Array<[number, number, number]> = [[l, w, h], [l, h, w], [h, w, l]]
+  for (const [a, b, v] of tries) {
+    if (v <= usableH && onDeck(a, b)) return { h: v, area: a * b }
   }
-  return false
+  return null
+}
+
+// ONE geometric predicate: a carton fits a deck exactly when some orientation
+// does. Derived from chooseOrientation so the two can never disagree — if this
+// says yes, the layer builder below is guaranteed an orientation to use.
+function fitsDeck(l: number, w: number, h: number, deckL: number, deckW: number, usableH: number): boolean {
+  return chooseOrientation(l, w, h, deckL, deckW, usableH) !== null
+}
+
+/**
+ * How tall this set of cartons actually stacks on this deck, in mm, excluding
+ * the pallet base. Builds layers: the tallest remaining carton sets the layer
+ * height, then cartons are added to that layer while their footprints fit the
+ * usable deck area. A layer always accepts its first carton, so a footprint
+ * larger than deck × AREA_FILL still gets a layer of its own rather than
+ * looping.
+ *
+ * This is a layer model, not a full 3D pack — layers do not interlock and a
+ * short carton in a tall layer wastes the difference. That is deliberate: it
+ * is deterministic, and it errs toward MORE height rather than less, which is
+ * the safe direction when the number is what the carrier bills.
+ */
+function stackHeightMm(cartons: PackedUnit[], deckL: number, deckW: number, usableH: number): number {
+  const oriented: Array<{ h: number; area: number }> = []
+  for (const c of cartons) {
+    const o = chooseOrientation(c.length_mm, c.width_mm, c.height_mm, deckL, deckW, usableH)
+    if (o) oriented.push(o)
+  }
+  // Tallest first, so each layer's height is set by its tallest member.
+  oriented.sort((a, b) => b.h - a.h)
+
+  const areaCap = deckL * deckW * AREA_FILL
+  let total = 0
+  let remaining = oriented
+  while (remaining.length > 0) {
+    const layerH = remaining[0].h
+    let used = 0
+    const spill: Array<{ h: number; area: number }> = []
+    for (const o of remaining) {
+      if (used === 0 || used + o.area <= areaCap) used += o.area
+      else spill.push(o)
+    }
+    total += layerH
+    remaining = spill
+  }
+  return total
 }
 
 const unitVolume = (u: PackedUnit) => u.length_mm * u.width_mm * u.height_mm
 
-interface PalletSlot { boxes: PackedUnit[]; usedW: number; usedV: number }
+interface PalletSlot { boxes: PackedUnit[]; usedW: number; stackH: number }
 interface StackPlan { pallet: PalletSpec; slots: PalletSlot[]; loose: PackedUnit[] }
 
 /**
@@ -170,15 +220,16 @@ interface StackPlan { pallet: PalletSpec; slots: PalletSlot[]; loose: PackedUnit
  *
  * The number of slots IS the pallet count, and it falls out of the packing
  * rather than being ceil(weight/cap): a slot is capped by BOTH its weight limit
- * and its usable cube, so 2.4m3 of light parts can no longer be declared as one
- * pallet just because it sits under the weight cap.
+ * and the height its cartons actually stack to. Capacity and the height we
+ * later DECLARE come from the same layer model on purpose — a slot accepted by
+ * one measure and declared by another is exactly how a pallet ends up
+ * overflowing the height it was quoted at.
  */
 function stackOnPallet(cartons: PackedUnit[], pallet: PalletSpec): StackPlan {
   const deckL = Number(pallet.length_mm) || 0
   const deckW = Number(pallet.width_mm) || 0
   const usableH = Math.max(1, (Number(pallet.max_height_mm) || 1200) - PALLET_BASE_MM)
   const capW = Number(pallet.max_weight_g) || 0
-  const capV = deckL * deckW * usableH * PALLET_FILL
 
   const slots: PalletSlot[] = []
   const loose: PackedUnit[] = []
@@ -196,16 +247,22 @@ function stackOnPallet(cartons: PackedUnit[], pallet: PalletSpec): StackPlan {
       loose.push(box)
       continue
     }
-    const v = unitVolume(box)
     let placed = false
     for (const slot of slots) {
-      if (slot.usedW + box.weight_g <= capW && slot.usedV + v <= capV) {
-        slot.usedW += box.weight_g; slot.usedV += v; slot.boxes.push(box); placed = true; break
+      if (slot.usedW + box.weight_g > capW) continue
+      const h = stackHeightMm([...slot.boxes, box], deckL, deckW, usableH)
+      if (h <= usableH) {
+        slot.usedW += box.weight_g; slot.stackH = h; slot.boxes.push(box); placed = true; break
       }
     }
-    // A slot always accepts its first box, so one very large carton still
-    // palletises instead of looping forever.
-    if (!placed) slots.push({ boxes: [box], usedW: box.weight_g, usedV: v })
+    // A slot always accepts its first box (fitsDeck already proved it will go
+    // on the deck), so one very large carton still palletises.
+    if (!placed) {
+      slots.push({
+        boxes: [box], usedW: box.weight_g,
+        stackH: stackHeightMm([box], deckL, deckW, usableH),
+      })
+    }
   }
   return { pallet, slots, loose }
 }
@@ -226,6 +283,18 @@ function pickStackPlan(pallets: PalletSpec[], cartons: PackedUnit[]): StackPlan 
     return ua - ub || areaA - areaB
   })
   return plans[0]
+}
+
+/**
+ * The height to DECLARE for a loaded pallet: the timber base plus what the
+ * cartons actually stack to, rounded UP to the next centimetre (MachShip takes
+ * cm) and never above the pallet's configured maximum. Reporting the maximum
+ * regardless — which is what this did until 2026-08-27 — overcharges every
+ * order that does not fill the deck, because cube is what the carrier bills.
+ */
+function declaredPalletHeightMm(stackH: number, maxHeightMm: number): number {
+  const rounded = Math.ceil((PALLET_BASE_MM + Math.max(0, stackH)) / 10) * 10
+  return Math.min(maxHeightMm, Math.max(PALLET_BASE_MM, rounded))
 }
 
 /**
@@ -357,7 +426,8 @@ export function packItems(
         weight_g: Math.max(1, Math.round(slot.usedW)),
         length_mm: Number(p.length_mm),
         width_mm: Number(p.width_mm),
-        height_mm: Number(p.max_height_mm || 1200),
+        // The height it actually stands at, not the pallet's ceiling.
+        height_mm: declaredPalletHeightMm(slot.stackH, Number(p.max_height_mm || 1200)),
         contents: mergeBoxContents(slot.boxes),
         boxes: slot.boxes.map(b => ({
           name: b.name, ownPackaging: b.ownPackaging === true, weight_g: b.weight_g,
