@@ -273,10 +273,40 @@ export async function createConsignment(req: CreateConsignmentRequest): Promise<
 // (Chris 2026-08-06, first live order). Pickup window: if booked before 2pm
 // Brisbane, today from an hour ahead until 5pm; otherwise next weekday
 // 9am–5pm.
+export interface ManifestOutcome {
+  ok: boolean
+  manifestId: string | null
+  errors: string[]
+  raw: any
+}
+
+/**
+ * Manifest booked consignments so the CARRIER actually receives the job —
+ * createConsignment alone leaves them "Unmanifested" in MachShip.
+ *
+ * This is a TWO-STEP flow and skipping the first step is why manifesting
+ * silently did nothing on 2026-08-27: MachShip answered the manifest call
+ * 200 / id 0 / no validation errors while leaving the consignment
+ * Unmanifested. Per MachShip's dev handbook:
+ *
+ *   1. POST /apiv2/manifests/groupConsignmentsForManifest  body: [id, id]
+ *      → groups them by carrier + from-location + despatch date, and returns
+ *        the manifest objects fully populated (carrierName, palletSpaces,
+ *        pickupSpecialInstructions …).
+ *   2. POST /apiv2/manifests/manifest  body: those SAME objects, with the
+ *      pickup window adjusted.
+ *
+ * Hand-building the step-2 body — which is what we were doing — omits
+ * carrierName and palletSpaces, and MachShip accepts it and manifests nothing.
+ *
+ * The response carries `bookingSuccessful` and `errorMessage` per group. Those
+ * are the truth, not the HTTP status.
+ *   docs: https://developers.live.machship.com/api/supporting/manifesting-consignments
+ */
 export async function manifestConsignments(
   consignmentIds: number[],
-  opts: { companyId?: number | null; shape?: number } = {},
-): Promise<any> {
+  opts: { companyId?: number | null } = {},
+): Promise<ManifestOutcome> {
   const BRIS_OFFSET_MS = 10 * 3600_000
   const nowBris = new Date(Date.now() + BRIS_OFFSET_MS)
   let pickup = new Date(nowBris)
@@ -290,31 +320,41 @@ export async function manifestConsignments(
   const close = new Date(pickup)
   close.setUTCHours(17, 0, 0, 0)
   const toUtcIso = (d: Date) => new Date(d.getTime() - BRIS_OFFSET_MS).toISOString()
-  const core = {
-    ...(opts.companyId ? { companyId: opts.companyId } : {}),
+
+  // Step 1 — let MachShip build the manifest groups.
+  const grouped: any = await machshipFetch<any>(
+    'POST', '/apiv2/manifests/groupConsignmentsForManifest', consignmentIds,
+  )
+  const groups: any[] = Array.isArray(grouped) ? grouped : (grouped ? [grouped] : [])
+  if (!groups.length) {
+    return { ok: false, manifestId: null, raw: grouped, errors: ['MachShip grouped these consignments into nothing — they may already be manifested, or deleted.'] }
+  }
+
+  // Step 2 — send those groups back, with our pickup window.
+  const payload = groups.map(g => ({
+    ...g,
+    companyId: g?.companyId || opts.companyId || undefined,
     pickupDateTime: toUtcIso(pickup),
     pickupClosingTime: toUtcIso(close),
     pickupAlreadyBooked: false,
-  }
-  // MachShip's manifest request body is undocumented and its Swagger is behind
-  // auth. On 2026-08-27 the shape below returned 200 with NO validation errors
-  // and `id: 0` — it accepted the request and manifested nothing, leaving the
-  // consignment "Unmanifested" in MachShip while the portal reported the order
-  // shipped. So the property name for the ids is a guess, and the caller must
-  // VERIFY against the carrier rather than trust the 200.
-  const shapes: any[] = [
-    [{ ...core, consignmentIds }],
-    [{ ...core, consignmentIds: consignmentIds.map(String) }],
-    [{ ...core, ids: consignmentIds }],
-    { ...core, consignmentIds },
-    { ...core, consignmentIds: consignmentIds.map(String) },
-  ]
-  const idx = Math.max(0, Math.min(opts.shape ?? 0, shapes.length - 1))
-  return machshipFetch<any>('POST', '/apiv2/manifests/manifest', shapes[idx])
-}
+  }))
+  const res: any = await machshipFetch<any>('POST', '/apiv2/manifests/manifest', payload)
+  const rows: any[] = Array.isArray(res) ? res : (res ? [res] : [])
 
-/** How many request shapes manifestConsignments knows how to try. */
-export const MANIFEST_SHAPE_COUNT = 5
+  const errors: string[] = []
+  let manifestId: string | null = null
+  for (const row of rows) {
+    if (row?.bookingSuccessful === false) {
+      errors.push(String(row?.errorMessage || 'booking unsuccessful (no reason given)'))
+    }
+    const id = row?.id
+    // id 0 is "nothing created" — never a manifest reference.
+    if (manifestId == null && id != null && Number(id) !== 0) manifestId = String(id)
+  }
+  if (!rows.length) errors.push('MachShip returned no manifest rows')
+
+  return { ok: errors.length === 0, manifestId, errors, raw: res }
+}
 
 export async function getConsignment(consignmentId: string | number): Promise<Consignment> {
   return machshipFetch<Consignment>('GET', `/apiv2/consignments/${encodeURIComponent(String(consignmentId))}`)
