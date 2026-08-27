@@ -1,0 +1,40 @@
+name: Probe MD started jobs (manual)
+
+# One-off diagnostic for the Stocktake (MD) "parts on cars" checker. Finds out
+# how to enumerate every still-open job (jobs-list endpoint vs diary sweep),
+# what marks a job closed, and whether the stocks list carries
+# allocated_quantity. Logs structure only — no customer data.
+#
+# NOTE: MechanicDesk allows ONE active session per employee account, so running
+# this evicts whoever is signed in as MECHANICDESK_USERNAME. Run it out of
+# hours, or when the workshop is not mid-stocktake.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  # Shared with the other MD workers — a probe must never land on top of a
+  # running stocktake push and 401 it mid-count.
+  group: mechanicdesk-session
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+      - name: Run probe
+        env:
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+        run: npx tsx scripts/probe-md-started-jobs.ts
