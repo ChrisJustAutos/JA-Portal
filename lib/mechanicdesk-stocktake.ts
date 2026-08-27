@@ -1024,6 +1024,7 @@ export async function collectPartsOnCars(
         for (const row of (Array.isArray(arr) ? arr : [])) {
           const jid = Number(row?.job_id ?? row?.id)
           if (!jid || !isFinite(jid)) continue
+          if (row?.deleted === true) continue
           const st = String(row?.status ?? '')
           if (st !== 'new') continue
           // Keep the most RECENT diary day for a job that spans several: that
@@ -1059,6 +1060,7 @@ export async function collectPartsOnCars(
     const jid = ids[k]
     const job = details[k]
     if (!job) continue
+    if (job?.deleted === true) continue                  // cancelled — not a real car
     if (job?.finished === true) continue                 // already closed out
     const inv = job?.invoice || {}
     if (inv?.finalized === true) continue                // MD has taken the stock
