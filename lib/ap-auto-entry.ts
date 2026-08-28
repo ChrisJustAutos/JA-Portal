@@ -438,7 +438,7 @@ async function runMailbox(
 
       let msgItems: AutoEntryItem[] = []
       try {
-        msgItems = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun, attempt })
+        msgItems = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun, attempt, invoiceSibling: hasInvoiceSibling })
         out.processed.push(...msgItems)
         msgAllItems.push(...msgItems)
         if (msgItems.some(i => i.outcome === 'posted')) anyPosted = true
@@ -613,13 +613,20 @@ const STAFF_PHOTO_MIN_BYTES = Number(process.env.AP_STAFF_PHOTO_MIN_BYTES || 80_
 
 async function maybeFlagStaffPhoto(
   c: SupabaseClient,
-  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean },
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean; invoiceSibling?: boolean },
   inv: { bytes: Buffer; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string },
   partial: ExtractedAPInvoice | null,
 ): Promise<{ ts: string | null; stagedPath: string | null; note: string | null }> {
   const silent = { ts: null, stagedPath: null, note: null }
   if (ctx.dryRun) return silent
   if (inv.kind === 'pdf' || inv.bytes.length < STAFF_PHOTO_MIN_BYTES || !isStaffSender(ctx.msg.from)) return silent
+  // The email ALSO carries an invoice-named attachment, so this image is
+  // decoration - a signature block, a logo, a pasted screenshot beside the real
+  // PDF. Carding it says "nothing was entered" while the sibling invoice is
+  // posting to MYOB in the same run, which is both false and alarming.
+  // (Chris, 2026-08-28: two of these fired while MPI 655307 went in fine.)
+  // A genuine phone photo of an invoice arrives ALONE and still cards.
+  if (ctx.invoiceSibling) return silent
 
   const staged = await stageAndSign(c, ctx.msg, inv.attId, inv.bytes, inv.kind).catch(() => null)
   const lines = [
@@ -662,7 +669,7 @@ async function alertUnreadable(
 
 async function processAttachment(
   c: SupabaseClient,
-  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; att: GraphAttachmentMeta; kind: 'pdf' | SupportedImageMediaType; dryRun: boolean; attempt?: number },
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; att: GraphAttachmentMeta; kind: 'pdf' | SupportedImageMediaType; dryRun: boolean; attempt?: number; invoiceSibling?: boolean },
 ): Promise<AutoEntryItem[]> {
   const { mailbox, msg, att, kind } = ctx
 
@@ -814,7 +821,7 @@ function isSelfEntityVendor(vendorName: string | null | undefined): boolean {
 
 async function processInvoice(
   c: SupabaseClient,
-  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean; attempt?: number },
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean; attempt?: number; invoiceSibling?: boolean },
   // preExtracted: batch segments extract in a parallel phase — the result (or
   // 'failed') is handed in so this function doesn't re-extract.
   // escalated: this is the second-opinion pass on the strong model — never
