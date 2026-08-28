@@ -31,6 +31,13 @@ const WATCH_MAILBOX = process.env.B2B_PO_CONFIRM_MAILBOX || 'orders@justautoswho
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const CLASSIFY_MODEL = process.env.B2B_PO_CONFIRM_MODEL || 'claude-haiku-4-5-20251001'
 
+// How many times a message whose processing ERRORED is retried before we stop.
+// Before 2026-08-28 the answer was ZERO: the claim row made any outcome final,
+// so a transient MYOB rejection stranded the order permanently and silently.
+// B2B-2026-000052 (Weirys) sat unbilled and uninvoiced for two days that way,
+// on a bug that was fixed 30 minutes after it happened.
+const MAX_CONFIRM_ATTEMPTS = 3
+
 // Never treat our own outbound mail (the CC copy of the PO email, portal
 // notifications) as a supplier reply.
 const SELF_DOMAINS = ['mail.justautos.app', 'justautoswholesale.com', 'justautosmechanical.com.au', 'justautos.app']
@@ -83,7 +90,16 @@ const emailDomain = (addr: string | null | undefined) => String(addr || '').toLo
 // the PO and invoiced the distributor days before the goods moved
 // (MPI / B2B-2026-000052, Chris 2026-08-26).
 type ConfirmStage = 'acknowledged' | 'dispatched' | 'neither'
-interface ConfirmVerdict { stage: ConfirmStage; reason: string; etaDate: string | null; etaText: string | null }
+interface ConfirmVerdict {
+  stage: ConfirmStage
+  reason: string
+  etaDate: string | null
+  etaText: string | null
+  // Dispatch notices only. For a drop-ship these are the ONLY source of
+  // consignment details - nothing goes through MachShip.
+  trackingNumber: string | null
+  carrier: string | null
+}
 
 async function classifyConfirmation(subject: string, bodyText: string, poNumbers: string[], orderNumber: string): Promise<ConfirmVerdict> {
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -91,7 +107,7 @@ async function classifyConfirmation(subject: string, bodyText: string, poNumbers
   const system = `You review emails received by an auto-parts wholesaler's orders inbox. The wholesaler emailed a supplier a drop-ship purchase order (PO ${poNumbers.join(' / ') || 'n/a'}, our ref ${orderNumber}) and is waiting for the supplier to CONFIRM they accept and will fulfil/ship it.
 
 Reply ONLY with JSON:
-{"stage": "acknowledged"|"dispatched"|"neither", "reason": "<one short sentence>", "eta_date": "YYYY-MM-DD or null", "eta_text": "verbatim dispatch/due-date phrase or null"}
+{"stage": "acknowledged"|"dispatched"|"neither", "reason": "<one short sentence>", "eta_date": "YYYY-MM-DD or null", "eta_text": "verbatim dispatch/due-date phrase or null", "tracking_number": "<consignment/tracking number or null>", "carrier": "<carrier name e.g. TNT, StarTrack, Australia Post, or null>"}
 
 The distinction between the first two matters more than anything else here, because "dispatched" causes us to invoice our customer:
 
@@ -100,6 +116,8 @@ stage="dispatched" ONLY when the goods have actually LEFT the supplier: they sen
 stage="acknowledged" when the supplier accepts the order or confirms availability but it has NOT yet left: "all in stock", "we'll get it shipped out today", "order received", "will be dispatched tomorrow", an order acknowledgement with no freight or invoice attached. A FUTURE or SAME-DAY promise to ship is acknowledged, NOT dispatched - "will ship today" is not "has shipped".
 
 stage="neither" for: out-of-stock/backorder/delay notices, declines or cancellations, questions needing an answer first (price/address/stock queries), quotes, automated read receipts, marketing, anything ambiguous. When unsure between acknowledged and dispatched, choose acknowledged; when unsure at all, choose neither.
+
+tracking_number/carrier: ONLY from a dispatch notice that states them ("tracking number ABC123", "sent on: TNT", a courier tracking link). Never invent one, never reuse our own PO or invoice number as a tracking number. Both null when absent.
 
 eta_date/eta_text: the supplier's expected DISPATCH or due date for this order if stated (e.g. "Expected dispatch date", "ETA", "due to ship"). eta_date only when you can resolve a full calendar date (assume the email's dates are current-year if unstated); eta_text is the supplier's own wording. Both null when no date is given.`
   const r = await fetch(ANTHROPIC_API_URL, {
@@ -114,7 +132,7 @@ eta_date/eta_text: the supplier's expected DISPATCH or due date for this order i
   const data = await r.json()
   const text = data.content?.[0]?.text || ''
   const m = text.match(/\{[\s\S]*\}/)
-  if (!m) return { stage: 'neither', reason: 'classifier returned no JSON', etaDate: null, etaText: null }
+  if (!m) return { stage: 'neither', reason: 'classifier returned no JSON', etaDate: null, etaText: null, trackingNumber: null, carrier: null }
   try {
     const j = JSON.parse(m[0])
     const etaDate = /^\d{4}-\d{2}-\d{2}$/.test(String(j.eta_date || '')) ? String(j.eta_date) : null
@@ -123,9 +141,11 @@ eta_date/eta_text: the supplier's expected DISPATCH or due date for this order i
       reason: String(j.reason || '').slice(0, 300),
       etaDate,
       etaText: j.eta_text ? String(j.eta_text).slice(0, 200) : null,
+      trackingNumber: j.tracking_number ? String(j.tracking_number).trim().slice(0, 80) : null,
+      carrier: j.carrier ? String(j.carrier).trim().slice(0, 60) : null,
     }
   } catch {
-    return { stage: 'neither', reason: 'classifier JSON unparseable', etaDate: null, etaText: null }
+    return { stage: 'neither', reason: 'classifier JSON unparseable', etaDate: null, etaText: null, trackingNumber: null, carrier: null }
   }
 }
 
@@ -167,7 +187,15 @@ function matchOrder(candidates: CandidateOrder[], from: string | null, subject: 
     for (const po of o.poNumbers) {
       const trimmed = po.replace(/^0+/, '')
       if (po && hay.includes(po.toLowerCase())) return { order: o, how: `PO ${po} in message` }
-      if (trimmed.length >= 3 && new RegExp(`(?<!\\d)${trimmed}(?!\\d)`).test(hay)) return { order: o, how: `PO ${po} (trimmed) in message` }
+      // `0*` before the significant digits, NOT a bare (?<!\d) boundary.
+      // Suppliers re-pad our number to their own width: MPI's despatch notice
+      // said "Your order number: JAWS-01382" for PO 00001382, and the old
+      // boundary could not match "1382" inside "01382" because the preceding
+      // "0" is a digit. That single miss is why the despatch email logged
+      // no_match and the tracking never reached the distributor (2026-08-26).
+      // Still safe against a coincidental longer number: "21382" does not match,
+      // because `0*` consumes only zeros and the `2` then fails the boundary.
+      if (trimmed.length >= 3 && new RegExp(`(?<!\\d)0*${trimmed}(?!\\d)`).test(hay)) return { order: o, how: `PO ${po} (padded/trimmed) in message` }
     }
     if (o.order_number && hay.includes(o.order_number.toLowerCase())) return { order: o, how: `order ${o.order_number} in message` }
   }
@@ -296,9 +324,22 @@ export async function scanDropShipConfirmations(opts: { lookbackDays?: number } 
 
   // One query instead of one per message: everything already logged in-window.
   const { data: seenRows } = await c.from('b2b_dropship_confirm_log')
-    .select('graph_message_id').eq('mailbox', WATCH_MAILBOX)
+    .select('graph_message_id, action, attempts').eq('mailbox', WATCH_MAILBOX)
     .gte('created_at', new Date(Date.now() - (lookbackDays + 3) * 86400_000).toISOString())
-  const seen = new Set((seenRows || []).map((r: any) => r.graph_message_id))
+  // A DECISION is final - confirmed, acknowledged, self, no_match,
+  // not_confirmation. Re-deciding those is how you double-bill.
+  // An ERROR is not a decision, it is a failure to reach one, and before
+  // 2026-08-28 it was treated as final anyway (migration 209).
+  const seen = new Set(
+    (seenRows || [])
+      .filter((r: any) => r.action !== 'error' || (Number(r.attempts) || 1) >= MAX_CONFIRM_ATTEMPTS)
+      .map((r: any) => r.graph_message_id),
+  )
+  const retryable = new Map<string, number>(
+    (seenRows || [])
+      .filter((r: any) => r.action === 'error' && (Number(r.attempts) || 1) < MAX_CONFIRM_ATTEMPTS)
+      .map((r: any) => [r.graph_message_id, Number(r.attempts) || 1]),
+  )
 
   for (const msg of messages) {
     if (seen.has(msg.id)) continue
@@ -306,12 +347,25 @@ export async function scanDropShipConfirmations(opts: { lookbackDays?: number } 
 
     // Claim the message BEFORE acting — the unique index turns a concurrent
     // cron overlap into a silent skip instead of a double bill.
-    const { error: claimErr } = await c.from('b2b_dropship_confirm_log').insert({
-      mailbox: WATCH_MAILBOX, graph_message_id: msg.id, internet_message_id: msg.internetMessageId || null,
-      subject: (msg.subject || '').slice(0, 500), from_email: msg.from, received_at: msg.receivedDateTime,
-      action: 'processing',
-    })
-    if (claimErr) { res.skipped++; continue }   // unique violation → another run has it
+    const priorAttempts = retryable.get(msg.id)
+    if (priorAttempts != null) {
+      // A previous run errored. Re-claim by UPDATE, gated on the row still
+      // being 'error' so two overlapping runs cannot both take it — the same
+      // guarantee the unique index gives a fresh insert.
+      const { data: reclaimed, error: reErr } = await c.from('b2b_dropship_confirm_log')
+        .update({ action: 'processing', attempts: priorAttempts + 1 })
+        .eq('mailbox', WATCH_MAILBOX).eq('graph_message_id', msg.id).eq('action', 'error')
+        .select('graph_message_id')
+      if (reErr || !reclaimed || reclaimed.length === 0) { res.skipped++; continue }
+      console.log(`[dropship-confirm] retrying ${msg.subject || msg.id} (attempt ${priorAttempts + 1}/${MAX_CONFIRM_ATTEMPTS})`)
+    } else {
+      const { error: claimErr } = await c.from('b2b_dropship_confirm_log').insert({
+        mailbox: WATCH_MAILBOX, graph_message_id: msg.id, internet_message_id: msg.internetMessageId || null,
+        subject: (msg.subject || '').slice(0, 500), from_email: msg.from, received_at: msg.receivedDateTime,
+        action: 'processing', attempts: 1,
+      })
+      if (claimErr) { res.skipped++; continue }   // unique violation → another run has it
+    }
 
     const finish = (action: string, detail: string, orderId?: string | null) =>
       c.from('b2b_dropship_confirm_log')
@@ -368,6 +422,38 @@ export async function scanDropShipConfirmations(opts: { lookbackDays?: number } 
             metadata: { supplier, stage: verdict.stage, eta_date: verdict.etaDate, eta_text: verdict.etaText },
           })
         } catch (e: any) { console.error('dropship acknowledged event failed (non-fatal):', e?.message || e) }
+      }
+
+      // Supplier's dispatch notice carries the consignment details — this is the
+      // ONLY place they exist for a drop-ship (nothing goes through MachShip,
+      // the supplier ships direct). Record them on the order so the MYOB invoice
+      // carries them, then tell the distributor. Chris, 2026-08-28: MPI's
+      // despatch email for B2B-2026-000052 had "tracking number MNE000001069"
+      // and "sent on : TNT", and Weirys was never told.
+      if (dispatched && verdict.trackingNumber) {
+        try {
+          const { data: cur } = await c.from('b2b_orders')
+            .select('tracking_number, carrier').eq('id', order.id).maybeSingle()
+          // Never overwrite a real consignment already on the order.
+          if (!cur?.tracking_number) {
+            await c.from('b2b_orders').update({
+              tracking_number: verdict.trackingNumber,
+              ...(verdict.carrier && !cur?.carrier ? { carrier: verdict.carrier } : {}),
+            }).eq('id', order.id)
+            await c.from('b2b_order_events').insert({
+              order_id: order.id, event_type: 'dropship_tracking_received', actor_type: 'system', actor_id: null,
+              notes: `${supplier} dispatched: ${verdict.carrier || 'carrier unknown'} ${verdict.trackingNumber}`,
+              metadata: { supplier, tracking_number: verdict.trackingNumber, carrier: verdict.carrier },
+            })
+            const { sendDistributorShippedEmail } = await import('./b2b-order-notify')
+            await sendDistributorShippedEmail(order.id, {
+              carrier: verdict.carrier || null,
+              trackingNumber: verdict.trackingNumber,
+              consignmentNumber: verdict.trackingNumber,
+              eta: verdict.etaDate || verdict.etaText || null,
+            })
+          }
+        } catch (e: any) { console.error('dropship-confirm tracking relay failed (non-fatal):', e?.message || e) }
       }
 
       // Supplier gave an expected dispatch/due date → record it on the order
