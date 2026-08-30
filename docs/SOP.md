@@ -230,7 +230,7 @@ Pressing it repeatedly is safe.
 
 **⚠ It reports what Stripe says - it never marks something settled on its own.** If Stripe says not cleared, the answer is no, however long it has been.
 
-**The same button also reads "Receipt payment in MYOB".** When an order's money has cleared but no customer payment was ever recorded in MYOB, the button changes to that and applying it is all it does - it doesn't re-ask Stripe, because the money is not in question. This is the repair for a payment that slipped past the automatic path. It is bounded by what the MYOB document actually still owes, so it can never pay twice or overpay; if someone already receipted it by hand it says so and posts nothing.
+**The same button also reads "Receipt payment in MYOB".** When an order's money has cleared but no customer payment was ever recorded in MYOB, the button changes to that and applying it is all it does - it doesn't re-ask Stripe, because the money is not in question. This is the repair for a payment that slipped past the automatic path. It is bounded by what the MYOB document actually still owes, so it can never pay twice or overpay; if someone already receipted it by hand it says so and posts nothing. It never appears on a **cancelled or refunded** order - a refund is a separate credit note in MYOB, so the original invoice can still look unpaid, and receipting it would hand over money we have already given back.
 
 You should rarely see it: the portal now applies a cleared payment on its own, and a six-hourly check sweeps up anything the live notification missed and tells you it did. If you *do* see it on an order that cleared days ago, press it - that money is not in MYOB.
 

@@ -48,7 +48,14 @@ const FAILED = new Set(['canceled', 'requires_payment_method'])
  * settlement is the fact being recorded here, and it stands whether or not
  * MYOB is reachable; the b2b-payment-check cron retries what fails.
  */
-async function applyMyobPayment(c: SupabaseClient, orderId: string): Promise<{ uid: string | null; note: string | null }> {
+async function applyMyobPayment(c: SupabaseClient, orderId: string, status: string | null): Promise<{ uid: string | null; note: string | null }> {
+  // A refund is mirrored as a separate credit note, so the original invoice can
+  // still show an open balance — receipting against it would move real money on
+  // an order we've already given back. The webhook and cron both exclude these;
+  // this path must too, now that it is reachable on a settled order.
+  if (status === 'cancelled' || status === 'refunded') {
+    return { uid: null, note: `Order is ${status} — no payment applied.` }
+  }
   try {
     const { applyCustomerPaymentInMyob } = await import('../../../../../../lib/accounting/post-b2b-doc')
     const pay = await applyCustomerPaymentInMyob(orderId)
@@ -93,7 +100,7 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
         message: `Already recorded as cleared on ${when}, and receipted in MYOB.`,
       })
     }
-    const repair = await applyMyobPayment(c, orderId)
+    const repair = await applyMyobPayment(c, orderId, order.status)
     return res.status(200).json({
       ok: true, changed: !!repair.uid, settled: true, myob_payment_uid: repair.uid,
       message: `Cleared on ${when}. ${repair.uid ? 'Customer payment receipted in MYOB.' : (repair.note || 'MYOB payment not applied.')}`,
@@ -172,7 +179,7 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
   // Receipt it in MYOB. Ungated: applyCustomerPaymentInMyob resolves the live
   // document itself and falls back to the open Sale Order when the invoice
   // doesn't exist yet, which MYOB carries onto the invoice at conversion.
-  const applied = await applyMyobPayment(c, orderId)
+  const applied = await applyMyobPayment(c, orderId, order.status)
   const myobPayment = applied.uid
   const myobNote = applied.note
 

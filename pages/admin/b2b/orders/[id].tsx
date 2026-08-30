@@ -473,8 +473,11 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       whose funds aren't confirmed cleared) AND when the money
                       HAS cleared but never reached MYOB — the second case is
                       the repair for a payment the webhook skipped, and it used
-                      to have no button at all (JAWSB2B0059). */}
-                  {data.paid_at && (!data.payment_settled_at || !data.myob.payment_uid) && (
+                      to have no button at all (JAWSB2B0059). payment_at without
+                      a uid means someone receipted it by hand in MYOB — done,
+                      not outstanding. */}
+                  {data.paid_at && data.status !== 'cancelled' && data.status !== 'refunded'
+                    && (!data.payment_settled_at || (!data.myob.payment_uid && !data.myob.payment_at)) && (
                     <div style={{display:'flex', justifyContent:'flex-end', padding:'6px 0 2px'}}>
                       <button onClick={checkPayment} disabled={payCheckBusy}
                         className="al-press al-focus"
