@@ -9,11 +9,14 @@
 //     booking/scheduling, status/support, not coachable) and then scores
 //     against THAT type's dimension set. Non-coachable calls (suppliers,
 //     personal, wrong numbers) are classified but never scored.
-//   • TRANSCRIPT-BASED ADVISOR ID: extensions are hot-desked, so the agent's
-//     self-introduction on the call is the source of truth. A confident
-//     identification is written back to calls.effective_advisor_* via the
-//     call_advisor_roster (name/alias → slack id), overriding the extension
-//     guess.
+//   • ADVISOR ID: since 2026-08-31 every sales advisor has their OWN handset,
+//     so the EXTENSION is the baseline identification (attributeByExtension,
+//     source 'extension'). Before that date extensions were hot-desked and the
+//     transcript self-introduction was the only real signal — which is why the
+//     cutover is enforced and history is never re-attributed.
+//     A HIGH-confidence self-introduction still overrides the extension (people
+//     do answer at someone else's desk); medium confidence no longer does,
+//     because a fixed handset beats a fuzzy one-edit name match.
 //
 // Gated by CALLS_ANALYSIS_ENABLED (default OFF) so the cron no-ops until the
 // worker's analysis loop is disabled — both writing call_analysis at once
@@ -251,6 +254,72 @@ function matchRoster(roster: RosterRow[], name: string | null | undefined): Rost
 // Confidence policy: 'high' (explicit self-introduction) always wins — the
 // transcript beats any extension guess, including the worker's 'identified'.
 // 'medium' only fills gaps (null / ext-default), never overrides a positive id.
+// ── Extension-based attribution ────────────────────────────────────────────
+// Hot-desking ENDED 2026-08-31 (Chris): every sales advisor now has their own
+// handset, so the extension identifies the person deterministically.
+//
+// ⚠ THE CUTOVER DATE IS LOAD-BEARING. Before it, 201/203/204 were a shared
+// pool and 4001 was literally called "Hot Desk" - every advisor's roster row
+// listed the same three extensions. Applying today's mapping to older calls
+// would confidently attribute thousands of them to the wrong person AND
+// overwrite the transcript attributions that are correct. Never backfill past
+// this date.
+const ADVISOR_EXT_CUTOVER = (process.env.CALLS_ADVISOR_EXT_CUTOVER || '2026-08-31').trim()
+// The business runs on Brisbane time; every call boundary here is local.
+const CALLS_TZ = process.env.CALLS_TZ || 'Australia/Brisbane'
+
+/** ext -> roster row, only where exactly ONE active advisor claims it. */
+function extensionOwners(roster: RosterRow[]): Map<string, RosterRow> {
+  const claims = new Map<string, RosterRow[]>()
+  for (const r of roster) {
+    for (const e of r.extensions || []) {
+      const k = String(e).trim()
+      if (!k) continue
+      claims.set(k, [...(claims.get(k) || []), r])
+    }
+  }
+  const owners = new Map<string, RosterRow>()
+  // A shared extension identifies nobody - that is the whole reason this
+  // existed. Two claimants means we are back in hot-desk territory: skip it.
+  // forEach, not for..of: tsconfig targets es5 and Map iteration needs
+  // downlevelIteration (same trap as the ES5 instanceof one).
+  claims.forEach((rows, ext) => { if (rows.length === 1 && rows[0].slack_user_id) owners.set(ext, rows[0]) })
+  return owners
+}
+
+/**
+ * Attribute a call from the extension that answered it. This is the BASELINE
+ * since the cutover; a high-confidence transcript self-introduction still
+ * overrides it (see applyAdvisor), because people do occasionally answer at
+ * someone else's desk.
+ */
+async function attributeByExtension(
+  c: SupabaseClient,
+  call: { id: string; agent_ext?: string | null; call_date?: string | null; effective_advisor_source: string | null; effective_advisor_slack_user_id: string | null },
+  roster: RosterRow[],
+): Promise<{ applied: boolean; reason: string }> {
+  if (!call.agent_ext) return { applied: false, reason: 'no extension on the call' }
+  // ⚠ Compare in BRISBANE, not UTC. call_date is timestamptz, so slicing the
+  // ISO string gives the UTC date - and a 08:00 Brisbane call is still the
+  // PREVIOUS day in UTC. Doing that here silently excluded every call before
+  // 10am on cutover day (caught on the first backfill, 2026-08-31).
+  const when = call.call_date
+    ? new Date(call.call_date).toLocaleDateString('en-CA', { timeZone: CALLS_TZ })
+    : ''
+  if (!when || when < ADVISOR_EXT_CUTOVER) return { applied: false, reason: `before the ${ADVISOR_EXT_CUTOVER} fixed-extension cutover` }
+  // Never displace an existing positive id - the transcript path owns those.
+  if (call.effective_advisor_slack_user_id) return { applied: false, reason: 'already attributed' }
+  const owner = extensionOwners(roster).get(String(call.agent_ext).trim())
+  if (!owner) return { applied: false, reason: `ext ${call.agent_ext} is not one advisor's own handset` }
+  const { error } = await c.from('calls').update({
+    effective_advisor_name: owner.name,
+    effective_advisor_slack_user_id: owner.slack_user_id,
+    effective_advisor_source: 'extension',
+  }).eq('id', call.id)
+  if (error) return { applied: false, reason: `update failed: ${error.message}` }
+  return { applied: true, reason: `ext ${call.agent_ext} -> ${owner.name}` }
+}
+
 async function applyAdvisor(
   c: SupabaseClient,
   call: { id: string; effective_advisor_source: string | null; effective_advisor_slack_user_id: string | null },
@@ -263,7 +332,12 @@ async function applyAdvisor(
   if (!match || !match.slack_user_id) { out.reason = identifiedName ? 'name not on roster' : 'not identified'; return out }
   if (confidence !== 'high' && confidence !== 'medium') { out.reason = `confidence ${confidence || 'none'}`; return out }
   if (call.effective_advisor_slack_user_id === match.slack_user_id) { out.reason = 'already attributed'; return out }
-  const positivelyAttributed = call.effective_advisor_source === 'identified' || call.effective_advisor_source === 'transcript'
+  // 'extension' joins this list from 2026-08-31: on a fixed handset the
+  // extension is stronger evidence than a fuzzy one-edit name match, so only a
+  // HIGH-confidence self-introduction may override it.
+  const positivelyAttributed = call.effective_advisor_source === 'identified'
+    || call.effective_advisor_source === 'transcript'
+    || call.effective_advisor_source === 'extension'
   if (confidence === 'medium' && positivelyAttributed) { out.reason = 'medium confidence won\'t override a positive id'; return out }
 
   const { error } = await c.from('calls').update({
@@ -422,7 +496,7 @@ export async function analyseCall(callId: string, opts: { dryRun?: boolean; rubr
   const dryRun = !!opts.dryRun
 
   const { data: call, error: callErr } = await c.from('calls')
-    .select('id, direction, external_number, agent_ext, agent_name, duration_seconds, billsec_seconds, effective_advisor_source, effective_advisor_slack_user_id')
+    .select('id, direction, external_number, agent_ext, agent_name, call_date, duration_seconds, billsec_seconds, effective_advisor_source, effective_advisor_slack_user_id')
     .eq('id', callId).maybeSingle()
   if (callErr || !call) return { callId, ok: false, error: callErr?.message || 'call not found' }
 
@@ -497,6 +571,14 @@ export async function analyseCall(callId: string, opts: { dryRun?: boolean; rubr
     analysed_at: new Date().toISOString(),
   }).eq('id', callId)
 
+  // Extension first as the baseline, THEN the transcript, so a high-confidence
+  // self-introduction can still override it for a cross-desk call.
+  const byExt = await attributeByExtension(c, call, roster)
+  if (byExt.applied) {
+    call.effective_advisor_source = 'extension'
+    const owner = extensionOwners(roster).get(String(call.agent_ext || '').trim())
+    if (owner?.slack_user_id) call.effective_advisor_slack_user_id = owner.slack_user_id
+  }
   const advisor = await applyAdvisor(c, call, roster, advisorName, advisorConfidence)
 
   const dimensionLabels: Record<string, string> = {}
