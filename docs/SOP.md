@@ -401,6 +401,7 @@ The portal now recovers from this by itself. When the id stops resolving it look
 |---|---|
 | Consignment shows `consignment_missing` | It vanished at MachShip's end. Rebook from the order page. |
 | Booking blocked on an unsettled BECS payment | Deliberate — the money hasn't cleared. If you accept the risk, the Book button offers "Book anyway"; the decision is stamped on the order timeline. |
+| "Settled, but the MYOB payment failed" | The message now names the document it tried (type, number, status, customer, balance) - read it. `CustomerMismatch` on a document whose customer looks right usually means the sale order was already converted; the portal handles that itself now, so report it if you still see it. |
 | Bank payment cleared, but it isn't in MYOB | Open the order and press **Receipt payment in MYOB** (Summary, where "Check if payment cleared" normally sits). Safe to press twice. It should be rare — the six-hourly check applies these on its own and notifies you when it has. |
 | Rates look wrong | Admin → B2B → Settings → freight zones / carriers / packaging. Drop-ship rates have their own calibration panel. |
 

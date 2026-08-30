@@ -508,6 +508,18 @@ export interface MyobPaymentResult {
   myob_payment_uid: string | null
   status: 'created' | 'already_applied' | 'invoice_already_paid' | 'not_settled' | 'no_invoice'
   appliedTo?: 'invoice' | 'order'
+  /** What we resolved and acted on — surfaced so a rejection says which document it was about. */
+  target?: { type: 'Invoice' | 'Order'; number: string | null; docStatus: string | null; customer: string | null; balance: number }
+}
+
+/** Human-readable description of a resolved MYOB document, for messages and errors. */
+function describeTarget(t: { type: string; doc: any }, balance?: number): string {
+  const d = t.doc || {}
+  const bits = [`${t.type} ${d.Number || '?'}`]
+  if (d.Status) bits.push(`status ${d.Status}`)
+  if (d.Customer?.Name) bits.push(d.Customer.Name)
+  if (balance !== undefined) bits.push(`balance $${balance.toFixed(2)}`)
+  return bits.join(', ')
 }
 
 /**
@@ -548,6 +560,7 @@ async function resolvePaymentTarget(
     myob_invoice_uid: string | null
     myob_invoice_number: string | null
   },
+  distCustomerUid: string | null,
 ): Promise<MyobPaymentTarget | null> {
   const base = `/accountright/${conn.company_file_id}`
   const getDoc = async (path: string, uid: string): Promise<any | null> => {
@@ -561,8 +574,17 @@ async function resolvePaymentTarget(
   }
 
   if (order.myob_invoice_uid) {
+    // A converted order STILL answers 200 here and still reports a balance, but
+    // MYOB refuses payments against it — with a misleading "CustomerMismatch"
+    // (JAWSB2B0059, 2026-08-31). Only an Open order is a payable target; anything
+    // else must fall through to the invoice that replaced it. Status is absent on
+    // some responses, so treat missing as Open rather than breaking the proven
+    // checkout path.
     const asOrder = await getDoc('Sale/Order/Item', order.myob_invoice_uid)
-    if (asOrder) return { uid: order.myob_invoice_uid, type: 'Order', doc: asOrder }
+    const orderStatus = asOrder ? String(asOrder.Status || '') : ''
+    if (asOrder && (!orderStatus || orderStatus === 'Open')) {
+      return { uid: order.myob_invoice_uid, type: 'Order', doc: asOrder }
+    }
     const asInvoice = await getDoc('Sale/Invoice/Item', order.myob_invoice_uid)
     if (asInvoice) return { uid: order.myob_invoice_uid, type: 'Invoice', doc: asInvoice }
   }
@@ -579,7 +601,13 @@ async function resolvePaymentTarget(
     // something was duplicated by hand, and guessing would post to the wrong one.
     if (items.length === 1 && items[0]?.UID) {
       const full = await getDoc('Sale/Invoice/Item', items[0].UID)
-      if (full) return { uid: items[0].UID, type: 'Invoice', doc: full }
+      // The Number is the ONLY link here — unlike the UID branches above, this
+      // document was not one we recorded ourselves. Require it to belong to the
+      // distributor we're paying for, or we could receipt a stranger's invoice.
+      const owner = full?.Customer?.UID || null
+      if (full && (!distCustomerUid || owner === distCustomerUid)) {
+        return { uid: items[0].UID, type: 'Invoice', doc: full }
+      }
     }
   }
 
@@ -613,7 +641,7 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
 
   // Work out what the money belongs on by READING MYOB, never by trusting the
   // stored UID alone — see resolvePaymentTarget.
-  const target = await resolvePaymentTarget(conn, order as any)
+  const target = await resolvePaymentTarget(conn, order as any, dist.myob_primary_customer_uid || null)
   if (!target) return { myob_payment_uid: null, status: 'no_invoice' }
   const { uid: targetUid, type: targetType, doc } = target
 
@@ -630,9 +658,16 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
   // Apply exactly the live balance (never more) — so a manual receipt in MYOB,
   // a rounding cent, or a partial doesn't double-pay.
   const balance = round2(Number(doc.BalanceDueAmount ?? 0))
+  const targetInfo = {
+    type: targetType,
+    number: (doc.Number as string) || null,
+    docStatus: (doc.Status as string) || null,
+    customer: (doc.Customer?.Name as string) || null,
+    balance,
+  }
   if (balance <= 0) {
     await c.from('b2b_orders').update({ myob_payment_at: new Date().toISOString() }).eq('id', orderId)
-    return { myob_payment_uid: null, status: 'invoice_already_paid', appliedTo: targetType === 'Invoice' ? 'invoice' : 'order' }
+    return { myob_payment_uid: null, status: 'invoice_already_paid', appliedTo: targetType === 'Invoice' ? 'invoice' : 'order', target: targetInfo }
   }
   const amount = Math.min(balance, round2(Number(order.total_inc || 0)) || balance)
 
@@ -645,16 +680,25 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
     // even for UndepositedFunds — same shape the proven Stripe→MYOB sync
     // posts (JAWS 1-1210, seen live on B2B-2026-000040, 2026-08-06).
     Account: { UID: JAWS_UIDS.ACCT_UNDEP_FUNDS },
-    Customer: { UID: dist.myob_primary_customer_uid },
+    // From the DOCUMENT, not the distributor row: MYOB rejects any payment whose
+    // customer differs from the one on the order/invoice, and the document is the
+    // authority. Falls back to the distributor's card if MYOB omitted it.
+    Customer: { UID: doc.Customer?.UID || dist.myob_primary_customer_uid },
     Date: payDate,
     AmountReceived: amount,
     Memo: memo,
     Invoices: [{ UID: targetUid, Type: targetType, AmountApplied: amount }],
   }
 
+  if (doc.Customer?.UID && doc.Customer.UID !== dist.myob_primary_customer_uid) {
+    console.warn(`applyCustomerPaymentInMyob: order ${order.order_number} — MYOB ${targetType} ${doc.Number} belongs to card ${doc.Customer.UID} (${doc.Customer?.Name}) but distributor ${dist.display_name} is linked to ${dist.myob_primary_customer_uid}. Paying against the document's card; reconcile the distributor record.`)
+  }
+
   const result = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/CustomerPayment`, { method: 'POST', body })
   if (result.status !== 201 && result.status !== 200) {
-    throw new Error(`MYOB CustomerPayment POST failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 400)}`)
+    // Name the document — MYOB's own message never does, and without it a
+    // rejection takes a database dig to understand (2026-08-31).
+    throw new Error(`MYOB CustomerPayment POST failed (HTTP ${result.status}) applying $${amount.toFixed(2)} to ${describeTarget({ type: targetType, doc }, balance)}: ${(result.raw || '').substring(0, 400)}`)
   }
   const location = (result.headers || {})['location'] || ''
   const uuidMatches = String(location).match(UUID_REGEX_G) || []
@@ -666,7 +710,7 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
     myob_payment_at: new Date().toISOString(),
   }).eq('id', orderId)
 
-  return { myob_payment_uid: paymentUid, status: 'created', appliedTo: targetType === 'Invoice' ? 'invoice' : 'order' }
+  return { myob_payment_uid: paymentUid, status: 'created', appliedTo: targetType === 'Invoice' ? 'invoice' : 'order', target: targetInfo }
 }
 
 /**

@@ -59,18 +59,22 @@ async function applyMyobPayment(c: SupabaseClient, orderId: string, status: stri
   try {
     const { applyCustomerPaymentInMyob } = await import('../../../../../../lib/accounting/post-b2b-doc')
     const pay = await applyCustomerPaymentInMyob(orderId)
+    const where = pay.target
+      ? ` (MYOB ${pay.target.type} ${pay.target.number || '?'}${pay.target.docStatus ? `, ${pay.target.docStatus}` : ''}${pay.target.customer ? `, ${pay.target.customer}` : ''})`
+      : ''
     if (pay.status === 'created' && pay.myob_payment_uid) {
       await c.from('b2b_order_events').insert({
         order_id: orderId, event_type: 'myob_payment_applied',
         actor_type: 'system', actor_id: null,
-        notes: `Customer payment → Undeposited Funds, applied to the MYOB ${pay.appliedTo || 'order'} (${pay.myob_payment_uid})`,
+        notes: `Customer payment → Undeposited Funds, applied to the MYOB ${pay.appliedTo || 'order'}${where} (${pay.myob_payment_uid})`,
         metadata: { myob_payment_uid: pay.myob_payment_uid, applied_to: pay.appliedTo || 'order', source: 'check-payment-button' },
       })
-      return { uid: pay.myob_payment_uid, note: null }
+      return { uid: pay.myob_payment_uid, note: `Applied${where}.` }
     }
     if (pay.status === 'already_applied') return { uid: pay.myob_payment_uid, note: null }
-    if (pay.status === 'invoice_already_paid') return { uid: null, note: 'The MYOB document is already fully paid — nothing to apply.' }
-    return { uid: null, note: `MYOB payment not applied (${pay.status}).` }
+    if (pay.status === 'invoice_already_paid') return { uid: null, note: `The MYOB document is already fully paid${where} — nothing to apply.` }
+    if (pay.status === 'no_invoice') return { uid: null, note: 'No matching open order or invoice could be found in MYOB for this order.' }
+    return { uid: null, note: `MYOB payment not applied (${pay.status})${where}.` }
   } catch (e: any) {
     console.error('check-payment: MYOB payment failed:', e?.message || e)
     return { uid: null, note: `Settled, but the MYOB payment failed: ${e?.message || e}` }
