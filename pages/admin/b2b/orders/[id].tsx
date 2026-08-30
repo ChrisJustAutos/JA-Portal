@@ -124,6 +124,10 @@ interface OrderDetail {
     written_at: string | null
     write_attempts: number | null
     write_error: string | null
+    invoice_uid: string | null
+    invoice_number: string | null
+    payment_uid: string | null
+    payment_at: string | null
   }
   lines: OrderLine[]
   events: OrderEvent[]
@@ -465,20 +469,25 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     const state = settled ? 'Settled' : (m === 'becs' ? 'Awaiting settlement' : m === 'payto' ? 'Awaiting confirmation' : 'Unsettled')
                     return <KV label="Payment" value={`${label} · ${state}`} valueColor={settled ? A.good : (m === 'card' ? undefined : A.warn)}/>
                   })()}
-                  {/* Only offered while there is something to find out: a paid
-                      order whose funds have not been confirmed cleared. */}
-                  {data.paid_at && !data.payment_settled_at && (
+                  {/* Offered while there is something to find out (a paid order
+                      whose funds aren't confirmed cleared) AND when the money
+                      HAS cleared but never reached MYOB — the second case is
+                      the repair for a payment the webhook skipped, and it used
+                      to have no button at all (JAWSB2B0059). */}
+                  {data.paid_at && (!data.payment_settled_at || !data.myob.payment_uid) && (
                     <div style={{display:'flex', justifyContent:'flex-end', padding:'6px 0 2px'}}>
                       <button onClick={checkPayment} disabled={payCheckBusy}
                         className="al-press al-focus"
-                        title="Ask Stripe whether the funds have actually cleared, rather than waiting for the webhook"
+                        title={data.payment_settled_at ? 'The funds have cleared but no customer payment exists in MYOB — apply it now' : 'Ask Stripe whether the funds have actually cleared, rather than waiting for the webhook'}
                         style={{
                           padding:'5px 12px', minHeight:30, borderRadius:RADIUS.pill,
                           border:`1px solid ${alpha(A.warn, '66')}`, background:alpha(A.warn, '14'),
                           color:A.warn, fontSize:12, fontWeight:600, fontFamily:'inherit',
                           cursor: payCheckBusy ? 'wait' : 'pointer',
                         }}>
-                        {payCheckBusy ? 'Checking Stripe…' : 'Check if payment cleared'}
+                        {payCheckBusy
+                          ? (data.payment_settled_at ? 'Receipting in MYOB…' : 'Checking Stripe…')
+                          : (data.payment_settled_at ? 'Receipt payment in MYOB' : 'Check if payment cleared')}
                       </button>
                     </div>
                   )}

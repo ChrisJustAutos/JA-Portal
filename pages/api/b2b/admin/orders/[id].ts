@@ -100,6 +100,8 @@ async function getDetail(id: string, res: NextApiResponse) {
       stripe_checkout_session_id, stripe_payment_intent_id, stripe_charge_id,
       myob_invoice_uid, myob_invoice_number, myob_company_file,
       myob_written_at, myob_write_attempts, myob_write_error,
+      myob_sale_invoice_uid, myob_sale_invoice_number,
+      myob_payment_uid, myob_payment_at,
       distributor:b2b_distributors!b2b_orders_distributor_id_fkey (
         id, display_name, myob_primary_customer_uid,
         primary_contact_phone, primary_contact_email,
@@ -265,6 +267,10 @@ async function getDetail(id: string, res: NextApiResponse) {
         written_at: order.myob_written_at,
         write_attempts: order.myob_write_attempts,
         write_error: order.myob_write_error,
+        invoice_uid: order.myob_sale_invoice_uid,     // the converted tax invoice
+        invoice_number: order.myob_sale_invoice_number,
+        payment_uid: order.myob_payment_uid,
+        payment_at: order.myob_payment_at,
       },
       lines,
       events: eventsEnriched,

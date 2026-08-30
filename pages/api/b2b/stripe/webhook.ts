@@ -107,8 +107,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // BECS settles days after checkout; this event confirms the funds landed.
   // Mark the order settled and receipt the payment in MYOB (→ Undeposited
-  // Funds) if the sale invoice already exists (i.e. the order has shipped).
-  // If it hasn't shipped yet, book-freight applies the payment at conversion.
+  // Funds) — unconditionally. This used to be gated on myob_sale_invoice_uid,
+  // i.e. on the order having already SHIPPED, on the assumption that an
+  // unshipped order would get its payment at conversion instead. An order that
+  // settles before it ships (JAWSB2B0059: settled 00:20, shipped 03:33) fell
+  // between the two and was never paid in MYOB at all. applyCustomerPayment-
+  // InMyob has its own, correct preconditions — it resolves the live document
+  // and falls back to the open Sale Order, which MYOB carries onto the invoice
+  // at conversion. Let it decide; don't second-guess it from out here.
   if (eventType === 'checkout.session.async_payment_succeeded') {
     const s = event.data?.object || {}
     const settledOrderId = s.metadata?.order_id as string | undefined
@@ -118,13 +124,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await c2.from('b2b_orders').update({ payment_settled_at: new Date().toISOString() })
           .eq('id', settledOrderId).is('payment_settled_at', null)
         await c2.from('b2b_order_events').insert({ order_id: settledOrderId, event_type: 'payment_settled', actor_type: 'stripe', actor_id: null, notes: 'Bank payment cleared (async_payment_succeeded)', metadata: { stripe_event_id: eventId } })
-        const { data: o } = await c2.from('b2b_orders').select('myob_sale_invoice_uid').eq('id', settledOrderId).maybeSingle()
-        if (o?.myob_sale_invoice_uid) {
+        try {
           const { applyCustomerPaymentInMyob } = await import('../../../../lib/accounting/post-b2b-doc')
           const pay = await applyCustomerPaymentInMyob(settledOrderId)
           if (pay.status === 'created') {
-            await c2.from('b2b_order_events').insert({ order_id: settledOrderId, event_type: 'myob_payment_applied', actor_type: 'system', actor_id: null, notes: `Customer payment → Undeposited Funds (${pay.myob_payment_uid})`, metadata: { myob_payment_uid: pay.myob_payment_uid } })
+            await c2.from('b2b_order_events').insert({ order_id: settledOrderId, event_type: 'myob_payment_applied', actor_type: 'system', actor_id: null, notes: `Customer payment → Undeposited Funds, applied to the MYOB ${pay.appliedTo || 'order'} (${pay.myob_payment_uid})`, metadata: { myob_payment_uid: pay.myob_payment_uid, applied_to: pay.appliedTo || 'order' } })
           }
+        } catch (e: any) {
+          // Never fail the webhook over MYOB — Stripe would retry the whole
+          // event. Record it; the b2b-payment-check cron sweeps it up.
+          const msg = e?.message || String(e)
+          console.error('webhook async_payment_succeeded MYOB payment failed:', msg)
+          await c2.from('b2b_order_events').insert({ order_id: settledOrderId, event_type: 'myob_payment_failed', actor_type: 'system', actor_id: null, notes: msg.substring(0, 500) })
         }
       } catch (e: any) { console.error('webhook async_payment_succeeded handling error:', e?.message || e) }
     }

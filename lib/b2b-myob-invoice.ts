@@ -523,13 +523,78 @@ export interface MyobPaymentResult {
  * Only call once the money is actually settled — card/PayTo settle at
  * checkout; BECS settles days later (payment_settled_at is the gate).
  */
+type MyobPaymentTarget = { uid: string; type: 'Invoice' | 'Order'; doc: any }
+
+/**
+ * Find the live MYOB document a settled payment should be applied to.
+ *
+ * The stored UID is a hint, not a fact. At checkout we record the Sale ORDER
+ * we created (`myob_invoice_uid`); converting it to an invoice consumes that
+ * document. Our own converter mints a NEW invoice UID and writes it back, but
+ * a conversion done by hand in the MYOB UI writes nothing back — leaving the
+ * order pointed at a document that no longer exists, so every UID-keyed gate
+ * silently skips it. That stranded $4,074.46 on B2B-2026-000050 / JAWSB2B0059
+ * for four days (Chris, 2026-08-31).
+ *
+ * So try, in order: the invoice we already know about; the stored UID as an
+ * order; the same UID as an invoice (a UI conversion that kept it); and
+ * finally the invoice carrying our order's Number (a conversion that didn't).
+ * Returns null only when none of those exist in MYOB.
+ */
+async function resolvePaymentTarget(
+  conn: { id: string; company_file_id: string | null },
+  order: {
+    myob_sale_invoice_uid: string | null
+    myob_invoice_uid: string | null
+    myob_invoice_number: string | null
+  },
+): Promise<MyobPaymentTarget | null> {
+  const base = `/accountright/${conn.company_file_id}`
+  const getDoc = async (path: string, uid: string): Promise<any | null> => {
+    const r = await myobFetch(conn.id, `${base}/${path}/${uid}`)
+    return r.status === 200 && r.data ? r.data : null
+  }
+
+  if (order.myob_sale_invoice_uid) {
+    const doc = await getDoc('Sale/Invoice/Item', order.myob_sale_invoice_uid)
+    if (doc) return { uid: order.myob_sale_invoice_uid, type: 'Invoice', doc }
+  }
+
+  if (order.myob_invoice_uid) {
+    const asOrder = await getDoc('Sale/Order/Item', order.myob_invoice_uid)
+    if (asOrder) return { uid: order.myob_invoice_uid, type: 'Order', doc: asOrder }
+    const asInvoice = await getDoc('Sale/Invoice/Item', order.myob_invoice_uid)
+    if (asInvoice) return { uid: order.myob_invoice_uid, type: 'Invoice', doc: asInvoice }
+  }
+
+  // Converted by hand under a new UID — the Number is carried across, and our
+  // converter deliberately keeps it the same, so it identifies the invoice.
+  const number = order.myob_invoice_number
+  if (number) {
+    const r = await myobFetch(conn.id, `${base}/Sale/Invoice/Item`, {
+      query: { '$filter': `Number eq '${String(number).replace(/'/g, "''")}'`, '$top': 2 },
+    })
+    const items: any[] = r.status === 200 && Array.isArray(r.data?.Items) ? r.data.Items : []
+    // Only trust an unambiguous match — two invoices sharing a Number means
+    // something was duplicated by hand, and guessing would post to the wrong one.
+    if (items.length === 1 && items[0]?.UID) {
+      const full = await getDoc('Sale/Invoice/Item', items[0].UID)
+      if (full) return { uid: items[0].UID, type: 'Invoice', doc: full }
+    }
+  }
+
+  return null
+}
+
 export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobPaymentResult> {
   const c = sb()
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
     .select(`
       id, order_number, total_inc, paid_at, payment_settled_at, payment_method,
-      stripe_payment_intent_id, myob_invoice_uid, myob_sale_invoice_uid, myob_payment_uid,
+      stripe_payment_intent_id, myob_payment_uid,
+      myob_invoice_uid, myob_invoice_number,
+      myob_sale_invoice_uid, myob_sale_invoice_number, myob_sale_invoice_at,
       distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( id, display_name, myob_primary_customer_uid )
     `)
     .eq('id', orderId).maybeSingle()
@@ -537,11 +602,7 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
   if (!order) throw new Error(`Order ${orderId} not found`)
 
   if (order.myob_payment_uid) return { myob_payment_uid: order.myob_payment_uid, status: 'already_applied' }
-  // Prefer the invoice; fall back to the open sale ORDER (payment sits as a
-  // customer deposit and transfers to the invoice when the order converts).
-  const targetUid: string | null = order.myob_sale_invoice_uid || order.myob_invoice_uid || null
-  const targetType: 'Invoice' | 'Order' = order.myob_sale_invoice_uid ? 'Invoice' : 'Order'
-  if (!targetUid) return { myob_payment_uid: null, status: 'no_invoice' }
+  if (!order.myob_sale_invoice_uid && !order.myob_invoice_uid) return { myob_payment_uid: null, status: 'no_invoice' }
   if (!order.payment_settled_at) return { myob_payment_uid: null, status: 'not_settled' }
 
   const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
@@ -550,12 +611,25 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
   const conn = await getConnection('JAWS')
   if (!conn) throw new Error('JAWS MYOB connection not configured')
 
-  // Read the document's live balance and apply exactly that (never more) — so a
-  // manual receipt in MYOB, a rounding cent, or a partial doesn't double-pay.
-  const docPath = targetType === 'Invoice' ? 'Sale/Invoice/Item' : 'Sale/Order/Item'
-  const inv = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/${docPath}/${targetUid}`)
-  if (inv.status !== 200 || !inv.data) throw new Error(`${targetType} fetch failed (HTTP ${inv.status})`)
-  const balance = round2(Number(inv.data.BalanceDueAmount ?? 0))
+  // Work out what the money belongs on by READING MYOB, never by trusting the
+  // stored UID alone — see resolvePaymentTarget.
+  const target = await resolvePaymentTarget(conn, order as any)
+  if (!target) return { myob_payment_uid: null, status: 'no_invoice' }
+  const { uid: targetUid, type: targetType, doc } = target
+
+  // If that turned up an invoice we didn't know about, record it, so the cron,
+  // the Check payment button and Ship Now all stop chasing the dead order UID.
+  if (targetType === 'Invoice' && targetUid !== order.myob_sale_invoice_uid) {
+    await c.from('b2b_orders').update({
+      myob_sale_invoice_uid: targetUid,
+      myob_sale_invoice_number: doc.Number || order.myob_sale_invoice_number || order.myob_invoice_number || null,
+      myob_sale_invoice_at: order.myob_sale_invoice_at || new Date().toISOString(),
+    }).eq('id', orderId)
+  }
+
+  // Apply exactly the live balance (never more) — so a manual receipt in MYOB,
+  // a rounding cent, or a partial doesn't double-pay.
+  const balance = round2(Number(doc.BalanceDueAmount ?? 0))
   if (balance <= 0) {
     await c.from('b2b_orders').update({ myob_payment_at: new Date().toISOString() }).eq('id', orderId)
     return { myob_payment_uid: null, status: 'invoice_already_paid', appliedTo: targetType === 'Invoice' ? 'invoice' : 'order' }

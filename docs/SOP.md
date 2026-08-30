@@ -222,13 +222,17 @@ That confirmation normally arrives on its own, from Stripe. If it goes missing -
 
 What you get back:
 
-- **"has cleared - the order is now marked settled"** - money is ours. The order flips to settled and, if the tax invoice already exists, the customer payment is receipted into MYOB automatically.
+- **"has cleared - the order is now marked settled"** - money is ours. The order flips to settled and the customer payment is receipted into MYOB - against the tax invoice if one exists, otherwise against the sale order, where MYOB holds it as a deposit and carries it onto the invoice when the order is converted.
 - **"is 'processing' - not cleared yet"** - the debit is genuinely still in flight. Nothing is changed. Normal for the first few days.
 - **"has NOT cleared and will not"** - the debit failed or was cancelled. **Chase the distributor before shipping anything.**
 
-The button only appears on a paid order that hasn't been confirmed settled, because that is the only time there is anything to find out. Pressing it repeatedly is safe.
+Pressing it repeatedly is safe.
 
 **⚠ It reports what Stripe says - it never marks something settled on its own.** If Stripe says not cleared, the answer is no, however long it has been.
+
+**The same button also reads "Receipt payment in MYOB".** When an order's money has cleared but no customer payment was ever recorded in MYOB, the button changes to that and applying it is all it does - it doesn't re-ask Stripe, because the money is not in question. This is the repair for a payment that slipped past the automatic path. It is bounded by what the MYOB document actually still owes, so it can never pay twice or overpay; if someone already receipted it by hand it says so and posts nothing.
+
+You should rarely see it: the portal now applies a cleared payment on its own, and a six-hourly check sweeps up anything the live notification missed and tells you it did. If you *do* see it on an order that cleared days ago, press it - that money is not in MYOB.
 
 ### 4.1c Orders that were never paid for
 
@@ -397,6 +401,7 @@ The portal now recovers from this by itself. When the id stops resolving it look
 |---|---|
 | Consignment shows `consignment_missing` | It vanished at MachShip's end. Rebook from the order page. |
 | Booking blocked on an unsettled BECS payment | Deliberate — the money hasn't cleared. If you accept the risk, the Book button offers "Book anyway"; the decision is stamped on the order timeline. |
+| Bank payment cleared, but it isn't in MYOB | Open the order and press **Receipt payment in MYOB** (Summary, where "Check if payment cleared" normally sits). Safe to press twice. It should be rare — the six-hourly check applies these on its own and notifies you when it has. |
 | Rates look wrong | Admin → B2B → Settings → freight zones / carriers / packaging. Drop-ship rates have their own calibration panel. |
 
 ### 4.3a Pallet options (Admin → B2B → Settings → Freight packaging)

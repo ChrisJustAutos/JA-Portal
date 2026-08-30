@@ -43,6 +43,33 @@ function sb(): SupabaseClient {
 const CLEARED = new Set(['succeeded'])
 const FAILED = new Set(['canceled', 'requires_payment_method'])
 
+/**
+ * Receipt the settled payment in MYOB and log it. Never throws — the Stripe
+ * settlement is the fact being recorded here, and it stands whether or not
+ * MYOB is reachable; the b2b-payment-check cron retries what fails.
+ */
+async function applyMyobPayment(c: SupabaseClient, orderId: string): Promise<{ uid: string | null; note: string | null }> {
+  try {
+    const { applyCustomerPaymentInMyob } = await import('../../../../../../lib/accounting/post-b2b-doc')
+    const pay = await applyCustomerPaymentInMyob(orderId)
+    if (pay.status === 'created' && pay.myob_payment_uid) {
+      await c.from('b2b_order_events').insert({
+        order_id: orderId, event_type: 'myob_payment_applied',
+        actor_type: 'system', actor_id: null,
+        notes: `Customer payment → Undeposited Funds, applied to the MYOB ${pay.appliedTo || 'order'} (${pay.myob_payment_uid})`,
+        metadata: { myob_payment_uid: pay.myob_payment_uid, applied_to: pay.appliedTo || 'order', source: 'check-payment-button' },
+      })
+      return { uid: pay.myob_payment_uid, note: null }
+    }
+    if (pay.status === 'already_applied') return { uid: pay.myob_payment_uid, note: null }
+    if (pay.status === 'invoice_already_paid') return { uid: null, note: 'The MYOB document is already fully paid — nothing to apply.' }
+    return { uid: null, note: `MYOB payment not applied (${pay.status}).` }
+  } catch (e: any) {
+    console.error('check-payment: MYOB payment failed:', e?.message || e)
+    return { uid: null, note: `Settled, but the MYOB payment failed: ${e?.message || e}` }
+  }
+}
+
 export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: NextApiResponse, user: any) => {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'POST only' }) }
   const orderId = String(req.query.id || '').trim()
@@ -50,15 +77,26 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
   const c = sb()
 
   const { data: order, error: oErr } = await c.from('b2b_orders')
-    .select('id, order_number, status, total_inc, payment_method, paid_at, payment_settled_at, stripe_payment_intent_id, stripe_checkout_session_id, myob_sale_invoice_uid')
+    .select('id, order_number, status, total_inc, payment_method, paid_at, payment_settled_at, stripe_payment_intent_id, stripe_checkout_session_id, myob_sale_invoice_uid, myob_payment_uid')
     .eq('id', orderId).maybeSingle()
   if (oErr) return res.status(500).json({ error: oErr.message })
   if (!order) return res.status(404).json({ error: 'Order not found' })
 
+  // Already recorded as cleared. If the money never reached MYOB, this button
+  // is the repair — apply it now, rather than reporting "nothing to do" and
+  // leaving the operator without any way to trigger it (JAWSB2B0059).
   if (order.payment_settled_at) {
+    const when = new Date(order.payment_settled_at).toLocaleString('en-AU')
+    if (order.myob_payment_uid) {
+      return res.status(200).json({
+        ok: true, changed: false, settled: true, myob_payment_uid: order.myob_payment_uid,
+        message: `Already recorded as cleared on ${when}, and receipted in MYOB.`,
+      })
+    }
+    const repair = await applyMyobPayment(c, orderId)
     return res.status(200).json({
-      ok: true, changed: false, settled: true,
-      message: `Already recorded as cleared on ${new Date(order.payment_settled_at).toLocaleString('en-AU')}.`,
+      ok: true, changed: !!repair.uid, settled: true, myob_payment_uid: repair.uid,
+      message: `Cleared on ${when}. ${repair.uid ? 'Customer payment receipted in MYOB.' : (repair.note || 'MYOB payment not applied.')}`,
     })
   }
 
@@ -131,32 +169,12 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
     } catch (e: any) { console.error('check-payment: event insert failed (non-fatal):', e?.message || e) }
   }
 
-  // Receipt it in MYOB if the sale invoice exists. If it doesn't yet, Ship Now
-  // applies the payment at conversion — same as the webhook path.
-  let myobPayment: string | null = null
-  let myobNote: string | null = null
-  if (order.myob_sale_invoice_uid) {
-    try {
-      const { applyCustomerPaymentInMyob } = await import('../../../../../../lib/accounting/post-b2b-doc')
-      const pay = await applyCustomerPaymentInMyob(orderId)
-      if (pay.status === 'created' && pay.myob_payment_uid) {
-        myobPayment = pay.myob_payment_uid
-        await c.from('b2b_order_events').insert({
-          order_id: orderId, event_type: 'myob_payment_applied',
-          actor_type: 'system', actor_id: null,
-          notes: `Customer payment → Undeposited Funds (${pay.myob_payment_uid})`,
-          metadata: { myob_payment_uid: pay.myob_payment_uid, source: 'check-payment-button' },
-        })
-      } else if (pay.status !== 'created') {
-        myobNote = `MYOB payment not applied (${pay.status}).`
-      }
-    } catch (e: any) {
-      // The settlement stands regardless — don't fail the whole check because
-      // MYOB was unreachable.
-      myobNote = `Settled, but the MYOB payment failed: ${e?.message || e}`
-      console.error('check-payment: MYOB payment failed:', e?.message || e)
-    }
-  }
+  // Receipt it in MYOB. Ungated: applyCustomerPaymentInMyob resolves the live
+  // document itself and falls back to the open Sale Order when the invoice
+  // doesn't exist yet, which MYOB carries onto the invoice at conversion.
+  const applied = await applyMyobPayment(c, orderId)
+  const myobPayment = applied.uid
+  const myobNote = applied.note
 
   return res.status(200).json({
     ok: true, changed: weStamped, settled: true,
