@@ -1,6 +1,6 @@
 // lib/order-action-token.ts
 // SERVER-ONLY. Stateless signed tokens for login-less order action links
-// (e.g. the "Book Freight" button in the admin order-placed email). HMAC-SHA256
+// (e.g. the "Book Shipment" button in the admin order-placed email). HMAC-SHA256
 // over orderId|scope|exp with ADMIN_ACTION_SECRET; no DB row needed because the
 // underlying actions are idempotent (booking refuses if already booked).
 

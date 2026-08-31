@@ -976,19 +976,16 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   // Optional carrier pickup. Blank = let MachShip choose its own window (and
   // roll to the next business day if today's cut-off has gone). Filled in = we
   // send exactly this and MachShip's refusal, if any, is reported as-is.
-  const [pickupAt, setPickupAt] = useState('')
-  const [showPickup, setShowPickup] = useState(false)
+  const [pickupModal, setPickupModal] = useState(false)
   const [pickDone,     setPickDone]     = useState(false)
   // Ship Now — manifests the consignment with MachShip (which also books the
   // carrier pickup) and then converts the MYOB order to a tax invoice, receipts
   // the payment, prints the A4 invoice and emails/pushes the distributor.
-  async function shipNow(acceptUnsettled = false) {
-    const ok = acceptUnsettled ? true : await confirmDialog({
-      title: 'Ship now?',
-      message: `This manifests consignment ${order.machship_consignment_number || order.machship_consignment_id} with the carrier (${pickupAt ? `pickup ${pickupAt.replace('T', ' ')}` : 'pickup booked at the carrier’s next available time'}), raises the MYOB tax invoice and emails the distributor. It can't be undone from here.`,
-      confirmLabel: 'Ship now',
-    })
-    if (!ok) return
+  // `pickupAt` is chosen in PickupModal, which is also the confirmation step -
+  // pressing Ship now opens it rather than a yes/no dialog (Chris 2026-09-01:
+  // "Ship now and then a window pops up to set your time"). Blank = let the
+  // carrier pick its next window, which is what it always did.
+  async function shipNow(acceptUnsettled = false, pickupAt: string | null = null) {
     setShipNowBusy(true); setActionError(null)
     try {
       const r = await fetch('/api/b2b/admin/orders/ship-now', {
@@ -1010,7 +1007,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
           confirmLabel: 'Ship anyway',
           danger: true,
         })) {
-          return shipNow(true)
+          return shipNow(true, pickupAt)
         }
         return
       }
@@ -1206,7 +1203,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
       // Booking no longer despatches — it leaves the consignment Unmanifested so
       // the order can be picked and packed. Say so, or staff will assume it's gone.
       if (j.label_warning) onFlash(`Booked (not manifested), but label fetch warning: ${j.label_warning}`)
-      else                 onFlash(`Booked: ${j.consignment_number || j.consignment_id} — press “Ship now” once it's packed`)
+      else                 onFlash(`Shipment booked: ${j.consignment_number || j.consignment_id} — press “Ship now” once it's packed`)
       onReloaded()
     } catch (e: any) {
       setActionError(e?.message || String(e))
@@ -1268,23 +1265,15 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
               <button onClick={() => bookViaMachShip(false)} disabled={bookingBusy}
                 className="al-press al-focus"
                 style={mb({ background: alpha(A.accent, '15'), color: A.accent, cursor: bookingBusy ? 'wait' : 'pointer' })}>
-                {bookingBusy ? 'Booking…' : 'Book via MachShip'}
+                {bookingBusy ? 'Booking…' : 'Book Shipment'}
               </button>
             )}
             {awaitingDespatch && (
-              <button onClick={() => shipNow()} disabled={shipNowBusy}
+              <button onClick={() => setPickupModal(true)} disabled={shipNowBusy}
                 title="Manifests the consignment with MachShip (books the carrier pickup), raises the MYOB tax invoice, prints it and emails the distributor"
                 className="al-press al-focus"
                 style={mb({ background: A.accent, color: '#fff', cursor: shipNowBusy ? 'wait' : 'pointer' })}>
                 {shipNowBusy ? 'Shipping…' : 'Ship now'}
-              </button>
-            )}
-            {awaitingDespatch && !showPickup && (
-              <button onClick={() => setShowPickup(true)}
-                title="Choose exactly when the carrier collects, instead of letting MachShip pick the next available window"
-                className="al-press al-focus al-ghost"
-                style={mb({ background: 'transparent', color: A.accent })}>
-                Set pickup time…
               </button>
             )}
             {hasConsignment && (
@@ -1322,25 +1311,13 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
               </span>
             )}
           </div>
-          {awaitingDespatch && showPickup && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8, padding: '10px 12px', background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8 }}>
-              <span style={{ fontSize: 12, color: T.text2, fontWeight: 600 }}>Carrier pickup</span>
-              <input type="date" value={pickupAt.slice(0, 10)}
-                onChange={e => setPickupAt(`${e.target.value}T${(pickupAt.slice(11) || '09:00')}`)}
-                style={{ background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12.5, padding: '6px 9px', fontFamily: 'inherit' }} />
-              <input type="time" value={pickupAt.slice(11) || ''}
-                onChange={e => setPickupAt(`${(pickupAt.slice(0, 10) || new Date().toISOString().slice(0, 10))}T${e.target.value}`)}
-                style={{ background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12.5, padding: '6px 9px', fontFamily: 'inherit' }} />
-              <button onClick={() => { setPickupAt(''); setShowPickup(false) }}
-                className="al-press al-focus al-ghost"
-                style={{ background: 'transparent', border: 'none', color: T.text3, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
-                Clear
-              </button>
-              <span style={{ fontSize: 11, color: T.text3, flex: 1, minWidth: 220, lineHeight: 1.5 }}>
-                Brisbane time. Leave blank and MachShip books its next available window, rolling to the next business day if today&rsquo;s cut-off has passed.
-                A time you set is sent as-is — if the carrier refuses it (TNT collects from Burnside until 2:00pm) you&rsquo;ll get their reason back.
-              </span>
-            </div>
+          {awaitingDespatch && pickupModal && (
+            <PickupModal
+              consignment={order.machship_consignment_number || order.machship_consignment_id || ''}
+              busy={shipNowBusy}
+              onClose={() => setPickupModal(false)}
+              onConfirm={(pickup) => { setPickupModal(false); shipNow(false, pickup) }}
+            />
           )}
           </>
         )
@@ -1692,6 +1669,75 @@ function DropShipCard({ order, onReloaded, onFlash }: {
   )
 }
 
+// Ship now opens this instead of a yes/no dialog: it is both the pickup
+// chooser and the confirmation (Chris 2026-09-01 - "Ship now and then a window
+// pops up to set your time"). The time is OPTIONAL and defaults to the
+// carrier's next available window, which is exactly what Ship now did before,
+// so nothing is blocked when someone is despatching at 4:55pm.
+function PickupModal({ consignment, busy, onClose, onConfirm }: {
+  consignment: string; busy: boolean; onClose: () => void; onConfirm: (pickupAt: string | null) => void
+}) {
+  const [mode, setMode] = useState<'auto' | 'choose'>('auto')
+  const [date, setDate] = useState(new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' }))
+  const [time, setTime] = useState('09:00')
+  const chosen = mode === 'choose' && date && time ? `${date}T${time}` : null
+  const canGo = mode === 'auto' || !!chosen
+
+  const row = (active: boolean): React.CSSProperties => ({
+    display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 12px',
+    border: `1px solid ${active ? A.accent : T.border2}`, borderRadius: 8,
+    background: active ? alpha(A.accent, '10') : T.bg2, cursor: 'pointer', marginBottom: 8,
+  })
+
+  return (
+    <Backdrop onClose={onClose}>
+      <h2 style={modalTitle()}>Ship now</h2>
+      <p style={modalDesc()}>
+        Manifests consignment <strong>{consignment || 'this order'}</strong> with the carrier, raises the MYOB tax
+        invoice, prints it and emails the distributor. It can&rsquo;t be undone from here.
+      </p>
+
+      <label style={row(mode === 'auto')} onClick={() => setMode('auto')}>
+        <input type="radio" checked={mode === 'auto'} onChange={() => setMode('auto')} style={{ marginTop: 3 }} />
+        <span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Carrier&rsquo;s next available pickup</span>
+          <span style={{ display: 'block', fontSize: 11.5, color: T.text3, lineHeight: 1.5, marginTop: 2 }}>
+            MachShip books its next window, rolling to the next business day if today&rsquo;s cut-off has passed.
+          </span>
+        </span>
+      </label>
+
+      <label style={row(mode === 'choose')} onClick={() => setMode('choose')}>
+        <input type="radio" checked={mode === 'choose'} onChange={() => setMode('choose')} style={{ marginTop: 3 }} />
+        <span style={{ flex: 1 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Choose a time</span>
+          <span style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+            <input type="date" value={date} onChange={e => { setMode('choose'); setDate(e.target.value) }}
+              style={{ background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12.5, padding: '6px 9px', fontFamily: 'inherit' }} />
+            <input type="time" value={time} onChange={e => { setMode('choose'); setTime(e.target.value) }}
+              style={{ background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12.5, padding: '6px 9px', fontFamily: 'inherit' }} />
+          </span>
+          <span style={{ display: 'block', fontSize: 11.5, color: T.text3, lineHeight: 1.5, marginTop: 6 }}>
+            Brisbane time, sent as-is. If the carrier refuses it (TNT collects from Burnside until 2:00pm)
+            you&rsquo;ll get their reason back.
+          </span>
+        </span>
+      </label>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+        <button onClick={onClose} className="al-press al-focus al-ghost"
+          style={{ background: 'transparent', border: `1px solid ${T.border2}`, borderRadius: 8, color: T.text2, fontSize: 13, padding: '8px 14px', cursor: 'pointer', fontFamily: 'inherit' }}>
+          Cancel
+        </button>
+        <button onClick={() => onConfirm(chosen)} disabled={busy || !canGo} className="al-press al-focus"
+          style={{ background: A.accent, border: 'none', borderRadius: 8, color: '#fff', fontSize: 13, fontWeight: 600, padding: '8px 16px', cursor: busy || !canGo ? 'not-allowed' : 'pointer', opacity: busy || !canGo ? 0.6 : 1, fontFamily: 'inherit' }}>
+          {busy ? 'Shipping…' : 'Ship now'}
+        </button>
+      </div>
+    </Backdrop>
+  )
+}
+
 function ShipModal({ order, busy, onClose, onConfirm }: {
   order: OrderDetail
   busy: boolean
@@ -1732,7 +1778,7 @@ function ShipModal({ order, busy, onClose, onConfirm }: {
 
   return (
     <Backdrop onClose={onClose}>
-      <h2 style={modalTitle()}>{order.shipped_at ? 'Edit shipping' : 'Book freight / mark as shipped'}</h2>
+      <h2 style={modalTitle()}>{order.shipped_at ? 'Edit shipping' : 'Book Shipment / mark as shipped'}</h2>
       <p style={modalDesc()}>
         Carrier + tracking are required. Freight cost and label PDF are optional but recommended — the cost is recorded on the order and the label is stored so you can re-print later.
       </p>

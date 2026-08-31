@@ -195,8 +195,18 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     // Stripe charged (identical construction to checkout's line_items) makes
     // MYOB's TotalAmount equal the charge by definition; MYOB backs the GST
     // out of the inc figures instead of re-adding it.
+    // Take the STORED inc-GST line total, do not recompute it. Since
+    // 2026-09-01 the inc figure is the anchor (lib/b2b-pricing lineMoney) and
+    // ex/GST are backed out of it, so recomputing inc from the ex figure would
+    // re-introduce the very cent that fixed. The fallback is the old
+    // construction, which is identical on every line written before that change
+    // (verified across all 50 existing lines), so historical orders and re-posts
+    // are unaffected.
     const lineEx = round2(Number(ln.line_subtotal_ex_gst || 0))
-    const lineInc = ln.is_taxable !== false ? round2(lineEx + round2(lineEx * 0.10)) : lineEx
+    const storedInc = (ln as any).line_total_inc != null ? round2(Number((ln as any).line_total_inc)) : null
+    const lineInc = storedInc != null
+      ? storedInc
+      : (ln.is_taxable !== false ? round2(lineEx + round2(lineEx * 0.10)) : lineEx)
     const qty = Number(ln.qty) || 1
     const line: any = {
       Type: 'Transaction',
@@ -423,7 +433,7 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
 
   const { data: lines, error: lErr } = await c
     .from('b2b_order_lines')
-    .select('id, myob_item_uid, sku, name, qty, unit_trade_price_ex_gst, line_subtotal_ex_gst, is_taxable, sort_order')
+    .select('id, myob_item_uid, sku, name, qty, unit_trade_price_ex_gst, line_subtotal_ex_gst, line_total_inc, is_taxable, sort_order')
     .eq('order_id', orderId).order('sort_order', { ascending: true })
   if (lErr) throw new Error(`Order lines load failed: ${lErr.message}`)
   if (!lines || lines.length === 0) throw new Error(`Order ${orderId} has no lines`)
@@ -442,8 +452,18 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
   for (const ln of lines) {
     if (!ln.myob_item_uid) throw new Error(`Order line ${ln.id} (${ln.sku}) has no MYOB item UID`)
     const taxUid = ln.is_taxable !== false ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
+    // Take the STORED inc-GST line total, do not recompute it. Since
+    // 2026-09-01 the inc figure is the anchor (lib/b2b-pricing lineMoney) and
+    // ex/GST are backed out of it, so recomputing inc from the ex figure would
+    // re-introduce the very cent that fixed. The fallback is the old
+    // construction, which is identical on every line written before that change
+    // (verified across all 50 existing lines), so historical orders and re-posts
+    // are unaffected.
     const lineEx = round2(Number(ln.line_subtotal_ex_gst || 0))
-    const lineInc = ln.is_taxable !== false ? round2(lineEx + round2(lineEx * 0.10)) : lineEx
+    const storedInc = (ln as any).line_total_inc != null ? round2(Number((ln as any).line_total_inc)) : null
+    const lineInc = storedInc != null
+      ? storedInc
+      : (ln.is_taxable !== false ? round2(lineEx + round2(lineEx * 0.10)) : lineEx)
     const qty = Number(ln.qty) || 1
     myobLines.push({
       Type: 'Transaction',

@@ -1,5 +1,5 @@
 // pages/api/b2b/order-action/freight.ts
-// Login-less, token-gated freight action for the admin "Book Freight" email
+// Login-less, token-gated freight action for the admin "Book Shipment" email
 // button. No user session — a signed HMAC token (scope 'book_freight') is the
 // authorization. GET returns an order summary for the confirmation page; POST
 // books the consignment (idempotent via lib/b2b-freight-book).

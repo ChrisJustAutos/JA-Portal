@@ -22,6 +22,7 @@ import { createRefund } from '../../../../../../lib/stripe'
 import { writeRefundCreditNoteToMyob, deleteMyobSaleOrder } from '../../../../../../lib/accounting/post-b2b-doc'
 import type { RefundLineSelection } from '../../../../../../lib/b2b-myob-invoice'
 import { claimOrderStage, releaseOrderStage } from '../../../../../../lib/b2b-claims'
+import { lineMoney } from '../../../../../../lib/b2b-pricing'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -137,9 +138,11 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
         gst = line.is_taxable !== false ? round2(Number(line.line_gst || 0)) : 0
         inc = round2(Number(line.line_total_inc || 0))
       } else {
-        ex  = round2(Number(line.unit_trade_price_ex_gst || 0) * selQty)
-        gst = line.is_taxable !== false ? round2(ex * 0.10) : 0
-        inc = round2(ex + gst)
+        // Same inc-anchored construction as checkout (lib/b2b-pricing), so a
+        // partial refund of N units returns exactly N x the advertised inc
+        // price rather than a cent under it.
+        const m = lineMoney(Number(line.unit_trade_price_ex_gst || 0), selQty, line.is_taxable !== false)
+        ex = m.ex; gst = m.gst; inc = m.inc
       }
       priorRefundedQty.set(lineId, Number(line.refunded_qty || 0))
       lineSelection.push({

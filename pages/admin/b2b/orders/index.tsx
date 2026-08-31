@@ -117,7 +117,7 @@ function paymentState(o: OrderRow): { label: string; color: string } {
 // Shipping. The vocabulary matters here, because "booked" was being used for
 // two opposite things.
 //
-// Book Freight creates a PENDING CONSIGNMENT in MachShip and leaves it
+// Book Shipment creates a PENDING CONSIGNMENT in MachShip and leaves it
 // unmanifested: no carrier has been told anything and no collection exists.
 // Ship Now manifests it, and THAT is what books the collection. Calling the
 // first state "Booked" told the warehouse a truck was coming for a parcel

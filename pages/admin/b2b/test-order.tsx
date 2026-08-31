@@ -242,7 +242,7 @@ export default function TestOrderPage({ user }: Props) {
                               )
                             })}
                             <div style={{ fontSize: 12, color: selFreightId ? A.accent : T.text3, marginTop: 2 }}>
-                              {selFreightId ? 'Selected freight will be added to the order (Book Freight will use it after payment).' : 'No freight selected — order will be created without freight.'}
+                              {selFreightId ? 'Selected freight will be added to the order (Book Shipment will use it after payment).' : 'No freight selected — order will be created without freight.'}
                             </div>
                           </div>
                         )}
@@ -273,7 +273,7 @@ export default function TestOrderPage({ user }: Props) {
             ) : (
               <div style={{ ...cardStyle(18), display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div style={{ fontSize: 14 }}>Test order <strong>{result.orderNumber}</strong> created — <a href={`/admin/b2b/orders/${result.orderId}`} style={{ color: A.accent }}>open in admin</a>. Total ${result.total_inc.toFixed(2)} inc GST.</div>
-                {result.freight && <div style={{ fontSize: 12.5, color: T.text2 }}>Freight attached: <strong style={{ color: T.text }}>{result.freight.label}</strong> — ${result.freight.cost_ex_gst.toFixed(2)} ex GST. After payment, use <strong>Book Freight</strong> on the order to dispatch it.</div>}
+                {result.freight && <div style={{ fontSize: 12.5, color: T.text2 }}>Freight attached: <strong style={{ color: T.text }}>{result.freight.label}</strong> — ${result.freight.cost_ex_gst.toFixed(2)} ex GST. After payment, use <strong>Book Shipment</strong> on the order to dispatch it.</div>}
                 <div style={{ fontSize: 12.5, color: T.text2 }}>Complete payment to fire the pipeline (MYOB invoice, drop-ship PO + supplier email, admin + distributor emails):</div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   {result.checkoutUrl && <a href={result.checkoutUrl} target="_blank" rel="noreferrer" className="al-press al-focus al-primary" style={{ ...btn(A.accent), textDecoration: 'none' }}>Open Stripe test checkout ↗</a>}

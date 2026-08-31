@@ -16,7 +16,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
 import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../../lib/b2b-stock'
-import { applyPricing, effectiveQtyCap } from '../../../../lib/b2b-pricing'
+import { lineMoney, applyPricing, effectiveQtyCap } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { paytoSurchargeInc, surchargesEnded } from '../../../../lib/b2b-payment'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
@@ -334,9 +334,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   let subtotalEx = 0
   let gst = 0
   for (const v of validated) {
-    const lineEx = round2(v.unitPriceEx * v.qty)
-    subtotalEx += lineEx
-    if (v.isTaxable) gst += round2(lineEx * GST_RATE)
+    const m = lineMoney(v.unitPriceEx, v.qty, v.isTaxable)
+    subtotalEx += m.ex
+    gst += m.gst
   }
 
   // Resolve freight rate (if any) and fold its ex-GST cost into the
@@ -627,8 +627,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
 
   // 5. Insert order lines (snapshots — won't change if catalogue updates)
   const orderLineRows = validated.map((v, i) => {
-    const lineEx = round2(v.unitPriceEx * v.qty)
-    const lineGst = v.isTaxable ? round2(lineEx * GST_RATE) : 0
+    // Inc-anchored (lib/b2b-pricing): the advertised inc price is exact and
+    // ex/GST are backed out of it, so 5 airboxes bill at 5 x $1196.00 and not
+    // a cent under. Stripe and MYOB below read the same construction.
+    const m = lineMoney(v.unitPriceEx, v.qty, v.isTaxable)
     return {
       order_id: order.id,
       catalogue_id: v.catalogueId,
@@ -637,9 +639,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       name: v.name,
       qty: v.qty,
       unit_trade_price_ex_gst: v.unitPriceEx,
-      line_subtotal_ex_gst: lineEx,
-      line_gst: lineGst,
-      line_total_inc: round2(lineEx + lineGst),
+      line_subtotal_ex_gst: m.ex,
+      line_gst: m.gst,
+      line_total_inc: m.inc,
       is_taxable: v.isTaxable,
       sort_order: i,
       bundle_parent_catalogue_id: v.bundleParentCatalogueId,
@@ -660,8 +662,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   // the inc-GST price per unit and multiplying by qty drifts from the invoice
   // by up to qty × half a cent. This mirrors line_total_inc exactly.
   const stripeLineItems: StripeLineItem[] = validated.filter(v => v.unitPriceEx > 0).map(v => {
-    const lineEx = round2(v.unitPriceEx * v.qty)
-    const lineInc = v.isTaxable ? round2(lineEx + round2(lineEx * GST_RATE)) : lineEx
+    const lineInc = lineMoney(v.unitPriceEx, v.qty, v.isTaxable).inc
     return {
       price_data: {
         currency: 'aud',

@@ -9,7 +9,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
-import { applyPricing } from '../../../../lib/b2b-pricing'
+import { applyPricing, lineMoney } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { paytoSurchargeInc, surchargesEnded } from '../../../../lib/b2b-payment'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
@@ -46,7 +46,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   // Optional freight selection (mirrors checkout/start.ts). Either a static
   // zone rate id OR a live MachShip route — mutually exclusive. The chosen
   // rate is re-quoted server-side below so the order carries a real, bookable
-  // freight selection (Mark paid → Book Freight uses it end-to-end).
+  // freight selection (Mark paid → Book Shipment uses it end-to-end).
   let chosenFreightRateId: string | null = typeof body.freightRateId === 'string' && body.freightRateId.trim() ? body.freightRateId.trim() : null
   let chosenSatchelId: string | null = typeof body.freightSatchelId === 'string' && body.freightSatchelId.trim() ? body.freightSatchelId.trim().replace(/^satchel:/, '') : null
   let chosenMachShipRoute: { carrierId: number; carrierServiceId: number; companyCarrierAccountId?: number } | null = null
@@ -231,9 +231,8 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   if (orderErr) return res.status(500).json({ error: orderErr.message })
 
   const orderLineRows = validated.map((v, i) => {
-    const lineEx = round2(v.unitPriceEx * v.qty)
-    const lineGst = v.isTaxable ? round2(lineEx * GST_RATE) : 0
-    return { order_id: order.id, catalogue_id: v.catalogueId, myob_item_uid: v.myobItemUid, sku: v.sku, name: v.name, qty: v.qty, unit_trade_price_ex_gst: v.unitPriceEx, line_subtotal_ex_gst: lineEx, line_gst: lineGst, line_total_inc: round2(lineEx + lineGst), is_taxable: v.isTaxable, sort_order: i }
+    const m = lineMoney(v.unitPriceEx, v.qty, v.isTaxable)
+    return { order_id: order.id, catalogue_id: v.catalogueId, myob_item_uid: v.myobItemUid, sku: v.sku, name: v.name, qty: v.qty, unit_trade_price_ex_gst: v.unitPriceEx, line_subtotal_ex_gst: m.ex, line_gst: m.gst, line_total_inc: m.inc, is_taxable: v.isTaxable, sort_order: i }
   })
   const { error: olErr } = await c.from('b2b_order_lines').insert(orderLineRows)
   if (olErr) { await c.from('b2b_orders').delete().eq('id', order.id); return res.status(500).json({ error: `Order lines insert failed: ${olErr.message}` }) }

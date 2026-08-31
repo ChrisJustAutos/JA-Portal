@@ -1,7 +1,7 @@
 // lib/b2b-order-notify.ts
 // SERVER-ONLY. Sends the admin an "order placed" notification email with the
 // order details, the drop-ship PO outcome, an "Open in portal" link and a
-// login-less "Book Freight" button (signed token → /order-action). Goal: an
+// login-less "Book Shipment" button (signed token → /order-action). Goal: an
 // admin rarely needs to log in to action an order.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
@@ -79,7 +79,7 @@ export async function sendOrderPlacedAdminEmail(orderId: string, opts: { dropshi
   } else if (order.machship_carrier_id) {
     const token = signOrderAction({ orderId, scope: 'book_freight' })
     const bookUrl = `${BASE_URL}/order-action?token=${encodeURIComponent(token)}`
-    freightBlock = `${buttonHtml(`📦 Book Freight${order.freight_service_label ? ` (${order.freight_service_label})` : ''}`, bookUrl, '#34c77b')}<br/><span style="font-size:12px;color:#888">No login needed — opens a confirmation page.</span>`
+    freightBlock = `${buttonHtml(`📦 Book Shipment${order.freight_service_label ? ` (${order.freight_service_label})` : ''}`, bookUrl, '#34c77b')}<br/><span style="font-size:12px;color:#888">No login needed — opens a confirmation page.</span>`
   } else {
     freightBlock = `<p style="color:#a60">No freight quote on this order — book manually in the portal.</p>`
   }

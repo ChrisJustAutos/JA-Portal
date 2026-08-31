@@ -120,3 +120,50 @@ export function effectiveQtyCap(
   if (maxOrderQty == null)    return stockAvailable
   return Math.min(stockAvailable, maxOrderQty)
 }
+
+// ── Line money: the GST-INCLUSIVE unit price is the anchor ────────────────
+//
+// Catalogue prices are stored EX-GST at 2dp, but the number the distributor
+// is quoted, and the number on the price list, is the INC figure. Those two
+// cannot both be exact: an airbox at $1495 RRP less 20% is $1196.00 inc, which
+// is $1087.2727… ex. Stored as $1087.27 and multiplied out, five of them came
+// to $5979.99 — a cent under the price list (order JAWSB2B0100, Chris
+// 2026-09-01: "It keeps adding a cent here and there and removing"). It is not
+// random: 72 of the 83 taxable catalogue items round by more than half a cent
+// per unit, so the drift grows with quantity and shows up as a stray cent.
+//
+// So round the INC unit price once, multiply that by qty, and back the ex-GST
+// and GST figures out of the result. Each unit then bills at exactly the
+// advertised inc price, and ex + GST always re-add to it.
+//
+// EVERY surface must use this one function — cart totals, order lines, Stripe
+// line items and the MYOB post. They only agree to the cent because they are
+// the same construction; computing "the same thing" separately anywhere is how
+// the portal, Stripe and MYOB drift apart.
+export const GST_RATE = 0.10
+
+const r2 = (n: number) => Math.round(n * 100) / 100
+
+export interface LineMoney {
+  /** Inc-GST price of ONE unit — the advertised, cent-exact number. */
+  unitInc: number
+  /** Inc-GST total for the line. Authoritative: ex and gst derive from it. */
+  inc: number
+  /** Ex-GST total for the line, backed out of `inc`. */
+  ex: number
+  /** GST for the line. Always exactly `inc - ex`. */
+  gst: number
+}
+
+export function lineMoney(unitPriceEx: number, qty: number, isTaxable: boolean): LineMoney {
+  const q = Number(qty) || 0
+  const unitEx = Number(unitPriceEx) || 0
+  if (!isTaxable) {
+    const ex = r2(r2(unitEx) * q)
+    return { unitInc: r2(unitEx), inc: ex, ex, gst: 0 }
+  }
+  const unitInc = r2(unitEx * (1 + GST_RATE))
+  const inc = r2(unitInc * q)
+  const ex = r2(inc / (1 + GST_RATE))
+  return { unitInc, inc, ex, gst: r2(inc - ex) }
+}

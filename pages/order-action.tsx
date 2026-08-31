@@ -1,5 +1,5 @@
 // pages/order-action.tsx
-// Login-less confirmation page for the admin "Book Freight" email button.
+// Login-less confirmation page for the admin "Book Shipment" email button.
 // Top-level (no portal/distributor auth wrapper). Authorization is the signed
 // token in ?token=; we GET an order summary, then POST to book on confirm.
 
@@ -58,13 +58,13 @@ export default function OrderActionPage() {
 
   return (
     <>
-      <Head><title>Book Freight — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
+      <Head><title>Book Shipment — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{ minHeight: '100vh', background: T.bg, color: T.text, fontFamily: "'DM Sans',system-ui,sans-serif", display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
         <div style={card}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
             <div style={{ width: 32, height: 32, borderRadius: 8, background: T.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: '#fff' }}>JA</div>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>Book Freight</span>
+            <span style={{ fontSize: 16, fontWeight: 600 }}>Book Shipment</span>
           </div>
 
           {error && !summary && <div style={{ color: T.red, fontSize: 14 }}>{error}</div>}

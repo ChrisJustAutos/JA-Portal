@@ -600,7 +600,7 @@ export default function B2BSettingsPage({ user }: Props) {
 
               {/* ─── Order notifications ─── */}
               <Section id="order-notify" activeId={openSectionId} onClose={closeSection} title="Order Notifications"
-                description="When an order is paid, the portal auto-raises drop-ship POs (emailing suppliers) and sends an order-placed email — with a no-login Book Freight button — to these recipients.">
+                description="When an order is paid, the portal auto-raises drop-ship POs (emailing suppliers) and sends an order-placed email — with a no-login Book Shipment button — to these recipients.">
                 <Field label="Send emails from" hint="The mailbox ALL outbound B2B emails are sent from (invoices, confirmations, freight, supplier POs). Must be a mailbox in your Microsoft 365 tenant with Mail.Send granted.">
                   <input
                     type="email"

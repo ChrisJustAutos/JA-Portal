@@ -208,7 +208,7 @@ The Orders list used to carry a single **Status** pill. It has been split into *
 | **Delivered** | Carrier reports it delivered. |
 | **Consignment missing** | The consignment stopped answering in MachShip - see 4.2b. |
 
-**⚠ "Book Freight" does not book anything with the carrier.** It creates a *pending consignment* and prints the paperwork. **Ship Now** is what manifests it, and manifesting is what books the collection. The button name is misleading and the column deliberately isn't.
+**⚠ "Book Shipment" does not book anything with the carrier.** It creates a *pending consignment* and prints the paperwork. **Ship Now** is what manifests it, and manifesting is what books the collection. The button was renamed from "Book Freight" on 1 September 2026 and the new name still promises more than it does — so the Shipping column deliberately reads **Pending consignment** until Ship Now has run. Trust the column, not the button.
 
 **⚠ Amber in the Payment column means the money is not yet in the bank.** Both `becs` and `payto` mark an order paid the moment the mandate is accepted, and it stays amber until the funds settle. **Shipping an amber order is a credit decision** - Ship Now will warn you and make you approve it. That warning is the point, so read it rather than clicking through.
 
@@ -410,7 +410,7 @@ If you land on one from an old bookmark you get a short "not in use" notice expl
    **Only something that fits no deck at all ships beside the pallets** - a 2.4 m bar, say, which overhangs every pallet you have. It then appears as its own consignment next to them rather than being pretended onto one, which is correct: the carrier is expecting it as a separate item. If you see this on an order where you would expect the item to fit, check that the pallet it needs is still switched **on** in Settings → Freight packaging: switch off the 1800 × 1200 and a 1650 mm exhaust has nowhere to go but its own consignment.
 
    **You can still change the boxes after booking, until the order is manifested.** A booked consignment exists in MachShip, but nothing has reached the carrier and no label is in anyone's hands - so re-boxing then is normal packing work. Change the boxes, press **Re-book freight**, then reprint the pick list and labels. Once the order has been manifested by **Ship Now** the boxes are fixed and the panel goes read-only: the carrier has been told exactly what is coming.
-3. **Book Freight.** This creates the MachShip consignment and prints the pick slip, consignment note and labels. The consignment sits **Unmanifested** — the carrier does not know about it yet.
+3. **Book Shipment.** This creates the MachShip consignment and prints the pick slip, consignment note and labels. The consignment sits **Unmanifested** — the carrier does not know about it yet.
 4. Pick and pack the order against the paperwork.
 5. **Ship Now.** This is the step that actually despatches: it manifests the consignment with the carrier, converts the MYOB order into a tax invoice, receipts the payment against it, prints the A4 tax invoice and emails the distributor their tracking.
 
@@ -420,9 +420,18 @@ If you land on one from an old bookmark you get a short "not in use" notice expl
 
 **⚠ Ship the run in one action, not one order at a time.** MachShip books a carrier *pickup* when you manifest, so shipping ten orders individually raises ten pickup requests. Select the whole run and ship it once.
 
-**If nothing is reaching the carrier**, the usual answer is that Book Freight was pressed but Ship Now was not.
+**If nothing is reaching the carrier**, the usual answer is that Book Shipment was pressed but Ship Now was not.
 
-**An order stays at its current status when you book it.** Until 25 August 2026, Book Freight marked the order **shipped** straight away - a leftover from before the two steps were split - so orders sitting on the bench read as shipped, both on the orders list and in the distributor's own portal. Booking now only records the carrier; **Ship Now** is what marks it shipped, which is what it always should have been.
+**Ship Now asks when the carrier should collect.** From 1 September 2026, pressing **Ship now** opens a window instead of a plain yes/no. It offers:
+
+- **Carrier's next available pickup** (preselected) — exactly what Ship Now always did. MachShip books its next window, rolling to the next business day if today's cut-off has passed. Press *Ship now* and nothing changes from before.
+- **Choose a time** — a date and time in Brisbane, sent to the carrier as-is. If they refuse it (TNT collects from Burnside until 2:00pm) you get their reason back.
+
+The separate "Set pickup time..." link is gone — it is one step now. **The window is also the confirmation**, so what it says will happen (manifest, tax invoice, email the distributor) is the last thing you see before it runs.
+
+**⚠ The bulk Ship now on the orders list has no time picker** — it still books the carrier's next available window for the whole run. Use the order page if a particular run needs a set collection time.
+
+**An order stays at its current status when you book it.** Until 25 August 2026, Book Shipment (then called Book Freight) marked the order **shipped** straight away - a leftover from before the two steps were split - so orders sitting on the bench read as shipped, both on the orders list and in the distributor's own portal. Booking now only records the carrier; **Ship Now** is what marks it shipped, which is what it always should have been.
 
 ### 4.1f2 Supplier replies: acknowledged vs dispatched
 
@@ -454,6 +463,16 @@ Now the conversion is **skipped** when a PO is unbilled, and the order timeline 
 **What to do:** fix the reason the bill failed (usually the supplier or item is not linked in MYOB, or the DS location is missing), then press **"Supplier confirmed - bill PO + invoice"** on the order to re-run the whole chain. It is safe to press again: the bill, the invoice and the payment each have their own idempotency check, and a PO already billed by hand in MYOB is adopted rather than billed twice.
 
 **⚠ The Slack alert now carries the reason.** It used to say only "hit a snag - check the order page".
+
+### 4.2 Prices bill to the cent
+
+**A line is charged at exactly the advertised GST-inclusive price times the quantity.** An airbox listed at $1495 less 20% is **$1196.00**, and five of them are **$5980.00** — not $5979.99.
+
+That stray cent was real and is fixed (1 September 2026). Prices are held ex-GST, and $1196.00 inc is $1087.2727... ex, which cannot be stored exactly — so multiplying the rounded ex price by the quantity came up a cent short, and by more on bigger quantities. **It affected most of the catalogue** (72 of 83 taxable items), not one product. The portal now rounds the inc price once and works the GST backwards out of it, so the cart, the Stripe charge, the MYOB invoice and the emailed invoice all show the same figure.
+
+**Orders placed before that date keep the figures they were charged** — they are not restated, and re-sending one to MYOB reproduces exactly what it always did.
+
+**⚠ If a price still looks a cent out, say so rather than adjusting it by hand** — a hand edit in MYOB puts the invoice out of step with what Stripe actually charged.
 
 ### 4.2a Matching an order to its MYOB invoice
 
@@ -999,7 +1018,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 
 ## Appendix — the golden rules
 
-1. **Book Freight prepares. Ship Now despatches.** Nothing goes to the carrier and no tax invoice exists until Ship Now.
+1. **Book Shipment prepares. Ship Now despatches.** Nothing goes to the carrier and no tax invoice exists until Ship Now — whatever the button is called.
 2. **Ship a despatch run in one action** — one manifest, one pickup.
 3. **"Sales" in the weekly recap means orders, not turnover.**
 4. **A never-quoted lead is not a lost quote.**
