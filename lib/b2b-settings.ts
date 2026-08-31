@@ -134,6 +134,7 @@ export async function assertCheckoutConfigured(): Promise<{
   freTaxCodeUid: string
   cardFeePct: number
   cardFeeFixed: number
+  surchargeEndsOn: string | null
 }> {
   const settings = await loadSettings()
   if (!settings.myob_card_fee_item_uid) {
@@ -152,5 +153,7 @@ export async function assertCheckoutConfigured(): Promise<{
     // require at-or-below cost; || silently reverted 0 to the default).
     cardFeePct:        Number(settings.card_fee_percent ?? 0.017),
     cardFeeFixed:      Number(settings.card_fee_fixed   ?? 0.30),
+    // All surcharges stop on/after this date - see surchargesEnded().
+    surchargeEndsOn:   (settings as any).payment_surcharge_ends_on ?? null,
   }
 }

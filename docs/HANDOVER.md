@@ -532,6 +532,14 @@ The once-only guards for the two order passes are `b2b_order_events` rows (`chec
 
 **On rollout every existing cart was stamped as already-reminded**, so the feature acts only on carts abandoned from that point rather than blasting a backlog — five carts (two of them a fortnight old) would otherwise have gone out at once. Clearing the two columns on a cart re-arms it.
 
+**All payment surcharges stop on a DATE, not on someone remembering (2026-08-31).** Chris: the card surcharge comes off 1 October; on the question, **all** methods rather than card alone. `b2b_settings.payment_surcharge_ends_on` (migration **212**, set to `2026-10-01`) is checked by `surchargesEnded()` in `lib/b2b-payment.ts`, and on/after that Brisbane date card, PayTo and BECS all return zero.
+
+- **Compared on the Brisbane calendar date, not UTC.** 1 October in Brisbane starts at 14:00 UTC on 30 September; a UTC comparison would still have charged a distributor checking out at 09:00 on the 1st. Boundary-tested at 30 Sep 13:00/23:59 Brisbane (charged) and 1 Oct 00:00/09:00 (not charged).
+- **The rates themselves are left alone.** `card_fee_percent` / `card_fee_fixed` keep their values, so the decision is reversed by clearing the date rather than by someone recalling what 1.7% + $0.30 used to be. Editable at Admin → B2B → Settings → Card Surcharge, which now also shows whether the date has passed.
+- **Gated in all three places a surcharge is computed** — `checkout/start.ts`, the cart estimate, and `admin/test-order.ts`. Missing any one of them would make a test order or a cart disagree with what is charged.
+
+**The cart estimate was hardcoded (found and fixed doing the above).** `pages/api/b2b/cart.ts` carried its own `CARD_FEE_PCT = 0.017` / `CARD_FEE_FIXED = 0.30` and never read `b2b_settings`, so zeroing the surcharge in Settings would have left the cart quoting 1.7% + 30c while checkout charged nothing — a discrepancy that would have surfaced on 1 October in front of distributors. It now reads the same row as checkout, falling back to the old constants only if the row cannot be read, so a settings failure can never quote zero and then charge.
+
 **A settled payment now reaches MYOB no matter when it settles (2026-08-31).** BECS order `B2B-2026-000050` / `JAWSB2B0059` cleared on 27 Aug and sat for four days with $4,074.46 never receipted into MYOB. Three separate recovery paths all missed it, because each was keyed on `myob_sale_invoice_uid` — a field that is only populated once the order **ships**:
 
 - the settlement webhook applied the payment only `if (o?.myob_sale_invoice_uid)`. 000050 settled at 00:20 and shipped at 03:33, so the gate was shut when the money landed and nothing re-checked afterwards;
@@ -916,7 +924,7 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 
 **Consistency / drift**
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
-- Migrations `148` and `153` are duplicated numbers; latest applied is `211_b2b_cart_reminders`, so next is `212`.
+- Migrations `148` and `153` are duplicated numbers; latest applied is `212_b2b_payment_surcharge_end`, so next is `213`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.

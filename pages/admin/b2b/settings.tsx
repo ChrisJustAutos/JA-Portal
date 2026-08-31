@@ -53,6 +53,7 @@ const SETTINGS_SECTIONS: Array<{ id: string; title: string; icon: string; accent
 interface Settings {
   card_fee_percent: number
   card_fee_fixed: number
+  payment_surcharge_ends_on: string | null
   myob_company_file: string
   myob_jaws_gst_tax_code_uid: string | null
   myob_jaws_fre_tax_code_uid: string | null
@@ -113,6 +114,7 @@ export default function B2BSettingsPage({ user }: Props) {
   const [cnPadding, setCnPadding]   = useState(6)
   const [cnSeqInput, setCnSeqInput] = useState<string>('')
   const [feePct, setFeePct]   = useState(0)
+  const [surchargeEnds, setSurchargeEnds] = useState('')
   const [feeFixed, setFeeFixed] = useState(0)
   const [slackUrl, setSlackUrl] = useState('')
   const [adminEmails, setAdminEmails] = useState('')
@@ -146,6 +148,7 @@ export default function B2BSettingsPage({ user }: Props) {
       setCnPadding(j.settings.myob_credit_note_number_padding || 6)
       setCnSeqInput(String(j.settings.myob_credit_note_number_seq ?? 0))
       setFeePct(Number(j.settings.card_fee_percent || 0.017))
+      setSurchargeEnds(String(j.settings.payment_surcharge_ends_on || '').slice(0, 10))
       setFeeFixed(Number(j.settings.card_fee_fixed || 0.30))
       setSlackUrl(j.settings.slack_new_order_webhook_url || '')
       setAdminEmails(j.settings.admin_order_notify_emails || '')
@@ -426,7 +429,7 @@ export default function B2BSettingsPage({ user }: Props) {
 
               {/* ─── Card surcharge ─── */}
               <Section id="card-surcharge" activeId={openSectionId} onClose={closeSection} title="Card Surcharge"
-                description="Pass-through Stripe processing fee. Applied to each order during checkout to make the JAWS payout equal the goods subtotal (inc GST) after Stripe takes its cut.">
+                description="Pass-through Stripe processing fee. Applied to each order during checkout to make the JAWS payout equal the goods subtotal (inc GST) after Stripe takes its cut. The end date below switches off ALL payment surcharges, not just card.">
 
                 <div className="b2b-col2" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
                   <Field label="Percent" hint="Stripe AU domestic card rate (1.7% = 0.017)">
@@ -451,8 +454,25 @@ export default function B2BSettingsPage({ user }: Props) {
                   </Field>
                 </div>
 
+                <Field label="Stop charging surcharges from"
+                       hint="Date (Brisbane). On and after it EVERY payment surcharge is zero — card, PayTo and BECS — in the cart, at checkout and on the invoice. The rates above are left as they are, so clearing this date brings them straight back. Blank = no end date.">
+                  <input
+                    type="date"
+                    value={surchargeEnds}
+                    onChange={e => setSurchargeEnds(e.target.value)}
+                    style={inputStyle()}
+                  />
+                </Field>
+                {surchargeEnds && (
+                  <div style={{fontSize:12,color:T.text2,margin:'8px 0 0'}}>
+                    {new Date(surchargeEnds + 'T00:00:00+10:00') <= new Date()
+                      ? '⚠ This date has passed — no surcharge is being charged on any payment method.'
+                      : `Surcharges stop on ${surchargeEnds}. Until then they apply as set above.`}
+                  </div>
+                )}
+
                 <Btn
-                  onClick={() => save({ card_fee_percent: feePct, card_fee_fixed: feeFixed })}
+                  onClick={() => save({ card_fee_percent: feePct, card_fee_fixed: feeFixed, payment_surcharge_ends_on: surchargeEnds || null })}
                   disabled={saving}>
                   {saving ? 'Saving…' : 'Save surcharge'}
                 </Btn>

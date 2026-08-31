@@ -17,3 +17,22 @@ export function paytoSurchargeInc(subtotalInc: number): number {
   const grossedUp = (subtotalInc * PAYTO_FEE_PCT + PAYTO_FEE_FIXED) / (1 - PAYTO_FEE_PCT)
   return Math.round(Math.min(grossedUp, PAYTO_FEE_CAP) * 100) / 100
 }
+
+/**
+ * Have payment surcharges been switched off?
+ *
+ * b2b_settings.payment_surcharge_ends_on is a DATE in Brisbane terms. On and
+ * after it, every surcharge - card, PayTo and BECS - is zero. Set to
+ * 2026-10-01 (Chris, 2026-08-31). The underlying card_fee_percent /
+ * card_fee_fixed are deliberately left as they are, so this is reversed by
+ * clearing the date rather than by remembering the old rates.
+ *
+ * Compared on the Brisbane calendar date, not UTC: 1 October in Brisbane
+ * begins at 14:00 UTC on 30 September, and a distributor checking out at
+ * 09:00 on the 1st must not still be charged.
+ */
+export function surchargesEnded(endsOn: string | null | undefined, now: Date = new Date()): boolean {
+  if (!endsOn) return false
+  const bris = new Date(now.getTime() + 10 * 3600_000)   // UTC+10, no DST
+  return bris.toISOString().slice(0, 10) >= String(endsOn).slice(0, 10)
+}

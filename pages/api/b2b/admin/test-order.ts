@@ -11,7 +11,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { applyPricing } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
-import { paytoSurchargeInc } from '../../../../lib/b2b-payment'
+import { paytoSurchargeInc, surchargesEnded } from '../../../../lib/b2b-payment'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
 import { getLiveQuote, getSatchelRates, getDropshipFreight, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 
@@ -201,7 +201,10 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   subtotalEx = round2(subtotalEx); gst = round2(gst)
   const subtotalInc = round2(subtotalEx + gst)
   let cardFeeInc = 0
-  if (paymentMethod === 'card' && subtotalInc > 0) cardFeeInc = round2(Math.max(0, (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) - subtotalInc))
+  // Same end-date gate as the real checkout, or a test order would quote a
+  // surcharge the live path no longer charges.
+  if (surchargesEnded(cfg.surchargeEndsOn)) cardFeeInc = 0
+  else if (paymentMethod === 'card' && subtotalInc > 0) cardFeeInc = round2(Math.max(0, (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) - subtotalInc))
   else if (paymentMethod === 'payto') cardFeeInc = paytoSurchargeInc(subtotalInc)
   const totalInc = round2(subtotalInc + cardFeeInc)
 

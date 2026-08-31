@@ -25,8 +25,14 @@ function sb(): SupabaseClient {
   return _sb
 }
 
-const CARD_FEE_PCT   = 0.017  // 1.7%
-const CARD_FEE_FIXED = 0.30   // 30c
+// The cart's ESTIMATE must come from the same place checkout charges from.
+// These were hardcoded, so zeroing the surcharge in Settings would have left
+// the cart still quoting 1.7% + 30c while checkout charged nothing (found
+// 2026-08-31 while scheduling the surcharge to end).
+import { surchargesEnded } from '../../../lib/b2b-payment'
+
+const CARD_FEE_PCT_FALLBACK   = 0.017
+const CARD_FEE_FIXED_FALLBACK = 0.30
 
 export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, user: B2BUser) => {
   if (req.method !== 'GET') {
@@ -236,11 +242,17 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
 
   // Card fee — distributor pays a gross-up so Stripe takes its cut and the
   // payout to JAWS = subtotal_inc_gst.
-  //   charged   = (subtotal_inc + 0.30) / (1 - 0.017)
+  //   charged   = (subtotal_inc + fixed) / (1 - pct)
   //   card_fee  = charged - subtotal_inc
-  const charged = subtotal_inc_gst > 0
-    ? (subtotal_inc_gst + CARD_FEE_FIXED) / (1 - CARD_FEE_PCT)
-    : 0
+  // Rates come from b2b_settings, NOT constants, so this estimate always agrees
+  // with what checkout actually charges - and the same end-date switches both
+  // off together.
+  const feeCfg = await loadB2bFeeSettings()
+  const feePct   = feeCfg.pct
+  const feeFixed = feeCfg.fixed
+  const charged = (!feeCfg.ended && subtotal_inc_gst > 0)
+    ? (subtotal_inc_gst + feeFixed) / (1 - feePct)
+    : subtotal_inc_gst
   const card_fee_inc = Math.max(0, charged - subtotal_inc_gst)
   const total_inc = subtotal_inc_gst + card_fee_inc
 
@@ -390,9 +402,11 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       total_inc:        round2(total_inc),
     },
     card_fee: {
-      pct: CARD_FEE_PCT,
-      fixed: CARD_FEE_FIXED,
-      note: `Estimated Stripe surcharge (${(CARD_FEE_PCT * 100).toFixed(1)}% + $${CARD_FEE_FIXED.toFixed(2)}). Final amount confirmed at checkout.`,
+      pct: feeCfg.ended ? 0 : feePct,
+      fixed: feeCfg.ended ? 0 : feeFixed,
+      note: feeCfg.ended
+        ? 'No payment surcharge.'
+        : `Estimated Stripe surcharge (${(feePct * 100).toFixed(1)}% + $${feeFixed.toFixed(2)}). Final amount confirmed at checkout.`,
     },
   })
 })
@@ -420,4 +434,24 @@ async function getOrCreateCart(c: SupabaseClient, user: B2BUser): Promise<{ id: 
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+/**
+ * Surcharge rates for the cart estimate, from the same b2b_settings row
+ * checkout reads. Falls back to the previous constants if the row is missing,
+ * so a settings problem cannot silently quote a zero fee and then charge one.
+ */
+async function loadB2bFeeSettings(): Promise<{ pct: number; fixed: number; ended: boolean }> {
+  try {
+    const { data } = await sb().from('b2b_settings')
+      .select('card_fee_percent, card_fee_fixed, payment_surcharge_ends_on')
+      .eq('id', 'singleton').maybeSingle()
+    return {
+      pct:   Number(data?.card_fee_percent ?? CARD_FEE_PCT_FALLBACK),
+      fixed: Number(data?.card_fee_fixed   ?? CARD_FEE_FIXED_FALLBACK),
+      ended: surchargesEnded((data as any)?.payment_surcharge_ends_on ?? null),
+    }
+  } catch {
+    return { pct: CARD_FEE_PCT_FALLBACK, fixed: CARD_FEE_FIXED_FALLBACK, ended: false }
+  }
 }

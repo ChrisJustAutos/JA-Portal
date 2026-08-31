@@ -18,7 +18,7 @@ import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
 import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../../lib/b2b-stock'
 import { applyPricing, effectiveQtyCap } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
-import { paytoSurchargeInc } from '../../../../lib/b2b-payment'
+import { paytoSurchargeInc, surchargesEnded } from '../../../../lib/b2b-payment'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
 import { getLiveQuote, getSatchelRates, getDropshipFreight, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 import { loadBundleChildren, bundleChildUnitPriceExGst } from '../../../../lib/b2b-bundles'
@@ -566,8 +566,14 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   const subtotalInc = round2(subtotalEx + gst)
   // Payment surcharge by method: card grosses up the full card rate; PayTo
   // and BECS recover Stripe's identical cheaper fee (1% + $0.30, capped $3.50).
+  // ALL of them stop on b2b_settings.payment_surcharge_ends_on (2026-10-01) -
+  // one gate here rather than zeroing the rates, so the change is a date and is
+  // reversed by clearing it.
   let cardFeeInc = 0
-  if (paymentMethod === 'card' && subtotalInc > 0) {
+  const surchargeOff = surchargesEnded(cfg.surchargeEndsOn)
+  if (surchargeOff) {
+    cardFeeInc = 0
+  } else if (paymentMethod === 'card' && subtotalInc > 0) {
     cardFeeInc = round2(Math.max(0, (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) - subtotalInc))
   } else if (paymentMethod === 'payto' || paymentMethod === 'becs') {
     cardFeeInc = paytoSurchargeInc(subtotalInc)

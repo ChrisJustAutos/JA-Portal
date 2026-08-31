@@ -31,7 +31,7 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
       .from('b2b_settings')
       .select(`
         id,
-        card_fee_percent, card_fee_fixed,
+        card_fee_percent, card_fee_fixed, payment_surcharge_ends_on,
         myob_company_file,
         myob_jaws_gst_tax_code_uid, myob_jaws_fre_tax_code_uid,
         myob_card_fee_account_uid, myob_card_fee_account_code,
@@ -129,6 +129,17 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
       const v = Number(body.card_fee_fixed)
       if (!isFinite(v) || v < 0 || v > 5) issues.push('Card fee fixed must be between $0 and $5')
       else update.card_fee_fixed = v
+    }
+
+    // Date from which ALL surcharges stop - card, PayTo and BECS. Empty clears
+    // it. Stored rather than zeroing the rates, so it is reversible without
+    // anyone having to remember what the rates used to be.
+    if ('payment_surcharge_ends_on' in body) {
+      const raw = String(body.payment_surcharge_ends_on || '').trim()
+      if (!raw) update.payment_surcharge_ends_on = null
+      else if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(Date.parse(raw + 'T00:00:00Z'))) {
+        issues.push('Surcharge end date must be YYYY-MM-DD, or blank for none')
+      } else update.payment_surcharge_ends_on = raw
     }
 
     if ('slack_new_order_webhook_url' in body) {

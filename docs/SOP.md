@@ -279,6 +279,16 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **⚠ Re-send does not re-raise the PO**, so it can't create a duplicate in MYOB. "Re-raise drop-ship PO" is the one that does - only use it if the PO itself is wrong.
 
+### 4.1e-g Payment surcharges end 1 October
+
+**From 1 October 2026 no payment surcharge is charged on any method** - card, PayTo or bank direct debit. Distributors pay the order total and nothing else. This is scheduled, not manual: nobody has to switch it off on the day.
+
+**It is a date, at Admin > B2B > Settings > Card Surcharge > "Stop charging surcharges from".** The percentage and fixed fee above it are deliberately left at their old values, so if the decision changes you clear the date and the previous surcharge returns exactly as it was - you do not have to remember what the rates were.
+
+**⚠ It applies to ALL methods, despite the section being called "Card Surcharge".** If you only meant to stop the card fee, the bank-payment fee needs handling separately - ask before changing it.
+
+The cart, the checkout screen and the invoice all read the same setting, so what a distributor is quoted is always what they are charged.
+
 ### 4.1e-h The 5:15pm sales update in Slack
 
 Every weekday at **5:15pm** the portal posts the day's sales into **#sales-updates**: Just Autos bookings, distributor value, the combined total against the day's target, and who wrote the most. **On Friday it posts the week instead**, with a day-by-day line so you can see whether a good week was steady or one big day. Nothing posts on weekends.
