@@ -46,6 +46,40 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
+/**
+ * The unified portal/MYOB number shape — 'JAWSB2B' + 4 digits (migration 214).
+ *
+ * 11 characters, inside MYOB's 13-char Number cap with 2 to spare for the
+ * '-n' suffix lib/b2b-dropship.ts adds when one order drop-ships from several
+ * suppliers. Orders created before 214 are 'B2B-YYYY-NNNNNN' (15 chars, which
+ * MYOB rejects) and never match.
+ */
+const UNIFIED_NUMBER_RE = /^JAWSB2B\d{4}$/
+
+/**
+ * Resolves the number to post as the MYOB `Number`.
+ *
+ * Post-214 orders carry it in order_number already — that IS the point: one
+ * number, reserved at order creation, so nothing has to be translated later.
+ * Pre-214 orders (and any order_number of an unexpected shape) fall back to
+ * b2b_settings' own allocator, which is still the numbering source for stock
+ * transfers' legacy history and credit notes' separate stream.
+ */
+async function resolveMyobNumber(
+  c: SupabaseClient,
+  orderNumber: string | null | undefined,
+  kind: 'order' | 'invoice',
+): Promise<string> {
+  const unified = String(orderNumber || '').trim()
+  if (UNIFIED_NUMBER_RE.test(unified)) return unified
+
+  const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
+  if (rpcErr) throw new Error(`Failed to allocate MYOB ${kind} number: ${rpcErr.message}`)
+  const allocated = String(rpcNumber || '').trim()
+  if (!allocated) throw new Error('b2b_next_myob_invoice_number returned empty')
+  return allocated
+}
+
 export interface MyobWriteResult {
   myob_invoice_uid: string
   myob_invoice_number: string | null
@@ -220,11 +254,18 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
   // present; fall back to FRE when there's no freight so the field is valid.
   const freightTaxUid = freightExGst > 0 ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
 
-  // 4b. Reserve the next portal-controlled MYOB number BEFORE the POST.
-  const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
-  if (rpcErr) throw new Error(`Failed to allocate MYOB order number: ${rpcErr.message}`)
-  const myobOrderNumber = String(rpcNumber || '').trim()
-  if (!myobOrderNumber) throw new Error('b2b_next_myob_invoice_number returned empty')
+  // 4b. The MYOB number IS the portal order number (migration 214). One
+  // sequence, allocated at order creation, so the number the distributor
+  // quotes is the number MYOB and accounts quote — they used to drift 6-9
+  // apart because the MYOB allocator only advanced on a successful write and
+  // was shared with stock transfers.
+  //
+  // Only for the unified format though: legacy orders are B2B-YYYY-000053,
+  // 15 characters, and MYOB caps Number at 13 — it would reject them. Those
+  // (and anything else unexpected) fall back to the old allocator, which also
+  // means it doesn't matter whether this deploy lands before or after the
+  // migration.
+  const myobOrderNumber = await resolveMyobNumber(c, order.order_number, 'order')
 
   const today = new Date().toISOString().substring(0, 10)
   const memo = `B2B Sale Order; Order ${order.order_number}; Stripe ${order.stripe_payment_intent_id || ''}`.substring(0, 255)
@@ -262,6 +303,9 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
   // they entered one, else our portal order number — NOT buried in the memo.
   // (Comment deliberately dropped — the JAWS invoice form prints it under a
   // "Vehicle" label, which made no sense on B2B orders. Chris 2026-08-06.)
+  // Since 214 the order number IS the MYOB number, so on an order with no
+  // distributor PO this box now repeats the document number. Cosmetic, and
+  // still well inside MYOB's 20-char cap (JAWSB2B0100 is 11).
   body.CustomerPurchaseOrderNumber = (customerPo || order.order_number || '').substring(0, 20)
 
   // 5. Bump attempt counter BEFORE the call (audit trail even if hang/crash)
@@ -424,14 +468,12 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
   const totalAmount   = round2(goodsIncSum + freightInc)  // = order.total_inc by construction
   const freightTaxUid = freightExGst > 0 ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
 
-  // Keep the same Number as the order for continuity. Fall back to a freshly
-  // reserved number if the order was never written (no number on file).
+  // Keep the same Number as the order for continuity. If the order was never
+  // written (no number on file), fall back to the order_number itself when
+  // it's the unified JAWSB2B#### shape (migration 214), else reserve one from
+  // the old allocator — same rule as writeOrderToMyob.
   let number = (order.myob_sale_invoice_number || order.myob_invoice_number || '').trim()
-  if (!number) {
-    const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
-    if (rpcErr) throw new Error(`Failed to allocate MYOB invoice number: ${rpcErr.message}`)
-    number = String(rpcNumber || '').trim()
-  }
+  if (!number) number = await resolveMyobNumber(c, order.order_number, 'invoice')
   if (!number) throw new Error('Could not resolve a MYOB invoice number')
 
   const today = new Date().toISOString().substring(0, 10)

@@ -24,6 +24,11 @@
 //   REVERSE: both docs match on the supplied PO reference (sale
 //     CustomerPurchaseOrderNumber + bill SupplierInvoiceNumber).
 //
+// Numbering: the JAWS sale takes its Number from b2b_next_myob_transfer_number()
+//   — JAWSTFR0001, JAWSTFR0002, … (migration 214). Transfers 1-24 wear
+//   JAWSB2B00NN numbers from back when this shared the B2B sale allocator;
+//   they are not rewritten.
+//
 // Failure model (both directions): sale-side fail → 'failed' (nothing
 // written). Sale landed but purchase-side failed → 'partial' —
 // retryPurchaseSide() re-attempts only the bill. UID-guarded, never dupes.
@@ -400,9 +405,17 @@ export async function finalizeForwardMyob(
   // JAWS Sale/Invoice/Item (idempotent on jaws_invoice_uid).
   let jawsInvoiceNumber: string | null = t.jaws_invoice_number || null
   if (!t.jaws_invoice_uid) {
-    const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
-    if (rpcErr) throw new Error(`Failed to allocate MYOB invoice number: ${rpcErr.message}`)
+    // Transfers have their OWN number stream (JAWSTFR0001…, migration 214).
+    // They used to share b2b_next_myob_invoice_number() with B2B sales, which
+    // is exactly why the portal order number and the MYOB number drifted 6-9
+    // apart. Sales now take their number from the order sequence
+    // (JAWSB2B0100…), so a shared allocator would have marched the transfer
+    // series straight into them; JAWSTFR shares no prefix, so collision is
+    // impossible. The 24 transfers already filed keep their JAWSB2B numbers.
+    const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_transfer_number')
+    if (rpcErr) throw new Error(`Failed to allocate MYOB transfer number: ${rpcErr.message}`)
     jawsInvoiceNumber = String(rpcNumber || '').trim()
+    if (!jawsInvoiceNumber) throw new Error('b2b_next_myob_transfer_number returned empty')
     const body: Record<string, any> = {
       Customer: { UID: cfgT.customerUid },
       Date: new Date().toISOString().substring(0, 10),

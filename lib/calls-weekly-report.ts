@@ -97,9 +97,14 @@ export interface WeeklyReportResult {
 
 /**
  * Window options. Absent = the rolling `days`-back behaviour the Monday report
- * has always used; passing an explicit range lets the DAILY recap ask for one
- * Brisbane calendar day instead (lib/calls-daily-recap.ts). The weekly path
- * calls this with no opts, so its behaviour is unchanged.
+ * has always used; passing an explicit range lets the DAILY recap ask for its
+ * own 16:30-to-16:30 Brisbane span instead (lib/calls-daily-recap.ts). The
+ * weekly path calls this with no opts, so its behaviour is unchanged.
+ *
+ * NOTE for anyone bounding this: the range filters on `calls.call_date`, the
+ * moment the call STARTED, and the analysis is joined by call id — so a call
+ * inside the range whose analysis has not landed yet is silently absent. That
+ * is why the daily window ends 45 minutes before the post goes out.
  */
 export interface CoachingWindowOpts { fromIso?: string; toIso?: string; label?: string }
 

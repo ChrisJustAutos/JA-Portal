@@ -1,10 +1,21 @@
 // lib/sales-update-slack.ts
-// SERVER-ONLY. The 5:15pm sales update posted to #sales-updates.
+// SERVER-ONLY. The 5:15pm sales update posted to #sales-updates — the one
+// end-of-day post (Chris, 2026-08-31: "one channel to get all your
+// information").
 //
 // Monday-to-Thursday it posts the day: Just Autos bookings, distributor value,
 // the combined total against the daily target, and who wrote the most. Friday
 // it posts the week instead, with a Mon-Fri breakdown so the shape of the week
 // is visible (Chris, 2026-08-31).
+//
+// The day's call-coaching recap is appended to the same message from
+// lib/calls-daily-recap (it used to be a separate 6:05pm post to
+// #sales-coaching). The coaching part FAILS OPEN: it does its own Supabase
+// reads and one Anthropic call, and neither of those is allowed to cost the
+// sales figures, so it is wrapped and a failure just drops the section.
+// Note the Friday asymmetry: the sales figures are the WEEK, the coaching is
+// still only that day (the Monday weekly coaching report covers the week), so
+// the coaching heading names the day.
 //
 // Every figure comes from lib/sales-figures-monday, the same source as
 // Reports → Sales Report, so the Slack post and the report can never disagree.
@@ -12,6 +23,7 @@
 // Monday boards hold and what the team is measured on.
 
 import { fetchSalesFigures, type SalesFiguresData } from './sales-figures-monday'
+import { buildCoachingSections, type CoachingSectionsResult } from './calls-daily-recap'
 import { getIntegration, getIntegrations } from './integration-config'
 import { postMessage } from './slack-bot/slack'
 
@@ -55,6 +67,16 @@ export async function getSalesUpdateTargets(): Promise<DailyTargets> {
   return { ja, dist, combined: ja + dist }
 }
 
+/**
+ * Blocks + fallback line for the coaching part, built by lib/calls-daily-recap.
+ * Declared structurally so renderSalesUpdate stays pure and testable.
+ */
+export interface CoachingPart {
+  blocks: any[]
+  textLine: string
+  result?: CoachingSectionsResult
+}
+
 export interface SalesUpdate {
   mode: UpdateMode
   since: string
@@ -69,6 +91,12 @@ export interface SalesUpdate {
     targetJa: number; targetDist: number
     topSeller: { person: string; total: number } | null
   }
+  /**
+   * Whether the coaching part made it in, and why not if it didn't — otherwise
+   * failing open is invisible and "no calls today" looks the same as "the
+   * Anthropic call died".
+   */
+  coaching: { included: boolean; callsAnalysed: number | null; reason?: string }
 }
 
 /**
@@ -88,7 +116,26 @@ export async function buildSalesUpdate(mode: UpdateMode, now: Date = new Date())
     fetchSalesFigures(token, { since, until, now: bris }),
     getSalesUpdateTargets(),
   ])
-  return renderSalesUpdate(figures, targets, mode, bris, since, until)
+
+  // The coaching part is fetched here, not in renderSalesUpdate, so that
+  // renderSalesUpdate stays a pure function of its arguments.
+  //
+  // Fail open, deliberately and loudly: the sales figures are the point of the
+  // post and a coaching or Anthropic failure must never cost them. `now` is
+  // passed RAW — buildCoachingSections applies the Brisbane shift itself, and
+  // handing it the already-shifted `bris` would window it on tomorrow.
+  let coaching: CoachingPart | null = null
+  let coachingReason: string | undefined
+  try {
+    const built = await buildCoachingSections(now)
+    if (built) coaching = { blocks: built.blocks, textLine: built.textLine, result: built.result }
+    else coachingReason = 'no scored calls in the coaching window'
+  } catch (e: any) {
+    coachingReason = 'coaching recap failed: ' + (e?.message || String(e))
+    console.error('sales update: coaching section failed (non-fatal):', e?.message || e)
+  }
+
+  return renderSalesUpdate(figures, targets, mode, bris, since, until, coaching, coachingReason)
 }
 
 /**
@@ -104,6 +151,10 @@ export function renderSalesUpdate(
   bris: Date,
   since: string,
   until: string,
+  /** Coaching blocks from lib/calls-daily-recap, or null when there are none. */
+  coaching: CoachingPart | null = null,
+  /** Why there are none — "no calls analysed today", or the failure. */
+  coachingReason?: string,
 ): SalesUpdate {
 
   // Target: the whole-business daily figure (SALES_TARGET_PER_DAY, editable in
@@ -168,20 +219,36 @@ export function renderSalesUpdate(
     }
   }
 
+  // The day's call coaching, appended after every sales block (including
+  // Friday's day-by-day). Its blocks bring their own leading divider.
+  if (coaching) blocks.push(...coaching.blocks)
+
   // Slack's notification/preview line. Built explicitly rather than by
   // stripping markdown: a blanket /[*_]/ strip also eats the underscores
   // inside emoji shortcodes, turning :bar_chart: into :barchart:.
   const periodLabel = mode === 'weekly'
     ? `Week in review — ${longDate(new Date(since + 'T00:00:00Z'))} to ${longDate(new Date(until + 'T00:00:00Z'))}`
     : `Sales update — ${longDate(new Date(until + 'T00:00:00Z'))}`
-  const text = [
+  const textParts = [
     periodLabel,
     `Just Autos bookings ${money(t.ordersValue)} (${plural(t.ordersCount, 'order')}) - ${pctJa}% of ${money(targetJa)}`,
     `Distributors ${money(t.distValue)} (${plural(t.distCount, 'order')}) - ${pctDist}% of ${money(targetDist)}`,
     `Total ${money(t.total)} — ${pct}% of the ${money(target)} target`,
     top ? `Top seller: ${top.person} — ${money(top.total)}` : 'No orders written yet.',
-  ].join('\n')
-  return { mode, since, until, text, blocks, summary }
+  ]
+  // The coaching part contributes one line, already built explicitly by
+  // lib/calls-daily-recap for the same reason.
+  if (coaching) textParts.push(coaching.textLine)
+  const text = textParts.join('\n')
+
+  return {
+    mode, since, until, text, blocks, summary,
+    coaching: {
+      included: !!coaching,
+      callsAnalysed: coaching?.result?.callsAnalysed ?? null,
+      reason: coaching ? undefined : (coachingReason || 'no coaching section supplied'),
+    },
+  }
 }
 
 function statusEmoji(pct: number): string {
@@ -209,7 +276,8 @@ export async function salesUpdateChannel(): Promise<string> {
 }
 
 export async function postSalesUpdate(mode: UpdateMode, now: Date = new Date()): Promise<{
-  posted: boolean; mode: UpdateMode; channel: string; reason?: string; summary: SalesUpdate['summary']
+  posted: boolean; mode: UpdateMode; channel: string; reason?: string
+  summary: SalesUpdate['summary']; coaching: SalesUpdate['coaching']
 }> {
   const update = await buildSalesUpdate(mode, now)
   const channel = await salesUpdateChannel()
@@ -218,5 +286,8 @@ export async function postSalesUpdate(mode: UpdateMode, now: Date = new Date()):
     posted: !!res, mode, channel,
     reason: res ? undefined : 'Slack rejected the post — check the bot is in the channel and the id/name is right.',
     summary: update.summary,
+    // Surfaced in the cron's JSON response so a silently-dropped coaching
+    // section is visible without reading the function logs.
+    coaching: update.coaching,
   }
 }

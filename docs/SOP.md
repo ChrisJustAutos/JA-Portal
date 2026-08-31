@@ -279,22 +279,26 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **⚠ Re-send does not re-raise the PO**, so it can't create a duplicate in MYOB. "Re-raise drop-ship PO" is the one that does - only use it if the PO itself is wrong.
 
-### 4.1e-f Sales coaching in Slack: one message a day
+### 4.1e-f Sales coaching in Slack: one section of one post
 
-**#sales-coaching now gets a single recap at about 6pm each weekday**, instead of a card for every call. It was posting 100-140 cards a day, which nobody could read.
+**Call coaching arrives inside the 5:15pm #sales-updates post** (§4.1e-h), not as a card for every call and no longer as its own message. `#sales-coaching` was posting 100-140 cards a day, which nobody could read; then the daily recap that replaced them was folded into the sales update, so there is **one post to read at the end of the day**.
 
-The recap carries four things:
+The coaching part carries four things:
 
 | Section | What it is |
 |---|---|
-| **Top call of the day** | The best-scoring call, with a link to listen |
-| **Coming up most often** | The coaching themes that recurred across the day |
+| **Top call** | The best-scoring call, with a link to listen |
+| **Coming up most often** | The coaching themes that recurred |
 | **By advisor** | Calls, average score and weakest area, one line each |
 | **Worth a review** | The weakest call, with a link |
 
-**Nothing has been lost.** Every call is still recorded, transcribed, scored and coached - open **Calls** in the portal to read any of it in full, filter by advisor, or listen. Only the Slack card stopped.
+**Nothing has been lost from the coaching itself.** Every call is still recorded, transcribed, scored and coached — open **Calls** in the portal to read any of it in full, filter by advisor, or listen. Only the Slack delivery changed.
 
-**⚠ A quiet day posts nothing at all.** If there were no analysed calls, there is no message - that is deliberate, not a fault.
+**#sales-coaching is not dead** — it still receives the **Monday weekly coaching report**, which is where the week's coaching lives. There is just nothing to watch there day to day.
+
+**The coaching part covers 4:30pm yesterday to 4:30pm today** and the post says the span it covers. Monday's reaches back to Friday 4:30pm, so nothing is lost over the weekend. It is deliberately **not** the same period as the sales figures beside it: scoring a call takes about 20-25 minutes after the call ends, so a 4:55pm call could not be in a 5:15pm post. Cutting off at 4:30pm means **a late-afternoon call is coached in tomorrow's post rather than being skipped entirely** — which is what used to happen to one or two calls a day.
+
+**⚠ A quiet span posts no coaching section at all.** If nothing was scored, that part is simply absent — deliberate, not a fault. The sales figures still post.
 
 If you want the per-call cards back, that is a setting change rather than a rebuild - ask.
 
@@ -312,6 +316,8 @@ The cart, the checkout screen and the invoice all read the same setting, so what
 
 Every weekday at **5:15pm** the portal posts the day's sales into **#sales-updates**: Just Autos bookings, distributor value, the combined total against the day's target, and who wrote the most. **On Friday it posts the week instead**, with a day-by-day line so you can see whether a good week was steady or one big day. Nothing posts on weekends.
 
+**Below the figures, the same post carries the day's call coaching** (§4.1e-f) — top call, the themes coming up most often, a line per advisor, and one call worth reviewing. One post, everything in it. On Friday the sales figures are the whole **week** while the coaching is still just the one span since Thursday's post; the coaching heading names its span so the two cannot be confused.
+
 **The figures are orders WRITTEN, not money invoiced** - the same numbers as Reports > Sales Report, from the Monday boards. If the Slack post and the report ever disagree, that is a fault worth reporting; they read the same source.
 
 **To change the targets:** Settings > Integrations. There are two, per day: `SALES_TARGET_JA_PER_DAY` (Just Autos bookings, $60,000) and `SALES_TARGET_DIST_PER_DAY` (distributors, $50,000) - $110,000 combined. The post shows each against its own target and then the total. Friday's figures are those numbers times the weekdays covered. No deploy needed; it takes effect on the next post.
@@ -321,6 +327,8 @@ Every weekday at **5:15pm** the portal posts the day's sales into **#sales-updat
 **To check it before 5:15, or send it early:** open `/api/admin/sales-update-preview` in the browser - it returns exactly what would be posted, along with the figures, and sends nothing. Add `?mode=weekly` to see the Friday version on any day.
 
 **⚠ If the post doesn't appear**, the usual cause is the bot not being in the channel. It retries every hour until 9:15pm, and only marks the day done once Slack has accepted it, so a brief outage does not cost the day.
+
+**⚠ If the figures are there but the coaching section is missing**, the figures are still correct. The coaching is built to drop rather than hold up the numbers; the reason shows as `coaching.reason` on `/api/admin/sales-update-preview`.
 
 ### 4.1e-i The Friday tune-job chase
 
@@ -449,7 +457,21 @@ Now the conversion is **skipped** when a PO is unbilled, and the order timeline 
 
 ### 4.2a Matching an order to its MYOB invoice
 
-**Admin → B2B → Orders → open the order.** The **Summary** card now leads with the **MYOB invoice** number — `JAWSB2B0055` — above the distributor and the customer PO, with the date it was invoiced beneath it. That is the number MYOB, accounts and the distributor all quote, so when someone rings about "Cutlers JAWSB2B0055" you can match it without hunting.
+**For orders from `JAWSB2B0100` onward there is nothing to match — the portal order number IS the MYOB number.** An order placed in the distributor portal is numbered `JAWSB2B0100`, and that same number is on the MYOB sale order, the MYOB tax invoice, the supplier drop-ship PO, and everything the distributor and accounts quote. No translating, no looking an order up to find "the other number".
+
+Before this (31 August 2026) two separate numbers ran and drifted apart — order `B2B-2026-000057` was `JAWSB2B0065` in MYOB, `B2B-2026-000050` was `JAWSB2B0059` — 6 to 9 out and never by a fixed amount, so the only way to get from one to the other was to open the order.
+
+**Orders placed before the change still have two numbers.** They keep their `B2B-2026-0000NN` portal number and their separate `JAWSB2B00NN` MYOB number. That is not a fault and is not being tidied up; the admin order page shows both.
+
+**⚠ Gaps in the MYOB number series are normal now — do not read a gap as a missing invoice.** The number is reserved the moment a distributor reaches checkout, **before any money moves**. An order abandoned at the payment screen, or cancelled later, burns its number and no MYOB document is ever created under it. So the MYOB sale numbers will have holes: `JAWSB2B0100`, `0101`, `0104`… with 0102 and 0103 simply never used. This is inherent to having one number instead of two — the alternative is the drift above. To see what happened to a gap, search the number in Admin → B2B → Orders: the abandoned or cancelled order is still there with its status. There is also a **one-off gap between `JAWSB2B0065` and `JAWSB2B0100`**, which marks the changeover.
+
+**Internal stock transfers changed format from transfer 25.** JAWS ↔ VPS transfers used to take a number from the same pool as B2B sales (`JAWSB2B0016` … `JAWSB2B0064`) — which is what caused the drift. They now read **`JAWSTFR0001`, `JAWSTFR0002`, …** The 24 already in MYOB keep the numbers they were filed under, so when reconciling intercompany transfers both formats appear in the register.
+
+**⚠ The MYOB invoice number fields on Admin → B2B → Settings no longer set new order numbers.** They govern only the fallback used for pre-change orders. The section is labelled "fallback only" for that reason — editing it will look like it changes numbering and will not.
+
+**Admin → B2B → Orders → open the order.** The **Summary** card leads with the **MYOB invoice** number — `JAWSB2B0100` — above the distributor and the customer PO, with the date it was invoiced beneath it. That is the number MYOB, accounts and the distributor all quote, so when someone rings about "Cutlers JAWSB2B0100" you can match it without hunting.
+
+On an order where the distributor did not enter their own PO, MYOB's "Purchase Order No." box now repeats the document number. It has always fallen back to the portal order number — which is now the same thing. Harmless.
 
 Until the invoice is written it reads **"Not written to MYOB yet"** in amber. The MYOB card further down the right-hand rail still carries the diagnostics — company file, write attempts, and the error if a write failed.
 
@@ -923,6 +945,12 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Transcripts stale but calls fine | The transcription worker | Same page; then the PBX box |
 | **One** long call missing, everything else fine | Not a sync outage — the CDR row arrives only when the call hangs up, so very long calls can land behind the sync window | Note the caller's number and roughly when they rang, and give both to whoever maintains the PBX — the call can be backfilled from the phone system. Connections will look healthy, so don't chase it there |
 | Live monitor says "not configured" | Monitor hasn't reported in >20s | Same page |
+| MYOB B2B invoice numbers skip one or more values | An order was abandoned at checkout or cancelled — it reserved the number and never produced a document | Nothing to fix. Search the number in Admin → B2B → Orders to confirm which order it was |
+| Order page shows a MYOB write error mentioning a duplicate number | The document was already created in MYOB on an earlier attempt; the retry reused the same number | Find the document in MYOB by that number, confirm it is right, and have it linked to the order rather than posting a second one |
+| A drop-ship supplier PO arrived numbered `00001382` instead of ours | MYOB rejected our number (usually a duplicate) and fell back to its own sequence | Quote the MYOB PO number to the supplier for that one PO, and check whether two POs on the order ended up with the same number |
+| 5:15pm post has sales figures but no coaching section | Nothing scored in the 4:30→4:30 window, or the coaching build failed | `coaching.reason` on `/api/admin/sales-update-preview`. The figures are unaffected by design |
+| A late-afternoon call isn't in tonight's coaching | Expected — the coaching window closes at 4:30pm | It appears in tomorrow's post, and is already scored on **Calls** |
+| Nothing at all in #sales-updates after 5:15pm | The sales-update cron, or the bot isn't in the channel | Vercel logs for `/api/cron/sales-update`; it retries hourly to 9:15pm |
 | Dashboard figures look stale | Overnight cache refresh | The 02:00 refresh cron, then the health page |
 | Workshop map or vehicle trend looks out of date | The nightly MD pull | Reports → Workshop Map shows "synced"; "Pull from MechanicDesk now" forces it (~2–4 min) |
 | A pallet quote looks far too cheap for the size of the order, or the goods clearly won't fit the pallet on the plan | Before 27 Aug 2026 pallets were counted by weight alone and chosen without checking the goods fit the deck | Fixed — the order is boxed first and pallets are filled by weight *and* space. If it still looks wrong, check the pallet's deck size and **max weight** in Settings → Freight packaging (§4.3a): the weight you enter is taken literally. |
@@ -982,3 +1010,6 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 10. **Reload when the new-version banner appears.**
 11. **Leave is approved on the application, not on a note.** Pressing Approved on an item in Leave Applications emails the applicant; a line typed into a payroll group emails nobody.
 12. **Check “Entered manually?” before approving an AP flag card** — approving one that was already keyed in by hand posts the bill twice.
+13. **The B2B portal order number IS the MYOB invoice number.** Never renumber one of those documents in MYOB by hand — the payment, the drop-ship PO and the tax invoice all key off the number the portal reserved.
+14. **Gaps in the MYOB B2B number series are normal.** An abandoned or cancelled order burns a number. Search it in Admin → B2B → Orders before treating a gap as a missing invoice.
+15. **One post at 5:15pm has the lot** — sales figures and the day's call coaching, in #sales-updates.

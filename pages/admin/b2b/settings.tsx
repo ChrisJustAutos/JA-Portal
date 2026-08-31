@@ -332,8 +332,8 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Invoice numbering ─── */}
-              <Section id="invoice-numbering" activeId={openSectionId} onClose={closeSection} title="MYOB Invoice Numbering"
-                description="Each B2B order writes a Sale.Invoice to MYOB JAWS. The invoice number is portal-controlled (prefix + zero-padded sequence). MYOB caps the field at 13 characters total.">
+              <Section id="invoice-numbering" activeId={openSectionId} onClose={closeSection} title="MYOB Invoice Numbering (fallback only)"
+                description="A new B2B order's MYOB number IS its portal order number - JAWSB2B0100 - reserved when the order is created, so these fields do NOT control it. They govern only the fallback allocator, still used for orders placed before 31 August 2026 and for anything whose order number isn't the JAWSB2B#### shape. MYOB caps the field at 13 characters total.">
 
                 <div className="b2b-col2" style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
                   <Field label="Prefix" hint="Letters/digits, no spaces. Max 8 chars.">

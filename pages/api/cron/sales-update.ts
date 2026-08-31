@@ -1,6 +1,14 @@
 // pages/api/cron/sales-update.ts
-// 5:15pm Brisbane: post the day's sales to #sales-updates. On Friday it posts
-// the week instead (Chris, 2026-08-31). Weekends are skipped.
+// 5:15pm Brisbane: post the day's sales to #sales-updates, with the day's call
+// coaching recap folded into the same message — this is the ONE end-of-day post
+// (Chris, 2026-08-31: "one channel to get all your information"; the separate
+// 6:05pm #sales-coaching recap and its cron were retired the same day).
+// On Friday it posts the week's sales instead, with the coaching still covering
+// just the span since the last update. Weekends are skipped.
+//
+// maxDuration is 300, not 120: the coaching part makes an Anthropic call to
+// summarise the day's recurring themes. That part fails open inside
+// lib/sales-update-slack — the sales figures go out regardless.
 //
 // Scheduled hourly rather than once a day, and guarded by a marker, for the
 // reason the tune-job chase had to be rewritten the same day: a once-a-day
@@ -14,7 +22,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { postSalesUpdate } from '../../../lib/sales-update-slack'
 
-export const config = { maxDuration: 120 }
+export const config = { maxDuration: 300 }
 
 const MARKER_KEY = 'sales_update_last_posted'
 

@@ -588,8 +588,9 @@ export async function analyseCall(callId: string, opts: { dryRun?: boolean; rubr
 
   // Per-call cards are OFF by default since 2026-08-31. The channel was getting
   // 100-140 of them a day (127 on 31 Aug), which is a firehose nobody reads;
-  // #sales-coaching now gets one end-of-day recap instead
-  // (lib/calls-daily-recap.ts, /api/cron/calls-daily-recap). Every call is
+  // the coaching recap now rides along with the 5:15pm sales update in
+  // #sales-updates instead (lib/calls-daily-recap.ts builds the sections,
+  // lib/sales-update-slack + /api/cron/sales-update post them). Every call is
   // still scored and readable in full at /calls - only the Slack card stopped.
   // Set CALLS_COACHING_PER_CALL_CARDS=1 to bring them back without a deploy.
   const perCallCards = process.env.CALLS_COACHING_PER_CALL_CARDS === '1'
