@@ -44,6 +44,9 @@
     "pages/api/cron/b2b-payment-check.ts": {
       "maxDuration": 120
     },
+    "pages/api/cron/b2b-reminders.ts": {
+      "maxDuration": 120
+    },
     "pages/api/b2b/admin/orders/[id]/book-freight.ts": {
       "maxDuration": 120
     },
@@ -170,6 +173,10 @@
     {
       "path": "/api/cron/b2b-payment-check",
       "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/b2b-reminders",
+      "schedule": "0 */3 * * *"
     },
     {
       "path": "/api/cron/crm-automations",

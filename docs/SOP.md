@@ -246,6 +246,21 @@ They are now hidden from the list and left out of its value total. Nothing is de
 
 **⚠ Don't chase one for payment.** If a distributor tells you they were charged but the order looks unfinished, don't assume - check Stripe. The payment either completed (and there will be a second, paid order) or it didn't.
 
+### 4.1d Reminders the portal sends distributors
+
+Two automatic nudges go out on their own. You don't trigger either, but you should know they exist so a phone call about one doesn't surprise you.
+
+| When | What they get |
+|---|---|
+| A cart untouched for **24 hours**, and again at **72 hours** | "You still have items in your cart." It says freight is quoted live at checkout and a quote from more than a day ago may have moved, and that prices and stock are confirmed at checkout rather than when items were added. Nothing is reserved. After the second one it stops. |
+| A checkout started but **never paid**, 24 hours on | "Your order was never completed - nothing has been charged." |
+
+**A cart untouched for more than a fortnight is left alone entirely.** At that point it isn't a live order, and a warning about 24-hour-old freight pricing reads oddly.
+
+**⚠ The unfinished-checkout reminder deliberately keeps quiet when it isn't sure.** Before sending, the portal asks Stripe whether that payment actually went through, and skips if it did; it also skips when the same distributor paid for a later order, which is what usually happened - they went round again. That is why an abandoned checkout you can see on the Orders page may never get chased, and it is correct: telling someone to pay for something they have already paid for is worse than saying nothing.
+
+The wording of both is yours to change at **Admin > B2B > Email templates**, alongside every other distributor email. You can also switch either off there.
+
 ### 4.1d When a drop-ship PO email says "email failed"
 
 The PO itself is fine - it exists in MYOB. Only the email to the supplier didn't go, and **Re-send** on the order retries it.
@@ -337,6 +352,8 @@ If you land on one from an old bookmark you get a short "not in use" notice expl
 3. **Book Freight.** This creates the MachShip consignment and prints the pick slip, consignment note and labels. The consignment sits **Unmanifested** — the carrier does not know about it yet.
 4. Pick and pack the order against the paperwork.
 5. **Ship Now.** This is the step that actually despatches: it manifests the consignment with the carrier, converts the MYOB order into a tax invoice, receipts the payment against it, prints the A4 tax invoice and emails the distributor their tracking.
+
+**The portal chases you if an order sits.** A paid order that hasn't shipped after **2 days** posts to Slack and rings the bell for admins and managers, and does it once more at **5 days**. The message says what state it is in - no freight booked, booked but not shipped, manifested but not marked shipped, or waiting on a named drop-ship supplier - so you can tell at a glance whether it is actually yours to chase. Ship the order (or cancel it) and the nudging stops.
 
 **⚠ "Mark as shipped" is not the same thing.** It only records that the goods went out - it raises no consignment and does no MYOB work, so there is **no tax invoice**. That is deliberate, and it is the right button for an order that left another way. But if you use it on an order that should be invoiced, someone has to convert the sale order to an invoice in MYOB by hand. The customer's payment lands in MYOB either way.
 

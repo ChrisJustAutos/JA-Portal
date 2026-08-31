@@ -26,6 +26,9 @@ export type TemplateKey =
   | 'distributor_shipped'
   | 'distributor_dropship_eta'
   | 'distributor_freight_update'
+  | 'distributor_cart_reminder'
+  | 'distributor_cart_reminder_final'
+  | 'distributor_checkout_unfinished'
 
 export interface TemplateVar { token: string; desc: string }
 export interface TemplateDef {
@@ -100,6 +103,67 @@ We'll email tracking as soon as it ships.
 
 Just Autos`,
     variables: [v('distributor_name', 'Distributor'), v('order_number', 'Order number'), v('customer_po', 'Their PO (or blank)'), v('order_total', 'Total inc GST'), v('lines_table', 'Item table (block)'), v('ship_to', 'Ship-to (block)')],
+  },
+  distributor_cart_reminder: {
+    label: 'Cart reminder — 24 hours', direction: 'Distributor',
+    description: 'Sent 24 hours after a cart was last touched and still has items in it. Goes to the person whose cart it is, falling back to the primary contact.',
+    defaultSubject: 'You have items waiting in your Just Autos cart',
+    defaultBody:
+`Hi {{contact_name}},
+
+You still have {{item_count}} in your cart at Just Autos Wholesale — nothing has been ordered yet.
+
+{{lines_table}}
+
+A couple of things worth knowing before you check out:
+
+· Freight is quoted live at checkout, so the price can move as carrier rates and your cart's size and weight change. A quote you saw more than 24 hours ago may no longer be current.
+· Prices and stock are confirmed when you check out, not when items are added.
+
+{{cart_link}}
+
+If you'd rather we quoted this as a whole job, just reply and we'll take care of it.
+
+Just Autos`,
+    variables: [v('contact_name', 'Cart owner or distributor'), v('distributor_name', 'Distributor'), v('item_count', 'e.g. "3 items"'), v('lines_table', 'Item table (block)'), v('cart_link', 'Button back to the cart (block)')],
+  },
+  distributor_cart_reminder_final: {
+    label: 'Cart reminder — 72 hours (final)', direction: 'Distributor',
+    description: 'The second and last nudge, 72 hours after a cart was last touched. Nothing further is sent for that cart unless it is changed again.',
+    defaultSubject: 'Still in your cart at Just Autos',
+    defaultBody:
+`Hi {{contact_name}},
+
+Your cart at Just Autos Wholesale is still sitting there with {{item_count}} in it. We'll leave it alone after this — it won't expire, and nothing is reserved.
+
+{{lines_table}}
+
+Prices, stock and freight are all confirmed at checkout, so whatever you were quoted earlier will be re-checked when you go through.
+
+{{cart_link}}
+
+Just Autos`,
+    variables: [v('contact_name', 'Cart owner or distributor'), v('distributor_name', 'Distributor'), v('item_count', 'e.g. "3 items"'), v('lines_table', 'Item table (block)'), v('cart_link', 'Button back to the cart (block)')],
+  },
+  distributor_checkout_unfinished: {
+    label: 'Checkout not finished', direction: 'Distributor',
+    description: 'Sent once, 24 hours after a checkout was started but never paid. Skipped if Stripe shows the payment actually went through, or if a later order was paid.',
+    defaultSubject: 'Your Just Autos order {{order_number}} was never completed',
+    defaultBody:
+`Hi {{distributor_name}},
+
+You started an order with us{{customer_po}} but the payment screen was never completed, so nothing has been charged and nothing is on its way.
+
+{{lines_table}}
+
+Order total was {{order_total}} inc GST. Freight is re-quoted live when you check out, so that figure may differ if you come back to it now.
+
+{{shop_link}}
+
+If you think you did pay for this, don't pay again — reply to this email and we'll check it against our records first.
+
+Just Autos`,
+    variables: [v('distributor_name', 'Distributor'), v('order_number', 'Order number'), v('customer_po', 'Their PO (or blank)'), v('order_total', 'Total inc GST'), v('lines_table', 'Item table (block)'), v('shop_link', 'Button back to the shop (block)')],
   },
   distributor_dropship_eta: {
     label: 'Drop-ship dispatch update', direction: 'Distributor',

@@ -45,7 +45,7 @@ It is one Next.js application that contains: a **staff portal** (dashboards, wor
                           │  Vercel (Next.js app, justautos.app)   │
    Staff browsers ───────▶│  pages/        UI (115 routes)         │
    Distributor browsers ─▶│  pages/api/    ~all business logic     │
-   Suppliers ────────────▶│  23 crons (vercel.json)                │
+   Suppliers ────────────▶│  26 crons (vercel.json)                │
                           └───────┬──────────────────┬─────────────┘
                                   │                  │ repository_dispatch
                                   ▼                  ▼
@@ -333,6 +333,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 | `/api/cron/workshop-reminders` | every 15 min | Queue + send service/rego reminder SMS (respects `sms_enabled`) |
 | `/api/cron/notifications-sweep` | every 15 min | Bell notifications for Monday-side events (new leads, new to-dos) |
 | `/api/cron/b2b-payment-check` | every 6 h | Two passes: confirm BECS settlement in MYOB → mark `payment_settled_at`; and receipt any settled order that has no MYOB payment against it |
+| `/api/cron/b2b-reminders` | every 3 h | Abandoned carts (24 h + 72 h), unfinished checkouts (once at 24 h), and paid orders we haven't shipped (2 d, escalating at 5 d) |
 | `/api/cron/crm-automations` | every 5 min | CRM automation flow engine |
 | `/api/cron/task-automations` | every 5 min | Tasks automation flow engine |
 | `/api/cron/crm-campaigns` | every 5 min | Campaign scheduler + Resend queue drain + call linkage |
@@ -400,7 +401,7 @@ MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,U
 
 ## 7. Modules & SOPs
 
-Full route-by-route inventory: 115 page routes (435 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
+Full route-by-route inventory: 117 page routes (444 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
 
 ### 7.1 Dashboards (`/dashboard`, `/overview`, `/home`)
 
@@ -456,6 +457,16 @@ Distributor experience: Shop → Cart (PO number required, ≤20 chars — MYOB 
 **Supplier emails: MYOB's Email field is free text (2026-08-25).** `getSupplierContact()` returned the raw MYOB `Addresses[].Email` value trimmed, and it went straight into Resend's `to`. MYOB cards routinely hold several addresses in one box, and Resend 422s the entire send on anything that is not one clean address - which killed MPI AUTOMOTIVE's PO 00001382 email on 2026-08-25 after the same supplier had received one fine on 6 August. `lib/email-recipients.ts` `parseEmailList()` now splits on `;`/`,`, unwraps `Name <addr>`, strips trailing `(notes)` and `- notes`, recovers an unbracketed trailing address, de-duplicates case-insensitively, and returns bare addresses; drop-ship PO sends mail ALL of them. A value that yields nothing usable is reported as `failed` with the offending value quoted, NOT as `no_email` - those are different problems and were indistinguishable. Unit-checked against 13 real-world shapes. **Other callers of the same lookup were left alone** (`post-b2b-doc.getSupplierContact`, and the Xero branch) - if another emailer starts 422ing, it wants the same treatment.
 
 **"Check if payment cleared" (2026-08-25).** `POST /api/b2b/admin/orders/{id}/check-payment` retrieves the Stripe PaymentIntent (falling back to the checkout session, and backfilling `stripe_payment_intent_id` when it was never stored) and treats ONLY `succeeded` as cleared - `processing` is a BECS debit still in flight, which is the state the button exists to distinguish. On cleared it reproduces the `async_payment_succeeded` webhook's three effects in the same order: stamp `payment_settled_at` guarded on null, write a `payment_settled` event, and `applyCustomerPaymentInMyob()` if the sale invoice exists. Guarding on null makes it idempotent and race-safe against the webhook - whichever lands first wins and the other reports "already recorded". A MYOB failure does not fail the check: settlement stands and the note says so. Exists because settlement had exactly ONE source (the webhook), so a dropped delivery left an order unsettled forever, blocking both the Ship Now credit gate and the MYOB receipt with no way to ask.
+
+**Reminders — carts, unfinished checkouts and orders we're sitting on (2026-08-31).** `lib/b2b-reminders.ts`, driven by `/api/cron/b2b-reminders` every 3 hours. Three independent passes; one throwing never stops the others, and every pass is idempotent so an extra run sends nothing twice.
+
+- **Abandoned cart → distributor.** 24 h after the cart was last touched, and again at 72 h, then silence. A cart's last-touched time is derived from **`b2b_cart_items`** (`added_at`/`updated_at`), *not* `b2b_carts.updated_at` — the cart item routes bump the item rows and leave the cart's own stamp alone, so trusting the cart would call an actively-used cart abandoned. Comparing the reminder stamp against that same item timestamp is also what re-arms the cycle: touch the cart and the stamp is older than the newest item, so it legitimately becomes a candidate again — no reset logic needed. Guard columns `reminder_24_at` / `reminder_72_at` (migration **211**). Carts untouched for more than **14 days** are left alone: that is furniture, not an opportunity, and a "freight was quoted over 24 hours ago" warning reads absurdly against a month-old cart. Goes to the person whose cart it is (if their login is still active), else the distributor's primary contact.
+- **Checkout started, never paid → distributor.** Once, 24 h in. Guarded hard, because chasing someone for money they already paid is the worst outcome available: Stripe is re-asked directly and a session that actually completed is flagged rather than chased (the SOP's own rule); a **later paid order from the same distributor** means they simply went round again (the 000051→000052 pattern) and is skipped; test orders never chased. Both existing candidates at build time were Banana Coast checkouts abandoned four minutes apart and paid later — the guard correctly skipped both.
+- **Paid but not shipped → us.** At 2 days, escalating once at 5. Slack via `postB2bOrderSlack` plus a portal bell to admin/manager. The message says *why* it looks stalled — no freight booked / booked not shipped / manifested not marked shipped / waiting on a named drop-ship supplier — because an order waiting on a supplier is a different problem from one nobody has picked.
+
+The once-only guards for the two order passes are `b2b_order_events` rows (`checkout_reminder_sent`, `stall_reminder` with a `stage` in metadata), so only the cart pass needed a migration. Wording for all three lives in `TEMPLATE_DEFS` (`distributor_cart_reminder`, `distributor_cart_reminder_final`, `distributor_checkout_unfinished`) and is editable at Admin → B2B → Email templates like every other B2B email; the *cadence* is constants at the top of `lib/b2b-reminders.ts`.
+
+**On rollout every existing cart was stamped as already-reminded**, so the feature acts only on carts abandoned from that point rather than blasting a backlog — five carts (two of them a fortnight old) would otherwise have gone out at once. Clearing the two columns on a cart re-arms it.
 
 **A settled payment now reaches MYOB no matter when it settles (2026-08-31).** BECS order `B2B-2026-000050` / `JAWSB2B0059` cleared on 27 Aug and sat for four days with $4,074.46 never receipted into MYOB. Three separate recovery paths all missed it, because each was keyed on `myob_sale_invoice_uid` — a field that is only populated once the order **ships**:
 
@@ -841,7 +852,7 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 
 **Consistency / drift**
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
-- Migrations `148` and `153` are duplicated numbers; latest applied is `210_missed_call_suppression_parity`, so next is `211`.
+- Migrations `148` and `153` are duplicated numbers; latest applied is `211_b2b_cart_reminders`, so next is `212`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.
