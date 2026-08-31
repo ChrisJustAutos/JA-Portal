@@ -264,7 +264,7 @@ The portal never calls Asterisk or Deepgram directly — an on-PBX host (CentOS 
 
 | PBX worker | What it does |
 |---|---|
-| `ja-cdr-sync` (`sync.js`) | CDR → Supabase `calls` every 5 min (service-role key). Includes park-pickup CDR fix (2026-08-07) and the 6-hour late-arrival lookback (2026-08-21, below). |
+| `ja-cdr-sync` (`sync.js`) | CDR → Supabase `calls` every 5 min (service-role key). Includes park-pickup CDR fix (2026-08-07), the 6-hour late-arrival lookback (2026-08-21) and extension-based outbound detection (2026-08-31) — all below. |
 | `ja-transcribe` (`transcribe.js`) | New calls → Deepgram (`nova-2-phonecall`, `en-AU`) → `call_transcripts`. Deepgram key lives on the PBX host. |
 | `ja-ami-monitor` | Live channel snapshots → `POST /api/calls/live/agent/snapshot` (~2s, `X-Service-Token` scope `calls:monitor`); drains `call_monitor_events` for Listen/Whisper/Barge and click-to-dial originate. |
 | `ja-freightbay` / `ja-partsroom` | Hikvision NVR intrusion events → Slack snapshot bursts + Yealink ring. **Node 16 only** (glibc). Doesn't touch the portal API. |
@@ -277,6 +277,33 @@ The portal never calls Asterisk or Deepgram directly — an on-PBX host (CentOS 
 4. **Coaching cards post to `#sales-coaching`** per call, and a **team summary posts Monday 07:00**.
 5. **Call notes flow back to the quote boards** — the "Fetch Call Notes" button on a Monday item calls `/api/monday/fetch-call-notes`, which pulls that customer's call history and notes onto the item, so a rep picking up a follow-up can see what was last said without hunting for the recording.
 6. **Sentiment / objections / conversion** are surfaced on `/calls` as tabs, and calls scoring below 40 are flagged for attention.
+
+**Outbound is recognised by the EXTENSION, not the caller ID (2026-08-31).** `sync.js` classified a call as outbound with:
+
+```js
+const isOutbound = first.src === BUSINESS_NUMBER && KNOWN_EXTENSIONS.has(first.cnum);
+```
+
+An extension whose outbound caller ID has no **number** set leaves `src` empty in the CDR. **Extension 4001 is configured that way** (`clid` is `"Graham" <>`, `src` empty, `outbound_cnum` empty), so every one of its outbound calls failed that test, matched neither branch, and was discarded by the `return null` immediately below. **231 calls disappeared in 30 days** — every missing outbound call in that window was 4001's, and none of it surfaced until Chris noticed his own outbound calls to one number were absent. 4001 was never the problem in the extension list; it is in `KNOWN_EXTENSIONS`.
+
+The test now keys off the extension that placed the call, which does not depend on PBX config:
+
+```js
+const isOutbound = KNOWN_EXTENSIONS.has(first.cnum)
+  && !KNOWN_EXTENSIONS.has(String(first.dst || ''))
+  && String(first.dst || '').replace(/\D/g, '').length >= 6
+  && (first.src === BUSINESS_NUMBER || !first.src);
+```
+
+- **`>= 6` digits, not 8.** Australian 13-numbers are six long and are dialled from here (`131008`); an 8-digit floor silently dropped three of them. Caught by validating the rule against 30 days of CDR before shipping rather than after.
+- **Excluding destinations that are themselves extensions** is what keeps internal ext-to-ext calls out — the job `src === BUSINESS_NUMBER` used to do implicitly.
+- Validated across 30 days: **+231 recovered, 0 lost, 0 internal calls captured.**
+
+**Reconciliation method, for next time.** SSH to the PBX (Tailscale `100.82.97.46`), take the first CDR row per `linkedid` over the window, apply the same two predicates in a script, and compare the buckets against `public.calls`. Doing that produced: inbound 1,980 in the CDR vs 1,982 in the portal (window edges); outbound 2,592 vs 2,592 **exactly**; and a 669-row dropped bucket that was 411 internal calls, 27 setup rows and 231 genuine outbound. The CDR's raw "inbound" count is ~18,500 and is **not** a useful figure — most of it is SIP scanners hitting the trunk with 3-5 digit source numbers; only `did = 0754760066` rows are real calls.
+
+**Backfilling recovered calls.** `BACKFILL_FROM`/`BACKFILL_TO` (MySQL datetime) run a bounded re-read that deliberately does **not** move the watermark and skips the recording-upload phase. That is safe because phase 2 is independent: normal runs upload any call that has a `recording_file` and no `recording_url`, so backfilled rows collect their audio on subsequent runs at `RECORDING_UPLOAD_PER_RUN` (5) a run — about four hours for 231 calls. Recordings on the box go back to 2023, so audio is available far beyond any realistic backfill.
+
+**Still open: ext 4001 has no outbound caller-ID number.** Left alone deliberately (Chris, 2026-08-31) — setting it changes what customers see on Graham's outgoing calls, which is a business decision, not a bug fix. The sync no longer depends on it.
 
 **The CDR lookback — why it is 6 hours and must stay generous.** Asterisk stamps a CDR row with the call's **start** time but does not write the row until the channel hangs up. A long call therefore arrives *behind* the sync watermark. `sync.js` reads `WHERE calldate > (watermark − CDR_LOOKBACK_MINUTES)`; while that lookback was 30 minutes, **every call longer than about 30 minutes was silently lost or truncated** — the row appeared in MySQL after the watermark had already moved past its start time, so no run ever saw it. Symptom: the portal held no call longer than 38:37 in seven weeks, and a 61:20 call answered by Dom on 204 (2026-08-20 16:16, caller 0428673886) was absent entirely. Fixed 2026-08-21 by raising the lookback to **360 minutes** (`CDR_LOOKBACK_MINUTES`, env-overridable). Re-reading is cheap (~26 rows a run) and safe — the upsert is `on_conflict=linkedid` and the payload carries only CDR-derived columns, so transcripts, recording URLs and coaching analysis on existing rows are never overwritten. **Do not lower it below the longest call the phones can carry.**
 
