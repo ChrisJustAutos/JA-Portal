@@ -74,6 +74,7 @@ async function sweepCarts(c: SupabaseClient, run: ReminderRun): Promise<void> {
       distributor:b2b_distributors!b2b_carts_distributor_id_fkey ( display_name, primary_contact_email, is_active ),
       items:b2b_cart_items ( id, qty, added_at, updated_at, catalogue:b2b_catalogue ( sku, name ) )
     `)
+    .order('created_at', { ascending: true })
     .limit(200)
 
   for (const cart of (carts || []) as any[]) {
@@ -164,6 +165,7 @@ async function sweepUnfinishedCheckouts(c: SupabaseClient, run: ReminderRun): Pr
     .eq('status', 'pending_payment')
     .lt('created_at', hoursAgo(CHECKOUT_HOURS))
     .is('paid_at', null)
+    .order('created_at', { ascending: true })
     .limit(50)
 
   for (const o of (orders || []) as any[]) {
@@ -173,8 +175,12 @@ async function sweepUnfinishedCheckouts(c: SupabaseClient, run: ReminderRun): Pr
       if (!dist || dist.is_active === false) continue
 
       // Already nudged?
+      // Both "sent" and "decided not to send" are final. Without the skip case
+      // here a ghost pending_payment row is re-examined every run for ever, and
+      // any order reaching the Stripe check below re-polls Stripe every 3 hours.
       const { data: prior } = await c.from('b2b_order_events')
-        .select('id').eq('order_id', o.id).eq('event_type', 'checkout_reminder_sent').limit(1)
+        .select('id').eq('order_id', o.id)
+        .in('event_type', ['checkout_reminder_sent', 'checkout_reminder_skipped']).limit(1)
       if (prior && prior.length > 0) continue
 
       // Did they just go round again and pay? Then this row is a ghost.
@@ -182,6 +188,10 @@ async function sweepUnfinishedCheckouts(c: SupabaseClient, run: ReminderRun): Pr
         .select('id').eq('distributor_id', o.distributor_id)
         .not('paid_at', 'is', null).gt('created_at', o.created_at).limit(1)
       if (later && later.length > 0) {
+        await c.from('b2b_order_events').insert({
+          order_id: o.id, event_type: 'checkout_reminder_skipped', actor_type: 'system', actor_id: null,
+          notes: 'Not reminded — this distributor paid for a later order, so this row is an abandoned first attempt.',
+        }).then(() => {}, () => {})
         run.skipped.push(`${o.order_number}: a later order was paid`)
         continue
       }
@@ -243,6 +253,7 @@ async function sweepStalledOrders(c: SupabaseClient, run: ReminderRun): Promise<
     .eq('status', 'paid')
     .lt('paid_at', daysAgo(STALL_DAYS))
     .is('shipped_at', null)
+    .order('paid_at', { ascending: true })
     .limit(50)
 
   for (const o of (orders || []) as any[]) {
