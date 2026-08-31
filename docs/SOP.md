@@ -283,14 +283,14 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **Call coaching arrives inside the 5:15pm #sales-updates post** (§4.1e-h), not as a card for every call and no longer as its own message. `#sales-coaching` was posting 100-140 cards a day, which nobody could read; then the daily recap that replaced them was folded into the sales update, so there is **one post to read at the end of the day**.
 
-The coaching part carries four things:
+The coaching part is a **finish-on-a-high note, not a debrief** (from 1 September 2026). It carries two things and nothing else:
 
 | Section | What it is |
 |---|---|
-| **Top call** | The best-scoring call, with a link to listen |
-| **Coming up most often** | The coaching themes that recurred |
-| **By advisor** | Calls, average score and weakest area, one line each |
-| **Worth a review** | The weakest call, with a link |
+| **Top call of the day** | The best-scoring call, with a link to listen |
+| **What went well** | Three to five things the team genuinely did well today |
+
+**There is deliberately nothing corrective in it** — no list of what to work on, no per-advisor table, no average score, no "worst call". That was all in the first version and Chris removed it: the end of the day is for finishing on a high. **The Monday weekly coaching report still carries the corrective side**, and every call is still scored in full at **Calls**, so nothing has stopped being coached.
 
 **Nothing has been lost from the coaching itself.** Every call is still recorded, transcribed, scored and coached — open **Calls** in the portal to read any of it in full, filter by advisor, or listen. Only the Slack delivery changed.
 

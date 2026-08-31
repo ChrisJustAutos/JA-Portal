@@ -9,11 +9,18 @@
 // It builds blocks; lib/sales-update-slack appends them to the #sales-updates
 // post and is the only thing that sends.
 //
-// Four sections, all four asked for:
-//   1. Top call of the day        — the one worth listening to
-//   2. Common improvements        — what the team should work on tomorrow
-//   3. Per-advisor line           — calls and average score
-//   4. A call worth reviewing     — the weakest, for coaching
+// Then on 2026-09-01 Chris cut it back to a morale note: "Just have top call
+// for the day. No notes, No by advisor. Just top call and positives. This is a
+// pump up message at the end of the day (ie. finish on a high note)."
+//
+// TWO sections, and deliberately only two:
+//   1. Top call of the day  — the one worth listening to
+//   2. What went well       — positives drawn from the analyser's `strengths`
+//
+// GONE on purpose, do not reinstate without asking: the recurring-improvements
+// list, the per-advisor table (calls / average / weakest dimension) and the
+// weakest call. Nothing is lost - every call is still scored and readable at
+// /calls, and the Monday weekly report still carries the corrective coaching.
 //
 // Figures come from fetchCoachingWindow() in lib/calls-weekly-report, the same
 // assembler the Monday report uses, so the daily and weekly numbers cannot
@@ -42,7 +49,7 @@
 // hourly cron + date marker makes that rare).
 
 import { fetchCoachingWindow } from './calls-weekly-report'
-import { callTypeLabel, dimensionLabel, outcomeLabel } from './calls-dimensions'
+import { callTypeLabel, outcomeLabel } from './calls-dimensions'
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -128,9 +135,8 @@ export interface CoachingSectionsResult {
   label: string
   callsAnalysed: number
   advisors: number
-  averageScore: number | null
   topScore: number | null
-  themes: number
+  positives: number
 }
 
 /**
@@ -154,103 +160,66 @@ export async function buildCoachingSections(now: Date = new Date()): Promise<{ b
     return null
   }
 
-  const scored = advisors.filter(a => a.avgScore != null)
-  const dayAvg = scored.length
-    ? Math.round(scored.reduce((s, a) => s + (a.avgScore || 0) * a.scored, 0) / Math.max(1, scored.reduce((s, a) => s + a.scored, 0)))
-    : null
+  // A pump-up note to finish the day on, NOT a coaching debrief (Chris,
+  // 2026-09-01: "Just top call and positives. This is a pump up message at the
+  // end of the day (ie. finish on a high note)"). Deliberately dropped: the
+  // recurring-improvements list, the per-advisor table with its average and
+  // weakest dimension, and the weakest call. None of it is lost - every call is
+  // still scored and readable at /calls, and the Monday weekly report still
+  // carries the full coaching picture including what needs work.
+  const blocks: any[] = [{ type: 'divider' }]
 
-  const blocks: any[] = [
-    { type: 'divider' },
-    {
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `:telephone_receiver: *Calls coached since the last update* — ${win.label}\n`
-          + `${total} call${total === 1 ? '' : 's'} analysed`
-          + (dayAvg != null ? `  ·  average ${dayAvg} ${scoreEmoji(dayAvg)}` : ''),
-      },
-    },
-  ]
-
-  // 1. Top call
   const best = notable.best
   if (best) {
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `:trophy: *Top call* — ${best.advisor}, ${best.score} ${scoreEmoji(best.score)}\n`
+        text: `:trophy: *Top call of the day* — ${best.advisor}, ${best.score} ${scoreEmoji(best.score)}\n`
           + `${best.customer}${best.type ? ` · ${callTypeLabel(best.type)}` : ''} · ${outcomeLabel(best.outcome) || best.outcome} · ${mins(best.durationSec)}\n`
           + `_${best.summary}_\n<${best.url}|Listen in the portal>`,
       },
     })
   }
 
-  // 2. Common improvements across the day.
-  //
-  // NOT a frequency count of the improvement strings: the analyser writes a
-  // long, unique paragraph per call ("The close was almost invisible. After Ben
-  // confirmed..."), so counting exact matches gives every item n=1 and would
-  // print five arbitrary essays. The recurring themes are real - soft closes,
-  // shallow discovery, incomplete details captured - but they have to be read
-  // out of the prose, so they are summarised. Fails OPEN: if the model or key is
-  // unavailable the section is omitted and the rest of the recap still goes.
-  const themes = await summariseThemes(advisors, win.label).catch(e => {
-    console.error('daily recap: theme summary failed (non-fatal):', e?.message || e)
+  // Positives, summarised from the analyser's per-call `strengths` - NOT
+  // `improvements`, which is what this section used to read. Same reason it was
+  // never a frequency count: these are long unique paragraphs, so counting exact
+  // matches returns every item at n=1. Fails OPEN - no key or any error drops
+  // this section and the sales figures still post.
+  const positives = await summarisePositives(advisors, win.label).catch(e => {
+    console.error('daily recap: positives summary failed (non-fatal):', e?.message || e)
     return [] as string[]
   })
-  if (themes.length) {
-    blocks.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: '*Coming up most often*' + '\n' + themes.map(t => '• ' + t).join('\n') },
-    })
-  }
-
-  // 3. Per-advisor line.
-  //
-  // Labels go through lib/calls-dimensions, never raw. The analyser stores
-  // snake_case keys (vehicle_details, information_only, status_support) and
-  // printing them verbatim is what the first live post did (Chris: "Only thing
-  // that doesnt look clean are the _ between things"). The helpers prettify an
-  // unknown key too, so adding a rubric dimension cannot reintroduce it.
-  const rows = advisors
-    .filter(a => a.scored > 0)
-    .sort((a, b) => (b.avgScore || 0) - (a.avgScore || 0))
-    .map(a => `${scoreEmoji(a.avgScore)} *${a.name}* — ${a.scored} call${a.scored === 1 ? '' : 's'}, avg ${a.avgScore ?? '—'}`
-      + (a.weakestDimension ? `  ·  weakest: ${dimensionLabel(a.weakestDimension)}` : ''))
-  if (rows.length) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*By advisor*\n' + rows.join('\n') } })
-  }
-
-  // 4. One to review
-  const worst = notable.worst
-  if (worst && (!best || worst.callId !== best.callId)) {
+  if (positives.length) {
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `:mag: *Worth a review* — ${worst.advisor}, ${worst.score} ${scoreEmoji(worst.score)}\n`
-          + `${worst.customer}${worst.type ? ` · ${callTypeLabel(worst.type)}` : ''} · ${outcomeLabel(worst.outcome) || worst.outcome} · ${mins(worst.durationSec)}\n`
-          + `_${worst.summary}_\n<${worst.url}|Listen in the portal>`,
+        text: `*What went well* — across ${total} call${total === 1 ? '' : 's'} today\n`
+          + positives.map(t => '• ' + t).join('\n'),
       },
     })
   }
 
+  // Only the divider = nothing to celebrate. Add nothing rather than hang an
+  // empty rule off the bottom of the sales figures.
+  if (blocks.length === 1) return null
+
   // One line for the sales update's plain-text fallback. Built explicitly, not
   // by stripping markdown out of the blocks: a blanket /[*_]/ strip also eats
   // the underscores inside emoji shortcodes.
-  const textLine = `Calls coached since the last update (${win.label}): ${total} call${total === 1 ? '' : 's'} analysed`
-    + (dayAvg != null ? `, average ${dayAvg}` : '')
-    + (best ? `. Top call ${best.advisor} ${best.score}.` : '.')
+  const textLine = best
+    ? `Top call of the day: ${best.advisor}, ${best.score}.`
+    : `${total} call${total === 1 ? '' : 's'} coached today.`
 
   return {
     blocks, textLine,
     result: {
       ymd: win.ymd, label: win.label, callsAnalysed: total,
       advisors: advisors.filter(a => a.scored > 0).length,
-      averageScore: dayAvg,
       topScore: best ? best.score : null,
-      themes: themes.length,
+      positives: positives.length,
     },
   }
 }
@@ -259,34 +228,40 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const MODEL = () => process.env.CALLS_ANALYSIS_MODEL || 'claude-sonnet-4-6'
 
 /**
- * The 3-5 coaching themes that genuinely recurred across the day's calls.
+ * The 3-5 things that genuinely went WELL across the day's calls.
  *
- * Input is bounded on purpose: each improvement is trimmed to 320 characters
- * and the list capped at 60 items. A busy day produces ~130 paragraphs and
- * sending them all in full is slow and pointless - the theme is legible from
- * the opening sentence of each.
+ * Reads `strengths`, not `improvements` - this section is the end-of-day
+ * pump-up, so it names what the team did well rather than what to fix. The
+ * Monday weekly report still carries the corrective side.
+ *
+ * Input is bounded on purpose: each strength is trimmed to 320 characters and
+ * the list capped at 60 items. A busy day produces well over a hundred
+ * paragraphs and sending them all in full is slow and pointless - the point is
+ * legible from the opening sentence of each.
  */
-async function summariseThemes(advisors: { name: string; improvements: string[] }[], label: string): Promise<string[]> {
+async function summarisePositives(advisors: { name: string; strengths: string[] }[], label: string): Promise<string[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return []
   const items: string[] = []
   for (const a of advisors) {
-    for (const imp of (a.improvements || [])) {
-      if (imp && imp.trim()) items.push(a.name + ': ' + imp.trim().slice(0, 320))
+    for (const s of (a.strengths || [])) {
+      if (s && s.trim()) items.push(a.name + ': ' + s.trim().slice(0, 320))
     }
   }
-  if (items.length < 3) return []          // too little to call anything a theme
+  if (items.length < 3) return []          // too little to draw a pattern from
 
   const prompt = [
     'You are the sales coach for Just Autos (Australian 4WD/diesel performance workshop, consultative sales).',
-    'Below are the per-call improvement notes from ' + label + ', written by the call analyser.',
+    'Below are the per-call STRENGTHS from ' + label + ', written by the call analyser.',
     '',
     'NOTES:',
     items.slice(0, 60).join('\n'),
     '',
-    'Identify the 3-5 coaching themes that genuinely RECUR across these notes - patterns, not one-offs.',
-    'Return ONLY JSON: { "themes": ["one short line each, max 18 words, phrased as what to do differently tomorrow"] }',
-    'Rules: only themes actually present in the notes, never invented. No markdown. Most common first.',
+    'This goes in an end-of-day Slack post to finish the team on a high, so name the 3-5 things',
+    'that genuinely went WELL today. Credit people by first name where a note clearly belongs to one person.',
+    'Return ONLY JSON: { "positives": ["one short line each, max 18 words, specific and celebratory"] }',
+    'Rules: only things actually present in the notes, never invented. No criticism, no "but", no advice',
+    'about what to do better - this section is praise only. No markdown. Strongest first.',
   ].join('\n')
 
   const r = await fetch(ANTHROPIC_API_URL, {
@@ -296,9 +271,9 @@ async function summariseThemes(advisors: { name: string; improvements: string[] 
   })
   if (!r.ok) throw new Error('Anthropic ' + r.status + ': ' + (await r.text()).slice(0, 200))
   const data = await r.json()
-  if (data.stop_reason === 'max_tokens') throw new Error('theme summary truncated at max_tokens')
+  if (data.stop_reason === 'max_tokens') throw new Error('positives summary truncated at max_tokens')
   const text = String(data.content?.[0]?.text || '')
   const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
-  const themes = Array.isArray(parsed.themes) ? parsed.themes : []
-  return themes.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 5)
+  const positives = Array.isArray(parsed.positives) ? parsed.positives : []
+  return positives.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 5)
 }
