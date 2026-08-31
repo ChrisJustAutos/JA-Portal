@@ -338,6 +338,8 @@ If you land on one from an old bookmark you get a short "not in use" notice expl
 4. Pick and pack the order against the paperwork.
 5. **Ship Now.** This is the step that actually despatches: it manifests the consignment with the carrier, converts the MYOB order into a tax invoice, receipts the payment against it, prints the A4 tax invoice and emails the distributor their tracking.
 
+**⚠ "Mark as shipped" is not the same thing.** It only records that the goods went out - it raises no consignment and does no MYOB work, so there is **no tax invoice**. That is deliberate, and it is the right button for an order that left another way. But if you use it on an order that should be invoiced, someone has to convert the sale order to an invoice in MYOB by hand. The customer's payment lands in MYOB either way.
+
 **⚠ Ship the run in one action, not one order at a time.** MachShip books a carrier *pickup* when you manifest, so shipping ten orders individually raises ten pickup requests. Select the whole run and ship it once.
 
 **If nothing is reaching the carrier**, the usual answer is that Book Freight was pressed but Ship Now was not.
