@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { addDarkBasemap } from '../../lib/map-basemap'
 import { useToast } from '../ui/Feedback'
 
 interface MonthCell { quotes: number; quotesValue: number; bookings: number; bookingsValue: number }
@@ -90,8 +91,9 @@ export default function DistributorMapDashboard() {
   // ── Map bootstrap ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!data || !mapDivRef.current || mapRef.current) return
-    const map = L.map(mapDivRef.current, { zoomControl: true, attributionControl: false, minZoom: 3, worldCopyJump: true }).setView([-25.8, 134], 4)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, subdomains: 'abcd' }).addTo(map)
+    const map = L.map(mapDivRef.current, { zoomControl: true, attributionControl: true, minZoom: 3, worldCopyJump: true }).setView([-25.8, 134], 4)
+    map.attributionControl.setPrefix(false)   // Esri's terms require the credit; drop Leaflet's own plug
+    addDarkBasemap(L, map)
     layerRef.current = L.layerGroup().addTo(map)
     mapRef.current = map
   }, [data])

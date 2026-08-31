@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { addDarkBasemap } from '../../lib/map-basemap'
 import { useToast } from '../ui/Feedback'
 import { pcState } from '../../lib/workshop-map/postcode-state'
 
@@ -192,10 +193,11 @@ export default function WorkshopMapDashboard() {
     // worldCopyJump: panning across the antimeridian snaps back to the canonical
     // world copy — without it, scrolling "around the world" lands on a copy where
     // tiles render but every marker/polygon is missing.
-    const map = L.map(mapDivRef.current, { zoomControl: true, attributionControl: false, minZoom: 3, worldCopyJump: true }).setView([-25.8, 134], 4)
+    const map = L.map(mapDivRef.current, { zoomControl: true, attributionControl: true, minZoom: 3, worldCopyJump: true }).setView([-25.8, 134], 4)
+    map.attributionControl.setPrefix(false)   // Esri's terms require the credit; drop Leaflet's own plug
     map.createPane('landPane'); map.getPane('landPane')!.style.zIndex = '250'
     map.createPane('lblPane'); map.getPane('lblPane')!.style.zIndex = '360'; map.getPane('lblPane')!.style.pointerEvents = 'none'
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, subdomains: 'abcd' }).addTo(map)
+    addDarkBasemap(L, map, { labels: false })   // this map draws its own state/city labels below
     // Embedded AU state polygons — the country renders even if tiles are blocked.
     fetch('/map/au-states.min.geojson').then(r => r.json()).then(geo => {
       if (!mapRef.current) return
