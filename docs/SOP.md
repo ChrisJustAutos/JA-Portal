@@ -609,6 +609,18 @@ One person can belong to more than one distributor and switch between them in th
 
 Admin → B2B → Catalogue. Prices and visibility are editable inline; the drawer has the full record. Bundles ("includes") ship inside the parent's box, which affects freight, so check the packing plan after changing one.
 
+**The catalogue now pulls from MYOB every hour** (from 1 September 2026 — it used to refresh only when someone pressed **Sync**). The Sync button still works and is still worth pressing if you have just changed something in MYOB and want it immediately.
+
+What the hourly pull changes, and what it leaves alone:
+
+| Refreshed from MYOB every hour | Never touched — the portal owns it |
+|---|---|
+| SKU, name, **RRP**, GST status, **cost price** | **Trade price** (what distributors pay), visibility, description, category, images |
+
+**⚠ A price rise in MYOB does NOT move the trade price.** If an RRP goes up and the trade price stays put, an item you set at 20% off quietly becomes a bigger discount — and nothing warns you. **After any MYOB price change, re-check the trade prices for those items** and re-apply the discount in the catalogue. This is the one thing the automatic sync cannot do for you.
+
+**⚠ Clearing a cost in MYOB does not clear it here.** A blank or zero cost is ignored and the previous figure stays, so cost price can look right when MYOB no longer holds one.
+
 ### 4.8 Training
 
 Admin → B2B → Training. Assign a course to a whole distributor or to named people — courses are invisible until assigned. You can generate a course from an uploaded PDF. Preview plays the real course without recording an attempt.

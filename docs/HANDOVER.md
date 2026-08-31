@@ -13,7 +13,7 @@ An internal management platform for **Just Autos**, covering two MYOB business e
 - **JAWS** — Just Autos Wholesale (distribution arm, holds stock, ~14 distributors across Australia)
 - **VPS** — Vehicle Performance Solutions (the workshop entity; runs on **Mechanics Desk**, which remains the system of record — see §7.2)
 
-It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (27 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
+It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (28 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
 
 | | |
 |---|---|
@@ -345,7 +345,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 
 ## 6. Scheduled automation
 
-### 6.1 Vercel crons (27 — `vercel.json`; schedules are UTC; Brisbane = UTC+10)
+### 6.1 Vercel crons (28 — `vercel.json`; schedules are UTC; Brisbane = UTC+10)
 
 | Cron | Brisbane time | Purpose |
 |---|---|---|
@@ -370,6 +370,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 | `/api/cron/overnight-leads-snapshot` (+morning variant) | every 30 min / 5 min 06–08 | Snapshot Monday lead groups for the sales recap |
 | `/api/cron/letter-watch` | hourly | New finalised MYOB VPS invoices → thank-you letter + envelope print jobs (deposit-only invoices vetoed) |
 | `/api/cron/agents` | every 15 min | Monitoring agents framework (`lib/agent-framework`) |
+| `/api/cron/catalogue-sync` | hourly :35 | Pull JAWS Inventory into `b2b_catalogue` — refreshes SKU, name, RRP, taxable and cost. Never touches trade price, visibility, description or images |
 | `/api/cron/tune-jobs` | hourly :20 | Scan inbox for Stripe tune receipts; weekly distributor reminders + recap (Fri 08:00 Brisbane, retried through Sunday); escalations |
 | `/api/cron/b2b-dropship-confirm` | every 15 min | Supplier confirmation emails → full drop-ship receiving flow |
 | `/api/cron/mgmt-dashboard-warm` | 05:30 daily | Pre-compute Management Dashboard MYOB bundles |
@@ -530,6 +531,15 @@ The run itself vanished without a trace: `notified_at` stamps exist at 23:20:54Z
 **MYOB requires `FreightTaxCode` on an Item Bill even when `Freight` is 0 (2026-08-26).** Omit it and the POST is rejected outright with "FreightTaxCode is required". `convertDropShipPoToBill` only set it inside `if (Freight > 0)` - and a drop-ship PO never carries freight, because the supplier ships direct and bills separately - so **every** drop-ship bill had been failing (MPI PO 00001382, B2B-2026-000052). It now always sends `Freight` plus a `FreightTaxCode`, GST when there is freight and FRE when there is not, mirroring what the sale-invoice path already did. `lib/ap-myob-bill.ts:43` had documented this rule all along; the B2B and workshop purchase paths never picked it up. **`lib/workshop-po.ts` had the identical gap and was fixed pre-emptively** - it would have failed the first time a workshop PO was pushed to MYOB. If you add another `Purchase/Bill/*` POST, send both fields.
 
 **Drop-ship receive: four faults that compounded (2026-08-26).** B2B-2026-000052 surfaced all of them at once. (1) `receiveDropShipPo` ran the sale-order -> invoice conversion **regardless of whether the PO bill succeeded**; for a drop-ship line the conversion consumes exactly the stock the bill receives, so an unbilled PO guarantees `Inventory_InsufficientStockMultipleLocation` - an inventory error that names nothing about the cause. It is now gated on every PO having `myob_bill_uid`, and skips with the outstanding POs named. (2) Bill failures were pushed into `steps` but **never written to `b2b_order_events`**, while invoice failures were - so the page showed the symptom and hid the cause. Now emits `dropship_po_bill_failed`. (3) The Slack alert in `b2b-dropship-confirm-watch` reads `run.error`, which the function never set on the completion path, so a failed receive posted "hit a snag" and nothing else. The first failing step is now returned as `error`. (4) `.slice(0, 500)` on MYOB error bodies kept the boilerplate and cut the specifics - the real event was truncated one character before the item name. `myobDetail()` collapses MYOB's pretty-printed JSON whitespace (which was eating the budget) and, if still over, keeps **both** head and tail.
+
+**The catalogue syncs hourly (2026-09-01).** It used to refresh only when somebody pressed Sync on Admin → B2B → Catalogue, so an RRP or cost changed in MYOB stayed stale in the portal indefinitely. `/api/cron/catalogue-sync` now runs at :35 past the hour, calling the same `syncJawsCatalogue()` the button does with `performedBy = null`.
+
+Automating it is only safe because of the field ownership already built into `lib/b2b-catalogue-sync`: **MYOB-canonical** fields (`sku`, `name`, `rrp_ex_gst`, `is_taxable`, `cost_price_ex_gst`) refresh every run, while **portal-canonical** fields — `trade_price_ex_gst`, `b2b_visible`, `description`, `category_id`, images — are never overwritten. An hourly run therefore cannot change what a distributor pays, and cannot make an unreviewed item visible. The run logs its counts every time, including when nothing changed, because a sync that has silently stopped working looks exactly like a sync with nothing to do.
+
+Two known gaps, both pre-existing and neither closed by the cron:
+
+- **A price rise in MYOB does not move the trade price.** RRP updates, `trade_price_ex_gst` stays where it was set, so an item deliberately placed at "20% off RRP" quietly becomes a deeper discount and nothing reports it. The fix is a drift report comparing each trade price against the current RRP — not built.
+- **A zero or blank cost in MYOB does not clear the stored cost.** The upsert only writes `cost_price_ex_gst` when `StandardCost > 0`, so a cleared MYOB cost leaves the previous figure in place. Deliberate (it stops a blank field wiping good data) but it means a stale cost can persist unseen; 17 of 110 items currently carry no cost at all.
 
 **Line money is anchored on the INC-GST price (2026-09-01).** Catalogue prices are stored ex-GST at 2dp, but the number a distributor is quoted — and the number on the price list — is the inc figure, and the two cannot both be exact. An airbox at $1495 RRP less 20% is **$1196.00 inc**, which is $1087.2727… ex; stored as `1087.27` and multiplied out, five of them came to **$5979.99** on order `JAWSB2B0100`. Chris: *"It keeps adding a cent here and there and removing."* It was never random — **72 of the 83 taxable catalogue items** round by more than half a cent per unit, so the drift grows with quantity.
 
@@ -1020,6 +1030,7 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 - **`JAWSB2B####` has 9999 slots** and the allocator **raises** rather than wrapping (because `lpad` truncates, which would silently mint a duplicate). At ~350 orders/year that is decades away, but widening it needs a matching rethink of the drop-ship `-n` suffix budget — 5 digits leaves only 1 character inside MYOB's 13-char cap.
 - **Admin → B2B → Settings still exposes MYOB invoice number prefix / padding / next number**, which now govern only the *fallback* allocator, not new order numbers. The section is retitled "fallback only" with a description saying so, but the fields are still editable and still look authoritative.
 - **The coaching section can still miss a call whose analysis lags more than 45 minutes** (the 16:30 cutoff against a 27-min p95), and a posting day skipped entirely orphans its window — the hourly cron plus Brisbane-date marker makes that rare. The cutoff is one constant (`CUTOFF_MINUTES` in `lib/calls-daily-recap.ts`) if the analyser slows down.
+- **Catalogue trade prices drift silently against RRP.** The hourly sync refreshes RRP but never `trade_price_ex_gst`, so a MYOB price rise widens the distributor's discount with no warning. A drift report is the fix.
 - MYOB→Xero migration: foundation only — adapter waves per module still to come; both entities eventually move.
 
 ---

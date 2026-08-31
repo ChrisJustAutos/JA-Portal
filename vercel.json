@@ -50,6 +50,9 @@
     "pages/api/cron/sales-update.ts": {
       "maxDuration": 300
     },
+    "pages/api/cron/catalogue-sync.ts": {
+      "maxDuration": 300
+    },
     "pages/api/b2b/admin/orders/[id]/book-freight.ts": {
       "maxDuration": 120
     },
@@ -224,6 +227,10 @@
     {
       "path": "/api/cron/tune-jobs",
       "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/cron/catalogue-sync",
+      "schedule": "35 * * * *"
     },
     {
       "path": "/api/cron/b2b-dropship-confirm",
