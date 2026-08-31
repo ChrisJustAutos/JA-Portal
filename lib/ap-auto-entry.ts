@@ -145,6 +145,14 @@ export interface AutoEntryItem {
   billUid?: string | null
   adopted?: boolean
   error?: string
+  /**
+   * This attachment already posted its OWN Slack card explaining why nothing
+   * was entered (own document, quote). The never-silent guard must treat the
+   * email as explained, or accounts gets two cards for one email and the
+   * second one contradicts the first (Chris 2026-09-01: a credit note read
+   * perfectly as CR1066 / $405 and was then reported as "3 unreadable").
+   */
+  notified?: boolean
   // dry-run preview of the Slack card
   slackText?: string
 }
@@ -458,12 +466,21 @@ async function runMailbox(
     // lists what the attachments resolved to rather than assuming a pasted
     // picture (which cried wolf on real PDF re-sends).
     const invoiceySubject = /invoice|receipt|bill/i.test(msg.subject || '')
-    const handled = thisMsgOutcomes.some(o => o === 'posted' || o === 'flagged' || o === 'skipped_duplicate')
+    // An attachment that already posted its OWN card (own document, quote) has
+    // EXPLAINED the email — firing this notice too gives accounts two cards for
+    // one email, and the second contradicts the first by calling a document
+    // that read perfectly "unreadable" (Chris 2026-09-01, credit note CR1066).
+    const selfExplained = msgAllItems.some(i => i.notified)
+    const handled = selfExplained
+      || thisMsgOutcomes.some(o => o === 'posted' || o === 'flagged' || o === 'skipped_duplicate')
     const anyFresh = thisMsgOutcomes.length > 0
     if (!dryRun && anyFresh && !handled && invoiceySubject && isStaffSender(msg.from)) {
+      // "not an invoice" rather than "unreadable": skipped_not_invoice means the
+      // document was READ and judged not to be a bill (a signature image, a
+      // receipt alongside an invoice). Only the error path is truly unreadable.
       const skN = thisMsgOutcomes.filter(o => o === 'skipped_not_invoice').length
       const errN = thisMsgOutcomes.filter(o => o === 'error').length
-      const detail = [skN ? `${skN} unreadable` : '', errN ? `${errN} errored` : ''].filter(Boolean).join(', ')
+      const detail = [skN ? `${skN} not an invoice` : '', errN ? `${errN} unreadable` : ''].filter(Boolean).join(', ')
       const text = [
         `🕳 *Nothing entered from a staff invoice email*`,
         `“${msg.subject || '(no subject)'}” from *${msg.from}* — ${thisMsgOutcomes.length} attachment${thisMsgOutcomes.length === 1 ? '' : 's'} processed (${detail || 'none recognised'}), no invoice entered.`,
@@ -904,7 +921,7 @@ async function processInvoice(
       ts = await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile)
       await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, error: 'self-entity vendor — own outbound document, not entered', slackTs: ts })
     }
-    return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
+    return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [], notified: true }
   }
 
   // Quote guard. A quote/quotation/estimate is an OFFER, not a bill — posting
@@ -940,7 +957,7 @@ async function processInvoice(
       ts = await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile)
       await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, error: 'quote/estimate document — not an invoice, not entered', slackTs: ts })
     }
-    return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
+    return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [], notified: true }
   }
 
   // Statement guard. Statement-named documents belong to the statement watcher
