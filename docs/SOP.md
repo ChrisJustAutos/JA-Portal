@@ -1043,6 +1043,20 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 
 ---
 
+### What a quote figure on the Workshop Map means
+
+**One entry per customer per month, valued at the AVERAGE of that customer's quotes that month** (from 1 September 2026 — it used to show the highest).
+
+The workshop re-quotes the same job all the time — a revision, a changed spec, a follow-up — so counting every quote would make the quote count and the conversion rate meaningless. Grouping by customer and month fixes that; averaging stops one large revision setting the value.
+
+- A customer quoted **three times in March** appears **once**, at the average of the three.
+- The same customer quoted again **in June** appears **again** — it is per month, not per year.
+- Where a figure is an average, the map popup shows **avg ×N** beside it, and the CSV export has a **Quotes averaged** column.
+
+**Expect totals about 6% lower than before**, which is the change in method, not a drop in quoting. Around a quarter of customer-months have more than one quote.
+
+**⚠ The map updates overnight.** The figures rebuild in the 3:30am run, so a change made today shows tomorrow.
+
 ### Restricting someone to just a few screens
 
 **Hiding tabs is not the same as removing access.** The tab list controls what a person SEES in the menu; their **role** controls what they can actually open. Someone left on Admin or Manager can still reach any page by typing its address, however few tabs they have.

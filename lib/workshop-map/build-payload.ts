@@ -6,7 +6,7 @@
 // caches it verbatim for the read API.
 
 import {
-  VEHICLE_CATS, VehicleGroup, bestChassis, dedupLargestPerCustomerMonth, fyMonths,
+  VEHICLE_CATS, VehicleGroup, bestChassis, dedupLargestPerCustomerMonth, dedupAveragePerCustomerMonth, fyMonths,
 } from './vehicle-classification'
 
 export interface MapInvoiceRow {
@@ -146,10 +146,24 @@ export function buildFyPayload(fy: number, invoices: MapInvoiceRow[], quotes: Ma
   })
 
   // Quotes are NOT noise-filtered — dedup only.
+  //
+  // ONE entry per customer per month, valued at the AVERAGE of that customer's
+  // quotes in the month (Chris 2026-09-01 — it used to take the largest). The
+  // workshop re-quotes the same job, so counting each one would inflate both
+  // the quote count and the conversion denominator; averaging keeps the count
+  // honest without letting one big revision set the value. The representative
+  // row is still the largest quote, so the pin, vehicle group, quote number,
+  // date and won flag are exactly as before — only the amount moves.
   const fyQuotes = quotes.filter(r => r.fy === fy && r.month && r.monthIndex != null)
-  const dedupQuotes = dedupLargestPerCustomerMonth(
+  const quoteGroups = dedupAveragePerCustomerMonth(
     fyQuotes.map(r => ({ customerId: r.customerId, month: r.month!, amount: r.totalAmount, row: r })),
-  ).map(d => d.row)
+  )
+  // Override totalAmount on the representative so EVERY downstream figure —
+  // the pin, total_value and the conversion chart's qval — reads the average.
+  // They all derive from this one array, so they cannot disagree.
+  const dedupQuotes: (MapQuoteRow & { quoteCount: number })[] = quoteGroups.map(g => ({
+    ...g.row.row, totalAmount: r2(g.amount), quoteCount: g.count,
+  }))
 
   const quotePoints = dedupQuotes.filter(r => r.lat != null && r.lng != null).map(r => {
     const p: any = {
@@ -157,6 +171,9 @@ export function buildFyPayload(fy: number, invoices: MapInvoiceRow[], quotes: Ma
       m: r.monthIndex, g: r.group, c: r.customerName || '', a: r2(r.totalAmount),
       i: r.quoteNumber, d: r.quoteDate || '',
     }
+    // How many quotes the average is over. Omitted when it's a single quote,
+    // so the map only qualifies the number when it needs qualifying.
+    if (r.quoteCount > 1) p.n = r.quoteCount
     if (r.won) p.w = 1
     if (r.inferred) p.x = 1
     return p

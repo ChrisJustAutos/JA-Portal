@@ -18,7 +18,8 @@ import { pcState } from '../../lib/workshop-map/postcode-state'
 
 type ViewKey = 'jobs' | 'quotes' | 'conv' | 'state' | 'trend'
 
-interface Pt { la: number; ln: number; pc: string; l: string; m: number; g: string; c: string; a: number; j?: string; i?: string; d?: string; x?: number; w?: number }
+// n = how many quotes `a` is the average of (quotes only, omitted when 1).
+interface Pt { la: number; ln: number; pc: string; l: string; m: number; g: string; c: string; a: number; j?: string; i?: string; d?: string; x?: number; w?: number; n?: number }
 interface Payload {
   fy: number
   months: { k: string; label: string }[]
@@ -165,12 +166,12 @@ export default function WorkshopMapDashboard() {
     const mLabel = (m: number) => P?.months[m]?.label || ''
     const head = isJobs
       ? ['Date', 'Month', 'Customer', 'Vehicle', 'Job type', 'Invoice #', 'Amount inc GST', 'Suburb', 'Postcode', 'State']
-      : ['Date', 'Month', 'Customer', 'Vehicle', 'Quote #', 'Won', 'Amount inc GST', 'Suburb', 'Postcode', 'State']
+      : ['Date', 'Month', 'Customer', 'Vehicle', 'Quote #', 'Won', 'Avg amount inc GST', 'Quotes averaged', 'Suburb', 'Postcode', 'State']
     const body = [...rows]
       .sort((a, b) => (a.d || '').localeCompare(b.d || '') || a.m - b.m || b.a - a.a)
       .map(v => isJobs
         ? [v.d || '', mLabel(v.m), v.c, NAME[v.g] || v.g, v.j || '', v.i || '', v.a.toFixed(2), v.l, v.pc, pcState(v.pc)]
-        : [v.d || '', mLabel(v.m), v.c, NAME[v.g] || v.g, v.i || '', v.w ? 'Yes' : 'No', v.a.toFixed(2), v.l, v.pc, pcState(v.pc)])
+        : [v.d || '', mLabel(v.m), v.c, NAME[v.g] || v.g, v.i || '', v.w ? 'Yes' : 'No', v.a.toFixed(2), String(v.n || 1), v.l, v.pc, pcState(v.pc)])
     const cell = (x: any) => {
       const t = String(x ?? '')
       return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t
@@ -248,7 +249,7 @@ export default function WorkshopMapDashboard() {
         .map(([k, v]) => `<div class="pvtag"><i style="background:${COL[k]}"></i>${NAME[k]} <b>${v.n}</b> ${fmtK(v.t)}</div>`).join('')
       const CAP = 40
       const rows = [...o.inv].sort((a, b) => b.a - a.a).slice(0, CAP)
-        .map(v => `<div class="pop-row"><div><div class="cn"><span class="vdot" style="background:${COL[v.g]}"></span>${esc(v.c)}${v.x ? ' <span class="inf" title="Series inferred">≈</span>' : ''}${v.w ? ' <span class="won">✓ WON</span>' : ''}</div>${v.j || v.i ? `<div class="jt">${esc(v.j || '')}${v.j && v.i ? ' ' : ''}${v.i ? `<span class="pop-inv">#${esc(v.i)}${v.d ? ' · ' + esc(dmy(v.d)) : ''}</span>` : ''}</div>` : ''}</div><div class="am" style="color:${amColor}">${fmtK(v.a)}</div></div>`).join('')
+        .map(v => `<div class="pop-row"><div><div class="cn"><span class="vdot" style="background:${COL[v.g]}"></span>${esc(v.c)}${v.x ? ' <span class="inf" title="Series inferred">≈</span>' : ''}${v.w ? ' <span class="won">✓ WON</span>' : ''}</div>${v.j || v.i ? `<div class="jt">${esc(v.j || '')}${v.j && v.i ? ' ' : ''}${v.i ? `<span class="pop-inv">#${esc(v.i)}${v.d ? ' · ' + esc(dmy(v.d)) : ''}</span>` : ''}</div>` : ''}</div><div class="am" style="color:${amColor}">${fmtK(v.a)}${v.n ? `<span class="avgn" title="Average of ${v.n} quotes from this customer that month">avg ×${v.n}</span>` : ''}</div></div>`).join('')
       const wonS = view === 'quotes' ? `<div><b>${o.won}</b><span>Won</span></div>` : ''
       const moreS = o.inv.length > CAP ? `<div class="pop-more">Showing the ${CAP} largest of ${o.inv.length} — export for the full list</div>` : ''
       mk.bindPopup(
@@ -1380,6 +1381,7 @@ const CSS = `
 .wm-dash .chip .dot{width:10px;height:10px;border-radius:50%}
 .wm-dash .chip .nm{font-family:'Barlow Condensed';font-weight:800;font-size:13px;text-transform:uppercase;white-space:nowrap;color:var(--wm-txt)}
 .wm-dash .chip .num{font-family:'Space Mono';font-size:10px;color:var(--wm-muted);white-space:nowrap}
+.wm-dash .avgn{display:block;font-size:9.5px;font-weight:600;opacity:.6;letter-spacing:.02em}
 .wm-dash .chip.dim{opacity:.38}.wm-dash .chip.active{box-shadow:0 0 0 1px currentColor inset}
 .wm-dash .wrap{flex:1 1 auto;position:relative;min-height:0}
 .wm-dash .mapdiv{position:absolute;inset:0;background:#080b10}

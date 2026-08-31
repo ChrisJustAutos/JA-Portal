@@ -245,6 +245,36 @@ export const isWon = (status?: string | null) => WON_STATUSES.has((status ?? "")
 // Dedup: 1 per (customerId, month), keep the largest-value row.
 // Apply to BOTH jobs and quotes so conversion is like-for-like.
 // ----------------------------------------------------------------------------
+/**
+ * Group quotes by customer+month and AVERAGE their value (Chris 2026-09-01:
+ * "Can we average the quote value out rather than the highest value").
+ *
+ * Still ONE entry per customer per month - the workshop re-quotes the same job
+ * (revisions, changed spec, a follow-up), so counting each one inflates the
+ * quote count and the conversion denominator. What changes is the VALUE: three
+ * quotes at $4k / $9k / $12k now read $8,333 rather than $12k.
+ *
+ * The REPRESENTATIVE row is still the largest quote, so the pin location, the
+ * vehicle group, the quote number, the date and the won flag are unchanged -
+ * only the amount moves. `count` is returned so the map can say what the
+ * average is over, rather than showing a number that matches no single quote.
+ */
+export function dedupAveragePerCustomerMonth<T extends { customerId?: string | null; month: string; amount: number }>(
+  rows: T[],
+): { row: T; amount: number; count: number }[] {
+  const groups: Record<string, T[]> = {};
+  for (const r of rows) {
+    const key = `${r.customerId ?? "?"}|${r.month}`;
+    (groups[key] ||= []).push(r);
+  }
+  return Object.values(groups).map((g) => {
+    let rep = g[0];
+    for (const r of g) if (r.amount > rep.amount) rep = r;
+    const total = g.reduce((s, r) => s + r.amount, 0);
+    return { row: rep, amount: total / g.length, count: g.length };
+  });
+}
+
 export function dedupLargestPerCustomerMonth<T extends { customerId?: string | null; month: string; amount: number }>(
   rows: T[],
 ): T[] {
