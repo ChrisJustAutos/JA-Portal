@@ -14,7 +14,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
-import { assignTuneJobDistributor, dismissTuneJob, syncTuneJobDownstream, sendTuneJobReminders, ingestTuneJobEmails, adminEditTuneJob } from '../../../../lib/b2b-tune-jobs'
+import { assignTuneJobDistributor, dismissTuneJob, syncTuneJobDownstream, sendTuneJobReminders, sendTuneJobRecap, ingestTuneJobEmails, adminEditTuneJob } from '../../../../lib/b2b-tune-jobs'
 
 export const config = { maxDuration: 300 }
 
@@ -109,8 +109,22 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         return res.status(200).json({ ok: true })
       }
       if (action === 'remind_now') {
+        // This button is the catch-up when the weekly run is missed, so it has
+        // to produce BOTH halves of that run - it used to chase distributors
+        // and leave Matt with no recap, which is how a skipped Friday went
+        // unnoticed until someone asked (Chris, 2026-08-31).
         const r = await sendTuneJobReminders()
-        return res.status(200).json({ ok: true, ...r })
+        const recap = await sendTuneJobRecap(r).catch(e => {
+          console.error('tune-job recap (manual) failed:', e?.message || e)
+          return null
+        })
+        return res.status(200).json({
+          ok: true, ...r,
+          recap_sent: !!recap?.sent,
+          recap_rows: recap?.rows ?? null,
+          message: `Chased ${r.jobs} job${r.jobs === 1 ? '' : 's'} across ${r.distributors} distributor${r.distributors === 1 ? '' : 's'}.`
+            + (recap?.sent ? ' Recap emailed.' : ' Recap FAILED to send — check the logs.'),
+        })
       }
       if (action === 'create_test_job') {
         // Self-contained MD-import test: a fabricated job under an internal

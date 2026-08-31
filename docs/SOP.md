@@ -279,6 +279,16 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **⚠ Re-send does not re-raise the PO**, so it can't create a duplicate in MYOB. "Re-raise drop-ship PO" is the one that does - only use it if the PO itself is wrong.
 
+### 4.1e-i The Friday tune-job chase
+
+Every Friday morning the portal emails each distributor the tune jobs still waiting on customer details, then emails Matt a recap of who was chased, who wasn't, and what is outstanding.
+
+**If the recap doesn't arrive on Friday, it is not lost.** Since 31 August the run retries on any hour through Saturday and Sunday, and stops once it has been done for that week. Before that it fired in a single pass, and one missed pass cost the whole week - which is what happened on 28 August: 237 jobs went unchased and nobody knew until Matt mentioned it.
+
+**If it still hasn't gone by Sunday** - or you want it sent early - open **Admin > B2B > Tune Jobs** and press **Send reminders now**. That sends both halves: the distributor chasers and Matt's recap. The reply tells you how many were chased and whether the recap went. Pressing it twice in a week is safe: a distributor already chased in the last 6.5 days is skipped.
+
+**⚠ A missed week is not chased on Monday.** From Monday the window is closed and it waits for the next Friday, deliberately - so nobody gets a "weekly" chase on the wrong day without someone choosing it. If a week was missed, use the button.
+
 ### 4.1e Tune jobs: reading the filters
 
 **Admin > B2B > Tune Jobs.** Two filters, and they now cross-cut properly (26 August 2026). Pick a distributor and the status tabs count **that distributor's** jobs; pick a status and the distributor list counts jobs **in that status**. Until now the tabs always counted every job in the system, so selecting Penrith still read "187 awaiting details" while the table below showed only theirs.

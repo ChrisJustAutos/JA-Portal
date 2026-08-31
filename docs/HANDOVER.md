@@ -342,7 +342,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 | `/api/cron/overnight-leads-snapshot` (+morning variant) | every 30 min / 5 min 06–08 | Snapshot Monday lead groups for the sales recap |
 | `/api/cron/letter-watch` | hourly | New finalised MYOB VPS invoices → thank-you letter + envelope print jobs (deposit-only invoices vetoed) |
 | `/api/cron/agents` | every 15 min | Monitoring agents framework (`lib/agent-framework`) |
-| `/api/cron/tune-jobs` | hourly :20 | Scan inbox for Stripe tune receipts; Monday-morning reminders/escalations |
+| `/api/cron/tune-jobs` | hourly :20 | Scan inbox for Stripe tune receipts; weekly distributor reminders + recap (Fri 08:00 Brisbane, retried through Sunday); escalations |
 | `/api/cron/b2b-dropship-confirm` | every 15 min | Supplier confirmation emails → full drop-ship receiving flow |
 | `/api/cron/mgmt-dashboard-warm` | 05:30 daily | Pre-compute Management Dashboard MYOB bundles |
 | `/api/cron/leave-decisions` | every 15 min | Leave applications decided on the Monday board → email the applicant (approved *and* denied), cc/reply-to HR. Only items on the application path count — see §7.17. `LEAVE_EMAILS_ENABLED=false` switches it off |
@@ -437,6 +437,21 @@ What the portal *does* provide around MD, all of it in daily use:
 ### 7.3 B2B — distributor portal (`/b2b/*`)
 
 Distributor experience: Shop → Cart (PO number required, ≤20 chars — MYOB limit) → Stripe Checkout (card+surcharge / PayTo / BECS) → Orders (status timeline + freight tracking) → Jobs (tune receipts to fill in) → Resources → Training → Team → Settings.
+
+**The weekly tune-job chase is a WINDOW now, not one run (2026-08-31).** It used to fire only where `bris.getUTCDay() === 5 && bris.getUTCHours() === 8` - a single hourly pass per week, at 22:20 UTC. Miss that one run and the entire week's distributor chasing AND the recap to Matt were skipped, silently, with nothing to notice it by. That is what happened on **Friday 28 August**: `last_reminder_at` stopped at 2026-08-20 22:21, 237 jobs went unchased and Matt got no recap, and nobody knew until he said so three days later.
+
+The run itself vanished without a trace: `notified_at` stamps exist at 23:20:54Z and 04:20:39Z either side, but nothing at 22:20Z, so that pass had no effect at all rather than failing part-way. A production deployment was created at **22:18:59Z, 61 seconds before it** (one of seven that hour), and Vercel re-registers crons on deploy, so a changeover collision is the most likely cause. A transient throw is the other candidate and cannot be ruled out from here - runtime logs are long past retention. The fix removes sensitivity to both.
+
+- **Window**: Friday 08:00 Brisbane through Sunday. Any hourly pass in that window will do the work.
+- **Marker**: `app_settings.tune_jobs_weekly_chase_friday` holds *that Friday's Brisbane date*, so it happens once per week however many passes fall inside the window.
+- **Written as `daysSinceFriday = (getUTCDay() - 5 + 7) % 7`, deliberately not a `getUTCDay() >= 5` test** - Sunday is `0`, so the `>=` form silently drops the last day of the catch-up window.
+- **The marker is set only once BOTH the reminders and the recap have gone.** A failed recap therefore retries next hour, and the reminders that re-run alongside it send nothing new: `sendTuneJobReminders` only picks jobs whose `last_reminder_at` is null or older than 6.5 days, so re-entry cannot chase a distributor twice in a week.
+- **Monday starts a new week.** A week missed entirely is not chased late - the catch-up is deliberate, not open-ended.
+- `ingestTuneJobEmails` is now wrapped in `.catch()` like every other step. It was the one unguarded call in the handler, so a Graph hiccup would have taken the weekly block down with it.
+
+**The "Send reminders now" button sends the recap too (2026-08-31).** It called `sendTuneJobReminders()` alone, so the manual remedy chased distributors and still left Matt with nothing - the one path most likely to be used *because* a scheduled run was missed. It now runs both and returns `recap_sent` so the operator can see it happened.
+
+**Related risk, not changed:** `/api/cron/calls-weekly-report` (`0 21 * * 0`) and `/api/cron/workshop-map-weekly` (`10 21 * * 0`) are also once-a-week single slots, and a deploy landing on them would skip them the same way. They are scheduled by Vercel rather than gated in code, so they have no marker to retry from.
 
 **Tune-job recap to Matt (2026-08-26).** `sendTuneJobRecap()` in `lib/b2b-tune-jobs.ts` runs from `/api/cron/tune-jobs` straight after `sendTuneJobReminders()`, i.e. on the Friday 08:20 Brisbane pass and on any manual `?remind=1` / "Send reminders now". One email to `TUNE_JOBS_RECAP_EMAIL` (default `matt.h@justautosmechanical.com.au`) with per-distributor outstanding count, oldest-job age, dollar value and whether they were chased. It reports EVERY distributor with jobs outstanding, not only those emailed - a distributor with no portal login receives no reminder and would otherwise be invisible, so they are called out explicitly. Uses the same `tuneJobVisible()` delay filter as the reminders so it can never quote a job the distributor has not been shown. Wrapped in `.catch()` in the cron: a recap that fails must not cost the reminders that already went. `tuneJobRecapRows()` is exported separately so the figures can be checked without sending.
 
