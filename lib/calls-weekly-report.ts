@@ -95,18 +95,31 @@ export interface WeeklyReportResult {
   narrative?: any
 }
 
-async function fetchWeek(days: number): Promise<{ advisors: AdvisorWeek[]; total: number; weekLabel: string; notable: { best: NotableCall | null; worst: NotableCall | null } }> {
+/**
+ * Window options. Absent = the rolling `days`-back behaviour the Monday report
+ * has always used; passing an explicit range lets the DAILY recap ask for one
+ * Brisbane calendar day instead (lib/calls-daily-recap.ts). The weekly path
+ * calls this with no opts, so its behaviour is unchanged.
+ */
+export interface CoachingWindowOpts { fromIso?: string; toIso?: string; label?: string }
+
+export async function fetchCoachingWindow(days: number, opts: CoachingWindowOpts = {}): Promise<{ advisors: AdvisorWeek[]; total: number; weekLabel: string; notable: { best: NotableCall | null; worst: NotableCall | null } }> {
   const c = sb()
-  const fromIso = new Date(Date.now() - days * 86400_000).toISOString()
+  const fromIso = opts.fromIso || new Date(Date.now() - days * 86400_000).toISOString()
+  const toIso = opts.toIso || null
 
   // PAGED: a week is now >1000 calls (1122 in the week to 2026-08-24), and
   // PostgREST caps responses at 1000 rows however big the .limit() — silently.
   // The old `.limit(1500)` with a call_date-desc sort kept the newest 1000 and
   // dropped the START of the week from every Monday report. See
   // lib/supabase-paged.ts.
-  const calls = await selectAllRows<any>(() => c.from('calls')
-    .select('id, call_date, direction, external_number, caller_name, effective_advisor_name, effective_advisor_slack_user_id, agent_name, agent_ext, billsec_seconds, duration_seconds')
-    .gte('call_date', fromIso), 'id')
+  const calls = await selectAllRows<any>(() => {
+    let q = c.from('calls')
+      .select('id, call_date, direction, external_number, caller_name, effective_advisor_name, effective_advisor_slack_user_id, agent_name, agent_ext, billsec_seconds, duration_seconds')
+      .gte('call_date', fromIso)
+    if (toIso) q = q.lt('call_date', toIso)     // only the daily recap bounds the top
+    return q
+  }, 'id')
   const callById = new Map(calls.map(cl => [cl.id, cl]))
   const ids = calls.map(cl => cl.id)
 
@@ -222,7 +235,7 @@ async function fetchWeek(days: number): Promise<{ advisors: AdvisorWeek[]; total
   advisors.sort((a, b) => b.scored - a.scored)
 
   const end = new Date()
-  const weekLabel = `week ending ${end.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Australia/Brisbane' })}`
+  const weekLabel = opts.label || `week ending ${end.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Australia/Brisbane' })}`
   const sorted = [...notableCandidates].sort((a, b) => b.score - a.score)
   const notable = {
     best: sorted[0] || null,
@@ -411,6 +424,8 @@ async function recordingAttachment(call: NotableCall, label: string): Promise<{ 
     return null
   }
 }
+
+const fetchWeek = (days: number) => fetchCoachingWindow(days)
 
 export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number; force?: boolean } = {}): Promise<WeeklyReportResult> {
   const days = Math.max(3, Math.min(Number(opts.days) || 7, 31))

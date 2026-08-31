@@ -586,12 +586,21 @@ export async function analyseCall(callId: string, opts: { dryRun?: boolean; rubr
     if (d?.id) dimensionLabels[d.id] = d.label || d.id
   }
 
-  const slacked = await postCoachingSlack({
-    call, outcome: parsed.outcome, callTypeId: callType?.id ?? null, salesScore,
-    summary: parsed.summary || null, identifiedName: advisorName, roster,
-    dimensionScores: salesScore == null ? null : parsed.dimension_scores,
-    dimensionLabels, rubricVersion: rubric.version, costMicroUsd, observations,
-  })
+  // Per-call cards are OFF by default since 2026-08-31. The channel was getting
+  // 100-140 of them a day (127 on 31 Aug), which is a firehose nobody reads;
+  // #sales-coaching now gets one end-of-day recap instead
+  // (lib/calls-daily-recap.ts, /api/cron/calls-daily-recap). Every call is
+  // still scored and readable in full at /calls - only the Slack card stopped.
+  // Set CALLS_COACHING_PER_CALL_CARDS=1 to bring them back without a deploy.
+  const perCallCards = process.env.CALLS_COACHING_PER_CALL_CARDS === '1'
+  const slacked = perCallCards
+    ? await postCoachingSlack({
+        call, outcome: parsed.outcome, callTypeId: callType?.id ?? null, salesScore,
+        summary: parsed.summary || null, identifiedName: advisorName, roster,
+        dimensionScores: salesScore == null ? null : parsed.dimension_scores,
+        dimensionLabels, rubricVersion: rubric.version, costMicroUsd, observations,
+      })
+    : false
 
   // Close out any queued job rows for this call so the UI stops polling.
   await c.from('analysis_jobs').update({ status: 'done', completed_at: new Date().toISOString() })

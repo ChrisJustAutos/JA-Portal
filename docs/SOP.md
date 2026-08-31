@@ -279,6 +279,25 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **⚠ Re-send does not re-raise the PO**, so it can't create a duplicate in MYOB. "Re-raise drop-ship PO" is the one that does - only use it if the PO itself is wrong.
 
+### 4.1e-f Sales coaching in Slack: one message a day
+
+**#sales-coaching now gets a single recap at about 6pm each weekday**, instead of a card for every call. It was posting 100-140 cards a day, which nobody could read.
+
+The recap carries four things:
+
+| Section | What it is |
+|---|---|
+| **Top call of the day** | The best-scoring call, with a link to listen |
+| **Coming up most often** | The coaching themes that recurred across the day |
+| **By advisor** | Calls, average score and weakest area, one line each |
+| **Worth a review** | The weakest call, with a link |
+
+**Nothing has been lost.** Every call is still recorded, transcribed, scored and coached - open **Calls** in the portal to read any of it in full, filter by advisor, or listen. Only the Slack card stopped.
+
+**⚠ A quiet day posts nothing at all.** If there were no analysed calls, there is no message - that is deliberate, not a fault.
+
+If you want the per-call cards back, that is a setting change rather than a rebuild - ask.
+
 ### 4.1e-g Payment surcharges end 1 October
 
 **From 1 October 2026 no payment surcharge is charged on any method** - card, PayTo or bank direct debit. Distributors pay the order total and nothing else. This is scheduled, not manual: nobody has to switch it off on the day.

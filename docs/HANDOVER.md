@@ -362,6 +362,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 | `/api/cron/b2b-payment-check` | every 6 h | Two passes: confirm BECS settlement in MYOB → mark `payment_settled_at`; and receipt any settled order that has no MYOB payment against it |
 | `/api/cron/b2b-reminders` | every 3 h | Abandoned carts (24 h + 72 h), unfinished checkouts (once at 24 h), and paid orders we haven't shipped (2 d, escalating at 5 d) |
 | `/api/cron/sales-update` | hourly :15, 17:15–21:15 Brisbane | 5:15pm sales post to #sales-updates — the day Mon–Thu, the week on Friday. Marker-guarded so it posts once |
+| `/api/cron/calls-daily-recap` | hourly :05, 18:05–21:05 Brisbane | One end-of-day coaching recap to #sales-coaching, replacing the per-call cards. Marker-guarded |
 | `/api/cron/crm-automations` | every 5 min | CRM automation flow engine |
 | `/api/cron/task-automations` | every 5 min | Tasks automation flow engine |
 | `/api/cron/crm-campaigns` | every 5 min | Campaign scheduler + Resend queue drain + call linkage |
@@ -465,6 +466,16 @@ What the portal *does* provide around MD, all of it in daily use:
 ### 7.3 B2B — distributor portal (`/b2b/*`)
 
 Distributor experience: Shop → Cart (PO number required, ≤20 chars — MYOB limit) → Stripe Checkout (card+surcharge / PayTo / BECS) → Orders (status timeline + freight tracking) → Jobs (tune receipts to fill in) → Resources → Training → Team → Settings.
+
+**#sales-coaching gets ONE message a day, not 120 (2026-08-31).** The channel was receiving a full coaching card per analysed call — **127 on 31 August**, 100-140 on any weekday. Chris: "send 1 message at the end of the day with a recap of coaching notes for that day". Per-call cards are now **off by default** (`CALLS_COACHING_PER_CALL_CARDS=1` brings them back without a deploy) and `/api/cron/calls-daily-recap` posts one recap at 18:05 Brisbane via `lib/calls-daily-recap.ts`. Nothing is lost: every call is still scored, transcribed and readable at `/calls` — only the Slack card stopped.
+
+Four sections, all four requested: **top call of the day** (with a portal link), **the themes that recurred**, **a per-advisor line** (calls, average, weakest dimension), and **one worth reviewing** (the weakest call).
+
+- **Figures come from `fetchCoachingWindow()`** — the Monday report's own assembler, now taking an optional explicit window. The weekly path calls it with no options, so its behaviour is byte-for-byte unchanged; the daily recap passes a **Brisbane calendar day**. A rolling 24-hour window would fold yesterday evening's calls into an 18:00 recap.
+- **The themes are SUMMARISED, not counted.** This is the trap: the analyser writes a long, unique paragraph per call ("The close was almost invisible. After Ben confirmed he wanted a quote…"), so a frequency count over those strings returns every item at n=1 and would have printed five arbitrary essays. Checking the actual data before shipping is what caught it. The recurring patterns are real — soft closes, shallow discovery, incomplete details captured — but they have to be read out of the prose, so a bounded LLM call (60 items, 320 chars each, `max_tokens` 1200) extracts them. **Fails open**: no key or any error omits that one section and the rest of the recap still posts.
+- **A day with nothing analysed posts nothing.** A "0 calls" message every Sunday is the noise this replaced.
+- Scheduled hourly 18:05-21:05 Brisbane with a date marker in `app_settings.calls_daily_recap_last_posted`, the same pattern as the sales update and for the same reason — a single daily slot that collides with a deploy is skipped silently. The marker is written only once Slack accepts, so an outage retries next hour.
+- `?send=1` on the cron forces a post regardless of time or marker.
 
 **Daily 5:15pm sales update to Slack (2026-08-31).** `lib/sales-update-slack.ts`, posted by `/api/cron/sales-update` to **#sales-updates**. Monday to Thursday it posts the day; **Friday it posts the week** with a Mon–Fri breakdown. Weekends are skipped — an empty post every Saturday trains people to ignore the channel.
 

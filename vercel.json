@@ -50,6 +50,9 @@
     "pages/api/cron/sales-update.ts": {
       "maxDuration": 120
     },
+    "pages/api/cron/calls-daily-recap.ts": {
+      "maxDuration": 300
+    },
     "pages/api/b2b/admin/orders/[id]/book-freight.ts": {
       "maxDuration": 120
     },
@@ -184,6 +187,10 @@
     {
       "path": "/api/cron/sales-update",
       "schedule": "15 7-11 * * *"
+    },
+    {
+      "path": "/api/cron/calls-daily-recap",
+      "schedule": "5 8-11 * * *"
     },
     {
       "path": "/api/cron/crm-automations",
