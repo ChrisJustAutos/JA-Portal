@@ -522,6 +522,21 @@ The run itself vanished without a trace: `notified_at` stamps exist at 23:20:54Z
 
 **"Check if payment cleared" (2026-08-25).** `POST /api/b2b/admin/orders/{id}/check-payment` retrieves the Stripe PaymentIntent (falling back to the checkout session, and backfilling `stripe_payment_intent_id` when it was never stored) and treats ONLY `succeeded` as cleared - `processing` is a BECS debit still in flight, which is the state the button exists to distinguish. On cleared it reproduces the `async_payment_succeeded` webhook's three effects in the same order: stamp `payment_settled_at` guarded on null, write a `payment_settled` event, and `applyCustomerPaymentInMyob()` if the sale invoice exists. Guarding on null makes it idempotent and race-safe against the webhook - whichever lands first wins and the other reports "already recorded". A MYOB failure does not fail the check: settlement stands and the note says so. Exists because settlement had exactly ONE source (the webhook), so a dropped delivery left an order unsettled forever, blocking both the Ship Now credit gate and the MYOB receipt with no way to ask.
 
+**Carriers are now filtered by what they can physically carry (2026-08-31).** There was **no carrier filtering anywhere** — `quoteLiveRates()` offered every route MachShip returned, and `pages/b2b/cart.tsx` auto-selects the cheapest, so a consignment of loose cartons could be pre-selected onto a pallet-only linehaul carrier without anyone choosing it. Chris: "Hi trans wont send individual consignments so that needs to be set as a rule."
+
+`b2b_freight_carrier_rules` (migration **213**) is checked in `quoteLiveRates()` **before** the cheapest-per-carrier collapse — an ineligible carrier never reaches the rate list, because merely appearing there is enough for the cart to auto-select it.
+
+- `pallets_only` — offer this carrier only when every item in the candidate packing is a `Pallet`/`Skid`. Seeded true for Hi-Trans.
+- `blocked` — never offer at all. A kill switch that needs no deploy.
+- Matching is **case-insensitive substring on the carrier name**, because MachShip's carrier ids are not documented anywhere we control and a rename is likelier than an id change. `machship_carrier_id` can pin an exact id once one is observed, and wins over the name when set.
+- **Three spellings are seeded** — `hi-trans`, `hi trans`, `hitrans`. The separator-less form matched nothing in testing, which would have silently disabled the rule; MachShip is inconsistent about this.
+- **Fails OPEN**: if the rules table cannot be read, quoting proceeds unfiltered and logs it. Losing every carrier would stop checkout dead, which is worse than briefly offering one we would rather not.
+- If every route is excluded the quote says so explicitly, rather than reporting "no routes available" and sending someone hunting a MachShip or address fault.
+
+**Nothing had shipped wrongly.** All 14 booked orders to 28 August were carrier 11 / service 540, TNT Road Express — the Hi-Trans exposure was in quotes only.
+
+**NOT DONE — split shipments across carriers.** Chris also wants the quoter to compare "pallet with one carrier, loose items with another" against "all with one carrier". That is not a filter, it is a second consignment: **68 references across 16 files** assume one consignment per order (`machship_consignment_id` and friends on `b2b_orders`, with no consignments table). It needs a consignments table, a booking loop, per-carrier manifesting, per-consignment tracking and despatch state, distributor emails carrying several tracking numbers, and labels per consignment. The pick list already sections by consignment, so that part is ready. Deliberately left as its own piece of work rather than half-built.
+
 **Basemap moved off CARTO (2026-08-31).** Both Leaflet dashboards — Reports → Distributor Map and Workshop → Map/Conversion — drew tiles from `basemaps.cartocdn.com/dark_all`. CARTO began requiring an API key and now **watermarks unauthenticated tiles with "API KEY REQUIRED" painted into the tile images themselves**, so the message appeared diagonally across both maps. Nothing of ours was misconfigured and no data was affected — the tiles still served 200s.
 
 Now on Esri's key-free **Dark Gray Canvas**, via one shared helper, `lib/map-basemap.ts`. It is shared deliberately: the two dashboards each carried their own copy of a single tile URL, which is why one provider change broke both and would have had to be fixed twice.
@@ -935,7 +950,7 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 
 **Consistency / drift**
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
-- Migrations `148` and `153` are duplicated numbers; latest applied is `212_b2b_payment_surcharge_end`, so next is `213`.
+- Migrations `148` and `153` are duplicated numbers; latest applied is `213_b2b_carrier_capability_rules`, so next is `214`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.

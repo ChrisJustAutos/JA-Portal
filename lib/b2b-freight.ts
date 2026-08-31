@@ -596,16 +596,44 @@ export async function getLiveQuote(
     return { mode: 'unavailable', reason: 'No MachShip routes available for this destination' }
   }
 
-  // Cheapest packing per carrier/service. Comparing within a service keeps the
-  // choice honest: the distributor still picks a carrier, and each carrier is
-  // shown at its best possible packing rather than at whichever plan we guessed.
+  // Carrier eligibility, applied BEFORE the cheapest-per-carrier collapse.
+  //
+  // A carrier that cannot physically take this shape of consignment must never
+  // reach the rate list at all: the cart auto-selects the cheapest rate, so
+  // merely showing it is enough for it to be booked. Hi-Trans will not carry
+  // loose/individual items - pallets only (Chris, 2026-08-31) - and before this
+  // there was no carrier filtering anywhere, so a box-only plan could be
+  // pre-selected onto it. Rules live in b2b_freight_carrier_rules and are data,
+  // so a carrier can be restricted or killed without a deploy.
+  const carrierRules = await loadCarrierRules()
+  const dropped: string[] = []
+
   const best = new Map<string, { route: RouteOption; cand: MachShipCandidate; base: number }>()
   for (const q of usable) {
+    const allPallets = q.cand.machshipItems.length > 0 &&
+      q.cand.machshipItems.every(it => it.itemType === 'Pallet' || it.itemType === 'Skid')
     for (const r of q.routes) {
+      const verdict = carrierAllowed(carrierRules, r.carrier, allPallets)
+      if (!verdict.allowed) {
+        dropped.push(`${r.carrier.name} (${verdict.reason})`)
+        continue
+      }
       const key = `${r.carrier.id}:${r.carrierService.id}`
       const base = Number(r.consignmentTotal?.totalSellPrice || 0)
       const cur = best.get(key)
       if (!cur || base < cur.base) best.set(key, { route: r, cand: q.cand, base })
+    }
+  }
+  if (dropped.length) {
+    console.log('[b2b-freight] carrier rules excluded:', Array.from(new Set(dropped)).join('; '))
+  }
+  if (best.size === 0) {
+    // Every route was ruled out. Say so plainly rather than reporting "no
+    // routes", which would send someone hunting a MachShip or address fault.
+    return {
+      mode: 'unavailable',
+      reason: `Every carrier MachShip offered is excluded by a carrier rule (${Array.from(new Set(dropped)).join('; ')}). `
+        + 'Check b2b_freight_carrier_rules.',
     }
   }
 
@@ -829,3 +857,55 @@ function packagingForMachShip(p: LiveQuoteCartItem['freight_packaging']): 'Carto
 function round1(n: number): number { return Math.round(n * 10) / 10 }
 function round2(n: number): number { return Math.round(n * 100) / 100 }
 function round3(n: number): number { return Math.round(n * 1000) / 1000 }
+
+// ── Carrier eligibility rules ──────────────────────────────────────────────
+
+export interface CarrierRule {
+  carrier_name_match: string
+  machship_carrier_id: number | null
+  pallets_only: boolean
+  blocked: boolean
+}
+
+/** Cached briefly — quoting runs several times per cart load. */
+let _rulesCache: { at: number; rules: CarrierRule[] } | null = null
+
+export async function loadCarrierRules(): Promise<CarrierRule[]> {
+  if (_rulesCache && Date.now() - _rulesCache.at < 60_000) return _rulesCache.rules
+  try {
+    const { data } = await sb().from('b2b_freight_carrier_rules')
+      .select('carrier_name_match, machship_carrier_id, pallets_only, blocked')
+      .eq('is_active', true)
+    const rules = (data || []) as CarrierRule[]
+    _rulesCache = { at: Date.now(), rules }
+    return rules
+  } catch (e: any) {
+    // Fail OPEN on a rules-table problem: losing every carrier would stop
+    // checkout dead, which is worse than briefly offering one we would rather
+    // not. The log line is the signal.
+    console.error('[b2b-freight] carrier rules unreadable, quoting unfiltered:', e?.message || e)
+    return []
+  }
+}
+
+/** Does a rule refer to this carrier? Id wins when set, else name substring. */
+function ruleMatches(rule: CarrierRule, carrier: { id: number; name: string }): boolean {
+  if (rule.machship_carrier_id != null) return rule.machship_carrier_id === carrier.id
+  const needle = String(rule.carrier_name_match || '').trim().toLowerCase()
+  return needle.length > 0 && String(carrier.name || '').toLowerCase().includes(needle)
+}
+
+export function carrierAllowed(
+  rules: CarrierRule[],
+  carrier: { id: number; name: string },
+  allPallets: boolean,
+): { allowed: true } | { allowed: false; reason: string } {
+  for (const rule of rules) {
+    if (!ruleMatches(rule, carrier)) continue
+    if (rule.blocked) return { allowed: false, reason: 'blocked' }
+    if (rule.pallets_only && !allPallets) {
+      return { allowed: false, reason: 'pallets only, this plan has loose items' }
+    }
+  }
+  return { allowed: true }
+}

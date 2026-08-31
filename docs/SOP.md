@@ -467,6 +467,16 @@ The portal now recovers from this by itself. When the id stops resolving it look
 
 **⚠** It matches on the tracking number, not the `MS…` consignment number. A re-created consignment gets a new `MS…` number, so that one is no help — and if two consignments share a tracking number the portal deliberately refuses to guess rather than risk attaching your order to someone else's shipment.
 
+### 4.2z Which carriers can be offered
+
+**Some carriers cannot take loose boxes.** Hi-Trans is pallets-only, so from 31 August it is simply not offered when an order has any loose cartons in the plan - it will not appear in the freight options at all, and it cannot be picked by accident. Before this every carrier MachShip returned was offered, and the cart pre-selects the cheapest, so it could have been chosen without anyone deciding to.
+
+**If a carrier needs restricting or stopping**, it is a data change, not a rebuild - ask. Each rule is either "pallets only" or "never offer".
+
+**⚠ If a quote comes back saying every carrier is excluded by a rule**, that is the rule working, not a fault - the order's packing has loose items and the only carriers available cannot take them. Palletise it, or ask for the rule to be relaxed.
+
+**Still to come:** splitting one order across two carriers - the pallet with one, the loose boxes with another - is not built yet. Today an order goes entirely to one carrier on one consignment.
+
 ### 4.3 Freight problems
 
 | Symptom | What to do |
