@@ -429,7 +429,7 @@ MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,U
 
 ## 7. Modules & SOPs
 
-Full route-by-route inventory: 117 page routes (444 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
+Full route-by-route inventory: 117 page routes (446 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
 
 ### 7.1 Dashboards (`/dashboard`, `/overview`, `/home`)
 
