@@ -65,7 +65,11 @@ export const CATALOGUE_COLUMNS: CatColumn[] = [
 
 // Columns to SELECT from b2b_catalogue for the export (real DB columns only;
 // Model + Product Type are embedded separately by the export route).
-export const CATALOGUE_SELECT = CATALOGUE_COLUMNS.filter(c => !c.notAColumn).map(c => c.field).join(', ')
+// `discount_pct` is appended explicitly: the Discount % column is notAColumn
+// (the importer derives a trade price from it rather than mapping it straight
+// through), but the EXPORTER needs the stored value to round-trip an item that
+// tracks RRP without silently pinning it (migration 215).
+export const CATALOGUE_SELECT = CATALOGUE_COLUMNS.filter(c => !c.notAColumn).map(c => c.field).concat('discount_pct').join(', ')
 
 // A db row → flat object keyed by header (for the exporter).
 export function catalogueRowToExport(item: any): Record<string, any> {
@@ -78,10 +82,15 @@ export function catalogueRowToExport(item: any): Record<string, any> {
     else if (col.kind === 'date') v = (v ? new Date(v).toISOString() : '')
     else if (col.kind === 'bool') v = !!v
     else if (col.kind === 'discountPct') {
-      // Derived from RRP + trade price; 4 dp so an untouched round-trip
-      // reproduces the trade price to the cent. Blank when RRP is missing/0.
-      const rrp = Number(item.rrp_ex_gst); const trade = Number(item.trade_price_ex_gst)
-      v = (rrp > 0 && isFinite(trade)) ? Math.round((1 - trade / rrp) * 100 * 10000) / 10000 : ''
+      // Export the STORED percentage when the item tracks RRP (migration 215) -
+      // that is the intent, and round-tripping it keeps the item tracking. Only
+      // fall back to deriving one from the prices for a PINNED item, at 4 dp so
+      // an untouched round-trip reproduces its price to the cent.
+      if (item.discount_pct != null) { v = Number(item.discount_pct); }
+      else {
+        const rrp = Number(item.rrp_ex_gst); const trade = Number(item.trade_price_ex_gst)
+        v = (rrp > 0 && isFinite(trade)) ? Math.round((1 - trade / rrp) * 100 * 10000) / 10000 : ''
+      }
     }
     else if (v == null) v = ''
     out[col.header] = v
@@ -146,6 +155,13 @@ export function catalogueRowToPatch(row: Record<string, any>): { id?: string; sk
     const rrp = patch.rrp_ex_gst != null ? Number(patch.rrp_ex_gst) : null
     if (rrp == null || !(rrp > 0)) return { error: 'Discount % needs an RRP ex GST value in the same row' }
     patch.trade_price_ex_gst = Math.round(rrp * (1 - discountPct / 100) * 100) / 100
+    // Store the intent as well as the outcome, so the item keeps tracking RRP
+    // after the import (migration 215) instead of freezing at today's price.
+    patch.discount_pct = discountPct
+  } else if (patch.trade_price_ex_gst != null) {
+    // A trade price typed into the sheet with no percentage PINS the item -
+    // same rule as the admin screens, or the next sync would overwrite it.
+    patch.discount_pct = null
   }
   return { id: id || undefined, sku: sku || undefined, patch, modelNames }
 }

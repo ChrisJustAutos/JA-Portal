@@ -617,7 +617,20 @@ What the hourly pull changes, and what it leaves alone:
 |---|---|
 | SKU, name, **RRP**, GST status, **cost price** | **Trade price** (what distributors pay), visibility, description, category, images |
 
-**⚠ A price rise in MYOB does NOT move the trade price.** If an RRP goes up and the trade price stays put, an item you set at 20% off quietly becomes a bigger discount — and nothing warns you. **After any MYOB price change, re-check the trade prices for those items** and re-apply the discount in the catalogue. This is the one thing the automatic sync cannot do for you.
+**A price rise in MYOB now moves the trade price with it** — as long as the item has a **discount %** set. That is the whole point of the % field: you are telling the portal *"this item is 20% off RRP"*, not *"this item costs $1196"*, so when the RRP changes the trade price follows and your margin holds.
+
+Each item is in one of two states, shown on the item under **Pricing**:
+
+| State | What it means |
+|---|---|
+| **Tracks RRP — 20% off** | The price is worked out from RRP every hour. A MYOB price change flows straight through. |
+| **Pinned (set by hand)** | The price stays exactly where you typed it. An RRP change does **not** move it. |
+
+**Typing a price into Trade price pins the item. Typing a number into Discount % makes it track.** That is deliberate — if a typed price kept tracking, the next hourly sync would overwrite what you just typed.
+
+**Three items are currently pinned and need a decision:** `H-M04-00`, `JA-STUB` and `TGFK - 1VDT`. Their prices sit a cent or two off a clean percentage — they look like prices that already drifted before this was fixed — so they were deliberately left alone rather than rounded to a guess. Set a % on each and they will start tracking.
+
+**⚠ 19 items are priced at 0% off — distributors pay full RRP.** That is what a brand-new item is seeded at when nobody has priced it yet. Worth reviewing whether that is intended.
 
 **⚠ Clearing a cost in MYOB does not clear it here.** A blank or zero cost is ignored and the previous figure stays, so cost price can look right when MYOB no longer holds one.
 

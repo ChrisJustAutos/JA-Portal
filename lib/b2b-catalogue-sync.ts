@@ -14,8 +14,13 @@
 //     adjusted for IsTaxInclusive), is_taxable (SellingDetails.TaxCode),
 //     myob_snapshot, last_synced_from_myob_at.
 //   Portal-canonical (NEVER overwritten by sync):
-//     trade_price_ex_gst, b2b_visible, description, category_id,
-//     primary_image_url, spec_sheet_url, b2b_catalogue_images rows.
+//     b2b_visible, description, category_id, primary_image_url,
+//     spec_sheet_url, b2b_catalogue_images rows.
+//   Portal-canonical BUT derived when the item tracks RRP (migration 215):
+//     trade_price_ex_gst — recomputed as rrp x (1 - discount_pct/100) whenever
+//     discount_pct IS NOT NULL, so a price rise in MYOB carries the trade price
+//     with it and the intended margin holds. discount_pct IS NULL means the
+//     price is PINNED and the sync leaves it alone, exactly as before.
 //
 // First-time ingest:
 //   - description seeded from MYOB Description
@@ -92,7 +97,7 @@ export async function syncJawsCatalogue(
     const slice = uids.slice(i, i + CHUNK)
     const { data, error } = await c
       .from('b2b_catalogue')
-      .select('id, myob_item_uid, sku, name, rrp_ex_gst, is_taxable, cost_price_ex_gst')
+      .select('id, myob_item_uid, sku, name, rrp_ex_gst, is_taxable, cost_price_ex_gst, discount_pct, trade_price_ex_gst')
       .in('myob_item_uid', slice)
     if (error) throw new Error(`Load existing catalogue failed: ${error.message}`)
     for (const row of data || []) existingByUid.set(row.myob_item_uid, row)
@@ -155,6 +160,16 @@ export async function syncJawsCatalogue(
     // entered cost is never wiped by a zero.
     const stdCost = Number(it.BuyingDetails?.StandardCost || 0)
 
+    // Trade price follows RRP when the item carries a percentage (215).
+    // Without this the RRP moved on every sync and the trade price didn't, so
+    // "20% off" silently became a deeper discount (Chris 2026-09-01).
+    const pct = existing && (existing as any).discount_pct != null
+      ? Number((existing as any).discount_pct)
+      : null
+    const derivedTrade = pct != null && rrpExGst != null && rrpExGst > 0
+      ? round2(rrpExGst * (1 - pct / 100))
+      : null
+
     const base: SyncRow = {
       myob_item_uid: it.UID,
       myob_company_file: 'JAWS',
@@ -166,6 +181,7 @@ export async function syncJawsCatalogue(
       myob_supplier_name:   supplier?.Name || null,
       supplier_item_number: restock?.SupplierItemNumber || null,
       ...(stdCost > 0 ? { cost_price_ex_gst: round2(stdCost) } : {}),
+      ...(derivedTrade != null ? { trade_price_ex_gst: derivedTrade } : {}),
       last_synced_from_myob_at: nowIso,
       myob_snapshot: it,
     }
@@ -174,6 +190,8 @@ export async function syncJawsCatalogue(
       inserts.push({
         ...base,
         description: it.Description || null,
+        // No percentage yet - seeded at RRP and PINNED until someone prices it.
+        // (Migration 215 recorded the 19 existing items in this state as 0%.)
         trade_price_ex_gst: rrpExGst ?? 0,
         b2b_visible: false,
         created_by: performedBy,
@@ -184,6 +202,7 @@ export async function syncJawsCatalogue(
                    || Number(existing.rrp_ex_gst || 0) !== Number(rrpExGst || 0)
                    || existing.is_taxable !== isTaxable
                    || (stdCost > 0 && Number((existing as any).cost_price_ex_gst || 0) !== round2(stdCost))
+                   || (derivedTrade != null && Number((existing as any).trade_price_ex_gst || 0) !== derivedTrade)
       if (!changed) {
         result.unchanged++
         continue

@@ -59,6 +59,22 @@ function cleanPatch(raw: any): { patch: Record<string, any> } | { error: string 
       }
     }
   }
+  // A bulk-set trade price PINS each item, same rule as the single-item PATCH:
+  // leaving discount_pct in place would have the next hourly sync recompute the
+  // price from the old percentage and throw the bulk edit away (migration 215).
+  if ('trade_price_ex_gst' in patch) patch.discount_pct = null
+  // Setting a percentage instead makes the price track RRP. The concrete price
+  // is resolved by the caller (the bulk endpoint receives already-resolved
+  // values), so here it only has to be range-checked and stored.
+  if ('discount_pct' in raw) {
+    const v = raw.discount_pct
+    if (v === null || v === '') patch.discount_pct = null
+    else {
+      const n = Number(v)
+      if (!isFinite(n) || n < 0 || n > 100) return { error: 'discount_pct must be between 0 and 100, or empty' }
+      patch.discount_pct = n
+    }
+  }
   if ('freight_packaging' in raw) {
     const v = raw.freight_packaging
     if (v === null || v === '') patch.freight_packaging = null

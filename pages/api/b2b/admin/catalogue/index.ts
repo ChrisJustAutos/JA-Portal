@@ -38,6 +38,7 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
       model_id,
       product_type_id,
       trade_price_ex_gst,
+      discount_pct,
       rrp_ex_gst,
       is_taxable,
       primary_image_url,

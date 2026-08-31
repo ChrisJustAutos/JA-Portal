@@ -56,6 +56,7 @@ interface CatalogueItem {
   model_ids?: string[]                       // write-only: sets the fitment list via PATCH
   product_type_id: string | null
   trade_price_ex_gst: number
+  discount_pct?: number | null
   rrp_ex_gst: number | null
   is_taxable: boolean
   primary_image_url: string | null
@@ -1371,6 +1372,8 @@ function EditDrawer({
           <Section title="Live status">
             <KV label="Visible to distributors" value={item.b2b_visible ? 'Yes' : 'No'} valueColor={item.b2b_visible ? A.good : T.text3}/>
             <KV label="Trade price (ex GST)"    value={fmtMoney(item.trade_price_ex_gst)} mono valueColor={item.trade_price_ex_gst > 0 ? T.text : A.warn}/>
+            <KV label="Pricing"                 value={item.discount_pct != null ? `Tracks RRP — ${Number(item.discount_pct)}% off` : 'Pinned (set by hand)'}
+                valueColor={item.discount_pct != null ? T.text : A.warn}/>
             <KV label="Has image"               value={item.primary_image_url ? 'Yes' : 'No'} valueColor={item.primary_image_url ? A.good : A.warn}/>
           </Section>
 
@@ -1759,7 +1762,8 @@ function PricingSection({
         <RetailDiscountField
           rrp={item.rrp_ex_gst}
           trade={item.trade_price_ex_gst}
-          onApply={t => onPatch({ trade_price_ex_gst: t })}
+          pct={item.discount_pct ?? null}
+          onApply={(t, pct) => onPatch(pct == null ? { trade_price_ex_gst: t } : { discount_pct: pct })}
         />
       </div>
 
@@ -1813,12 +1817,19 @@ function PriceCell({ value, required, onSave }: {
 
 // % off retail → distributor (trade) price. Shows the current implied discount;
 // committing a % sets trade = RRP × (1 − %/100).
-function RetailDiscountField({ rrp, trade, onApply }: {
+function RetailDiscountField({ rrp, trade, pct: storedPct, onApply }: {
   rrp: number | null
   trade: number
-  onApply: (tradeEx: number) => Promise<void> | void
+  /** Stored percentage when the item TRACKS RRP; null when the price is pinned. */
+  pct: number | null
+  onApply: (tradeEx: number, pct: number | null) => Promise<void> | void
 }) {
-  const implied = (rrp != null && rrp > 0) ? Math.round((1 - trade / rrp) * 1000) / 10 : null
+  // Show the STORED percentage when there is one - it is the intent. Only fall
+  // back to deriving one from the prices for a pinned item, where the figure is
+  // a description of today's price rather than a rule (migration 215).
+  const implied = storedPct != null
+    ? Number(storedPct)
+    : (rrp != null && rrp > 0) ? Math.round((1 - trade / rrp) * 1000) / 10 : null
   const [draft, setDraft] = useState<string>(implied != null ? String(implied) : '')
   const [saving, setSaving] = useState(false)
   useEffect(() => { setDraft(implied != null ? String(implied) : '') }, [implied])
@@ -1831,9 +1842,12 @@ function RetailDiscountField({ rrp, trade, onApply }: {
     if (rrp == null || rrp <= 0) return
     if (draft.trim() === '' || !isFinite(pct)) { setDraft(implied != null ? String(implied) : ''); return }
     const t = Math.round(rrp * (1 - pct / 100) * 100) / 100
-    if (t < 0 || t === trade) return
+    if (t < 0) return
+    // Always send the percentage, even when the resolved price is unchanged:
+    // a PINNED item sitting at the right price still needs to start tracking.
+    if (t === trade && storedPct != null && Number(storedPct) === pct) return
     setSaving(true)
-    try { await onApply(t) } finally { setSaving(false) }
+    try { await onApply(t, pct) } finally { setSaving(false) }
   }
 
   const disabled = rrp == null || rrp <= 0
@@ -1856,6 +1870,11 @@ function RetailDiscountField({ rrp, trade, onApply }: {
       </div>
       <span style={{fontSize:12,color:T.text3}}>
         {disabled ? 'Enter RRP to derive trade price' : preview != null ? `→ trade $${preview.toFixed(2)} ex GST` : 'sets trade = RRP − %'}
+      </span>
+      <span style={{fontSize:11.5,color: storedPct != null ? T.text3 : A.warn}}>
+        {storedPct != null
+          ? 'Tracks RRP — a price change in MYOB moves the trade price with it.'
+          : 'Pinned — this price will NOT follow an RRP change. Set a % here to make it track.'}
       </span>
     </label>
   )
@@ -2632,7 +2651,14 @@ function BulkEditModal({ items, onClose, onApplied }: {
       const v = Number(priceVal)
       if (priceMode === 'set' && isFinite(v) && v >= 0) patch.trade_price_ex_gst = round2(v)
       // Trade = RRP − v% (only for items that have an RRP set).
-      if (priceMode === 'rrp' && isFinite(v) && it.rrp_ex_gst != null && it.rrp_ex_gst > 0) patch.trade_price_ex_gst = round2(Math.max(0, it.rrp_ex_gst * (1 - v/100)))
+      // "% off RRP" stores the PERCENTAGE as well as the resolved price, so
+      // these items keep tracking RRP through later syncs instead of freezing
+      // at today's number (migration 215). "Set price" deliberately does not -
+      // a typed price pins the item, and the API clears discount_pct for it.
+      if (priceMode === 'rrp' && isFinite(v) && it.rrp_ex_gst != null && it.rrp_ex_gst > 0) {
+        patch.trade_price_ex_gst = round2(Math.max(0, it.rrp_ex_gst * (1 - v/100)))
+        ;(patch as any).discount_pct = v
+      }
     }
     if (handMode === 'on') patch.manual_handling = true
     if (handMode === 'off') patch.manual_handling = false

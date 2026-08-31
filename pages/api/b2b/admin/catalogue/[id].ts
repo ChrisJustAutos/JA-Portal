@@ -2,7 +2,14 @@
 // PATCH /api/b2b/admin/catalogue/{id}
 //
 // Editable fields:
-//   - trade_price_ex_gst                  number, >= 0
+//   - trade_price_ex_gst                  number, >= 0  (PINS the item: sets
+//                                         discount_pct to null so the hourly
+//                                         catalogue sync won't overwrite it)
+//   - discount_pct                        number 0-100 | null. Set it and the
+//                                         trade price is DERIVED from the
+//                                         current RRP and kept in step with it
+//                                         by every sync (migration 215). Null
+//                                         pins the current price.
 //   - b2b_visible                         boolean
 //   - description                         string | null
 //   - primary_image_url                   string | null
@@ -41,6 +48,7 @@ function sb(): SupabaseClient {
 
 const EDITABLE_FIELDS = [
   'trade_price_ex_gst',
+  'discount_pct',
   'b2b_visible',
   'description',
   'primary_image_url',
@@ -131,6 +139,31 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
       return res.status(400).json({ error: 'trade_price_ex_gst must be a number >= 0' })
     }
     update.trade_price_ex_gst = v
+    // Typing a price by hand PINS the item. Without this the next hourly sync
+    // would recompute the price from the old percentage and quietly discard
+    // what was just typed (migration 215).
+    if (!('discount_pct' in update)) update.discount_pct = null
+  }
+
+  // A percentage DERIVES the trade price from the current RRP, immediately -
+  // not just at the next sync, so the admin sees the price they just set.
+  if ('discount_pct' in update) {
+    if (update.discount_pct === null || update.discount_pct === '') {
+      update.discount_pct = null          // pin at whatever the price is now
+    } else {
+      const pct = Number(update.discount_pct)
+      if (!isFinite(pct) || pct < 0 || pct > 100) {
+        return res.status(400).json({ error: 'discount_pct must be a number between 0 and 100, or null' })
+      }
+      update.discount_pct = pct
+      const { data: cur } = await sb().from('b2b_catalogue').select('rrp_ex_gst').eq('id', id).maybeSingle()
+      const rrp = Number(cur?.rrp_ex_gst || 0)
+      if (rrp > 0) {
+        update.trade_price_ex_gst = Math.round(rrp * (1 - pct / 100) * 100) / 100
+      } else if (!('trade_price_ex_gst' in update)) {
+        return res.status(400).json({ error: 'This item has no RRP in MYOB, so a percentage cannot set its price. Enter a trade price instead.' })
+      }
+    }
   }
   for (const k of BOOLEAN_FIELDS) {
     if (k in update && typeof update[k] !== 'boolean') {
