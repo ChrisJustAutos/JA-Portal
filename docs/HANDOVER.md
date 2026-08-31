@@ -740,6 +740,15 @@ Now: extraction failures log `outcome='error'` with the thrown message, **stage 
 
 **The MPI root cause, found on the first retry (2026-08-28):** `AP extraction: model output hit the token cap and the JSON is truncated`. `runExtraction` sent `max_tokens: 4096`; a long invoice ran past it, the JSON came back cut mid-array, and `JSON.parse` threw `Expected ',' or ']' after array element at position 9036`. Two days invisible because the caller filed the throw as "not an invoice". Cap raised to **16000** (the documented default for non-streaming, well inside every extraction model's output limit) and `stop_reason === 'max_tokens'` now throws a message that says so - truncation must announce itself rather than surfacing as a parse error that reads like a corrupt document.
 
+**A statement called "Stmt" is still a statement (2026-09-01).** `Stmt_JUST.pdf` from Sunshine Coast Brake & Clutch was read as an invoice and flagged — $1,265 on 31 August, and the same file at $810 on 2 August, so it had been recurring monthly unnoticed. The statement guard tested `/statement/i` against the subject and filename; the subject was empty and the filename says **Stmt**, the abbreviation. Nothing was posted (it flagged, so no double-entry), but it produced a false invoice card every month.
+
+Two layers now, mirroring the quote guard's "document-type read OR quote-named attachment":
+
+- The name test is `/statement|stmt/i`. No English word contains "stmt", so the bare substring is safe.
+- **`ExtractedAPInvoice.isStatement`** is new — the extractor is asked to identify an account statement from the document itself (title, a LIST of invoice numbers with a running balance, ageing columns, no single invoice number of its own), so a statement named anything at all is caught. Filenames are a hint; the document is the evidence.
+
+**The consolidated-invoice exception still wins over both signals.** Suppliers whose "statement" IS a single tax invoice for the period (Time Express Courier, Supagas) are checked with `consolidatedInvoiceSupplier` after either signal fires, so they keep posting — verified against the three such invoices already posted from statement-named files. The skip now records WHY on the log row rather than a bare outcome, so a wrongly-skipped supplier is diagnosable.
+
 **Two cards for one email, and the second contradicted the first (2026-09-01).** A forwarded "Invoice #30376 - Refund" produced both the correct 🪞 *Own document detected* card (read as Just Autos CR1066, $405, credit note) **and** 🕳 *Nothing entered from a staff invoice email — 3 attachments processed (3 unreadable)*. The document had been read perfectly; nothing was unreadable.
 
 Cause: the own-document (self-entity) branch posts its own Slack card and then returns `skipped_not_invoice`, which the never-silent guard's `handled` test did not count — so the guard fired as well. The log rows show exactly this: two inline `image.png` signatures plus `credit-note-CR1066.pdf.pdf` at `self-entity vendor — own outbound document, not entered`, all three `skipped_not_invoice`.

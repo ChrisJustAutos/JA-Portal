@@ -965,10 +965,22 @@ async function processInvoice(
   // risks double-posting bills that are already entered. The exception is a
   // consolidated-invoice supplier (e.g. Time Express), whose "statement" IS a
   // single tax invoice for the period and is exactly what we should enter.
-  const looksLikeStatement = /statement/i.test(msg.subject || '') || /statement/i.test(attName)
+  // Name test covers the ABBREVIATION too. "Stmt_JUST.pdf" from Sunshine Coast
+  // Brake & Clutch slipped /statement/i twice - flagged as a $1,265 invoice on
+  // 2026-08-31 and $810 on 2026-08-02 - because the subject was empty and the
+  // filename says "Stmt", not "Statement" (Chris 2026-09-01). No English word
+  // contains "stmt", so the substring is safe.
+  const statementNamed = /statement|stmt/i.test(msg.subject || '') || /statement|stmt/i.test(attName)
+  // ...and the extractor's own document-type read, so a statement named
+  // anything at all is still caught. Same belt-and-braces as the quote guard:
+  // filenames are a hint, the document itself is the evidence.
+  const looksLikeStatement = statementNamed || extracted.isStatement === true
   const consolidated = consolidatedInvoiceSupplier(extracted.vendor?.name, msg.from)
   if (looksLikeStatement && !consolidated) {
-    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice' })
+    const why = extracted.isStatement === true && !statementNamed
+      ? 'reads as an account statement, not a single invoice — left for the statement watcher'
+      : 'statement-named document — left for the statement watcher'
+    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, error: why })
     return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
 

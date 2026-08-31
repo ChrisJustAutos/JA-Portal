@@ -546,6 +546,7 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     paymentMethod: null,
     isCreditNote: inv.is_credit_note === true,
     isQuote: false,                  // not persisted on portal rows; only fresh extractions carry it
+    isStatement: false,              // ditto — the guard runs at extraction time, not on replay
     currency: inv.currency ?? null,  // not persisted on legacy rows → null (treated as domestic)
     lineItems: lines.map((l: any) => ({
       lineNo: l.line_no,
