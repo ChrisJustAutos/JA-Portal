@@ -42,6 +42,7 @@
 // hourly cron + date marker makes that rare).
 
 import { fetchCoachingWindow } from './calls-weekly-report'
+import { callTypeLabel, dimensionLabel, outcomeLabel } from './calls-dimensions'
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -179,7 +180,7 @@ export async function buildCoachingSections(now: Date = new Date()): Promise<{ b
       text: {
         type: 'mrkdwn',
         text: `:trophy: *Top call* — ${best.advisor}, ${best.score} ${scoreEmoji(best.score)}\n`
-          + `${best.customer}${best.type ? ` · ${best.type}` : ''} · ${best.outcome} · ${mins(best.durationSec)}\n`
+          + `${best.customer}${best.type ? ` · ${callTypeLabel(best.type)}` : ''} · ${outcomeLabel(best.outcome) || best.outcome} · ${mins(best.durationSec)}\n`
           + `_${best.summary}_\n<${best.url}|Listen in the portal>`,
       },
     })
@@ -205,12 +206,18 @@ export async function buildCoachingSections(now: Date = new Date()): Promise<{ b
     })
   }
 
-  // 3. Per-advisor line
+  // 3. Per-advisor line.
+  //
+  // Labels go through lib/calls-dimensions, never raw. The analyser stores
+  // snake_case keys (vehicle_details, information_only, status_support) and
+  // printing them verbatim is what the first live post did (Chris: "Only thing
+  // that doesnt look clean are the _ between things"). The helpers prettify an
+  // unknown key too, so adding a rubric dimension cannot reintroduce it.
   const rows = advisors
     .filter(a => a.scored > 0)
     .sort((a, b) => (b.avgScore || 0) - (a.avgScore || 0))
     .map(a => `${scoreEmoji(a.avgScore)} *${a.name}* — ${a.scored} call${a.scored === 1 ? '' : 's'}, avg ${a.avgScore ?? '—'}`
-      + (a.weakestDimension ? `  ·  weakest: ${a.weakestDimension}` : ''))
+      + (a.weakestDimension ? `  ·  weakest: ${dimensionLabel(a.weakestDimension)}` : ''))
   if (rows.length) {
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*By advisor*\n' + rows.join('\n') } })
   }
@@ -223,7 +230,7 @@ export async function buildCoachingSections(now: Date = new Date()): Promise<{ b
       text: {
         type: 'mrkdwn',
         text: `:mag: *Worth a review* — ${worst.advisor}, ${worst.score} ${scoreEmoji(worst.score)}\n`
-          + `${worst.customer}${worst.type ? ` · ${worst.type}` : ''} · ${worst.outcome} · ${mins(worst.durationSec)}\n`
+          + `${worst.customer}${worst.type ? ` · ${callTypeLabel(worst.type)}` : ''} · ${outcomeLabel(worst.outcome) || worst.outcome} · ${mins(worst.durationSec)}\n`
           + `_${worst.summary}_\n<${worst.url}|Listen in the portal>`,
       },
     })

@@ -51,3 +51,16 @@ export function callTypeLabel(key: string | null | undefined): string | null {
   if (!key) return null
   return CALL_TYPE_LABELS[key] || key.replace(/_/g, ' ')
 }
+
+// Call outcomes as written by the analyser (lib/calls-analysis OUTCOMES).
+// Same contract as the maps above: an unknown key prettifies rather than
+// leaking a raw snake_case token into a customer-visible surface.
+const OUTCOME_LABELS: Record<string, string> = {
+  sale: 'Sale', quote_given: 'Quote given', callback_scheduled: 'Callback scheduled',
+  information_only: 'Information only', no_outcome: 'No outcome', wrong_number: 'Wrong number', other: 'Other',
+}
+
+export function outcomeLabel(key: string | null | undefined): string | null {
+  if (!key) return null
+  return OUTCOME_LABELS[key] || key.replace(/_/g, ' ')
+}
