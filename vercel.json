@@ -47,6 +47,9 @@
     "pages/api/cron/b2b-reminders.ts": {
       "maxDuration": 120
     },
+    "pages/api/cron/sales-update.ts": {
+      "maxDuration": 120
+    },
     "pages/api/b2b/admin/orders/[id]/book-freight.ts": {
       "maxDuration": 120
     },
@@ -177,6 +180,10 @@
     {
       "path": "/api/cron/b2b-reminders",
       "schedule": "0 */3 * * *"
+    },
+    {
+      "path": "/api/cron/sales-update",
+      "schedule": "15 7-11 * * *"
     },
     {
       "path": "/api/cron/crm-automations",

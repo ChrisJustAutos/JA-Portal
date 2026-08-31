@@ -334,6 +334,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 | `/api/cron/notifications-sweep` | every 15 min | Bell notifications for Monday-side events (new leads, new to-dos) |
 | `/api/cron/b2b-payment-check` | every 6 h | Two passes: confirm BECS settlement in MYOB → mark `payment_settled_at`; and receipt any settled order that has no MYOB payment against it |
 | `/api/cron/b2b-reminders` | every 3 h | Abandoned carts (24 h + 72 h), unfinished checkouts (once at 24 h), and paid orders we haven't shipped (2 d, escalating at 5 d) |
+| `/api/cron/sales-update` | hourly :15, 17:15–21:15 Brisbane | 5:15pm sales post to #sales-updates — the day Mon–Thu, the week on Friday. Marker-guarded so it posts once |
 | `/api/cron/crm-automations` | every 5 min | CRM automation flow engine |
 | `/api/cron/task-automations` | every 5 min | Tasks automation flow engine |
 | `/api/cron/crm-campaigns` | every 5 min | Campaign scheduler + Resend queue drain + call linkage |
@@ -437,6 +438,15 @@ What the portal *does* provide around MD, all of it in daily use:
 ### 7.3 B2B — distributor portal (`/b2b/*`)
 
 Distributor experience: Shop → Cart (PO number required, ≤20 chars — MYOB limit) → Stripe Checkout (card+surcharge / PayTo / BECS) → Orders (status timeline + freight tracking) → Jobs (tune receipts to fill in) → Resources → Training → Team → Settings.
+
+**Daily 5:15pm sales update to Slack (2026-08-31).** `lib/sales-update-slack.ts`, posted by `/api/cron/sales-update` to **#sales-updates**. Monday to Thursday it posts the day; **Friday it posts the week** with a Mon–Fri breakdown. Weekends are skipped — an empty post every Saturday trains people to ignore the channel.
+
+Every figure comes from `fetchSalesFigures()` in `lib/sales-figures-monday.ts`, the same source as Reports → Sales Report, so the Slack post and the report cannot disagree. "Sales" means **orders written**, not turnover invoiced — that is what the Monday boards hold. `ordersValue` is Just Autos bookings (Orders board), `distValue` is the Distributor Booking board, and `people` is already sorted by total descending, so the top seller is `people[0]` — ranked on **combined value, orders + distributor** (Chris's call).
+
+- **Target** is `SALES_TARGET_PER_DAY` via `getSalesTargets()`, so it is adjustable in the portal (Settings → Integrations) with no deploy. Default $50,000. It is measured against the **combined** total, not bookings alone. The Friday post multiplies it by the weekdays covered, so a full week is compared to a full week's target rather than one day's.
+- **Channel** is `SALES_UPDATE_SLACK_CHANNEL`, defaulting to `#sales-updates` — also a portal setting, so the channel can move without a deploy.
+- **Scheduled hourly from 17:15 to 21:15 Brisbane, not once a day, deliberately.** A once-daily cron that collides with a deploy is skipped silently — the exact failure that cost the tune-job chase a whole week, diagnosed the same day. `app_settings.sales_update_last_posted` holds the Brisbane date, so the first pass from 17:15 posts and later passes do nothing. **The marker is only written once Slack accepts the post**, so a Slack outage retries on the next hour instead of losing the day.
+- **`/api/admin/sales-update-preview`** (`admin:settings`) composes the message and returns it **without posting** on GET — including the raw figures, so the numbers can be checked against the report at any time of day. POST to the same route sends it immediately. `?mode=daily|weekly` forces either shape.
 
 **The weekly tune-job chase is a WINDOW now, not one run (2026-08-31).** It used to fire only where `bris.getUTCDay() === 5 && bris.getUTCHours() === 8` - a single hourly pass per week, at 22:20 UTC. Miss that one run and the entire week's distributor chasing AND the recap to Matt were skipped, silently, with nothing to notice it by. That is what happened on **Friday 28 August**: `last_reminder_at` stopped at 2026-08-20 22:21, 237 jobs went unchased and Matt got no recap, and nobody knew until he said so three days later.
 

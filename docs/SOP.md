@@ -279,6 +279,20 @@ Since 25 August the portal splits that field itself and mails every address in i
 
 **⚠ Re-send does not re-raise the PO**, so it can't create a duplicate in MYOB. "Re-raise drop-ship PO" is the one that does - only use it if the PO itself is wrong.
 
+### 4.1e-h The 5:15pm sales update in Slack
+
+Every weekday at **5:15pm** the portal posts the day's sales into **#sales-updates**: Just Autos bookings, distributor value, the combined total against the day's target, and who wrote the most. **On Friday it posts the week instead**, with a day-by-day line so you can see whether a good week was steady or one big day. Nothing posts on weekends.
+
+**The figures are orders WRITTEN, not money invoiced** - the same numbers as Reports > Sales Report, from the Monday boards. If the Slack post and the report ever disagree, that is a fault worth reporting; they read the same source.
+
+**To change the target:** Settings > Integrations > `SALES_TARGET_PER_DAY`. It applies to the combined total (bookings + distributors), and Friday's weekly figure is that number times the weekdays covered. No deploy needed - it takes effect on the next post.
+
+**To move the channel:** Settings > Integrations > `SALES_UPDATE_SLACK_CHANNEL`.
+
+**To check it before 5:15, or send it early:** open `/api/admin/sales-update-preview` in the browser - it returns exactly what would be posted, along with the figures, and sends nothing. Add `?mode=weekly` to see the Friday version on any day.
+
+**⚠ If the post doesn't appear**, the usual cause is the bot not being in the channel. It retries every hour until 9:15pm, and only marks the day done once Slack has accepted it, so a brief outage does not cost the day.
+
 ### 4.1e-i The Friday tune-job chase
 
 Every Friday morning the portal emails each distributor the tune jobs still waiting on customer details, then emails Matt a recap of who was chased, who wasn't, and what is outstanding.
