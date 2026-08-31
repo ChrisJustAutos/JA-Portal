@@ -285,7 +285,7 @@ Every weekday at **5:15pm** the portal posts the day's sales into **#sales-updat
 
 **The figures are orders WRITTEN, not money invoiced** - the same numbers as Reports > Sales Report, from the Monday boards. If the Slack post and the report ever disagree, that is a fault worth reporting; they read the same source.
 
-**To change the target:** Settings > Integrations > `SALES_TARGET_PER_DAY`. It applies to the combined total (bookings + distributors), and Friday's weekly figure is that number times the weekdays covered. No deploy needed - it takes effect on the next post.
+**To change the targets:** Settings > Integrations. There are two, per day: `SALES_TARGET_JA_PER_DAY` (Just Autos bookings, $60,000) and `SALES_TARGET_DIST_PER_DAY` (distributors, $50,000) - $110,000 combined. The post shows each against its own target and then the total. Friday's figures are those numbers times the weekdays covered. No deploy needed; it takes effect on the next post.
 
 **To move the channel:** Settings > Integrations > `SALES_UPDATE_SLACK_CHANNEL`.
 

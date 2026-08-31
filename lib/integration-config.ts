@@ -19,6 +19,10 @@ export const INTEGRATION_KEYS = [
   // ACCOUNTING_PROVIDER_* = 'myob' | 'xero' per entity (default myob).
   'XERO_CLIENT_ID', 'XERO_CLIENT_SECRET', 'XERO_REDIRECT_URI',
   'ACCOUNTING_PROVIDER_VPS', 'ACCOUNTING_PROVIDER_JAWS',
+  // 5:15pm sales update to Slack. Targets are per DAY and per stream; the
+  // Friday post multiplies them by the weekdays covered. Listed here so they
+  // are editable in Settings -> Integrations rather than env-only.
+  'SALES_TARGET_JA_PER_DAY', 'SALES_TARGET_DIST_PER_DAY', 'SALES_UPDATE_SLACK_CHANNEL',
 ] as const
 export type IntegrationKey = typeof INTEGRATION_KEYS[number]
 

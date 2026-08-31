@@ -11,8 +11,8 @@
 // "Sales" here means ORDERS WRITTEN, not turnover invoiced — that is what the
 // Monday boards hold and what the team is measured on.
 
-import { fetchSalesFigures, getSalesTargets, type SalesFiguresData } from './sales-figures-monday'
-import { getIntegration } from './integration-config'
+import { fetchSalesFigures, type SalesFiguresData } from './sales-figures-monday'
+import { getIntegration, getIntegrations } from './integration-config'
 import { postMessage } from './slack-bot/slack'
 
 /** Brisbane is UTC+10 all year (no DST), so shifting the clock is enough. */
@@ -39,6 +39,22 @@ function mondayOf(d: Date): Date {
 
 export type UpdateMode = 'daily' | 'weekly'
 
+/** Per-day targets, one per stream (Chris, 2026-08-31: $60k JA + $50k dist). */
+export interface DailyTargets { ja: number; dist: number; combined: number }
+
+const TARGET_DEFAULTS = { ja: 60_000, dist: 50_000 }
+
+export async function getSalesUpdateTargets(): Promise<DailyTargets> {
+  const cfg = await getIntegrations(['SALES_TARGET_JA_PER_DAY', 'SALES_TARGET_DIST_PER_DAY'] as const)
+  const n = (raw: string, fallback: number) => {
+    const v = parseFloat(String(raw).replace(/[^0-9.-]/g, ''))
+    return Number.isFinite(v) && v > 0 ? v : fallback
+  }
+  const ja = n(cfg.SALES_TARGET_JA_PER_DAY, TARGET_DEFAULTS.ja)
+  const dist = n(cfg.SALES_TARGET_DIST_PER_DAY, TARGET_DEFAULTS.dist)
+  return { ja, dist, combined: ja + dist }
+}
+
 export interface SalesUpdate {
   mode: UpdateMode
   since: string
@@ -50,6 +66,7 @@ export interface SalesUpdate {
     ordersValue: number; ordersCount: number
     distValue: number; distCount: number
     total: number; target: number; pctOfTarget: number
+    targetJa: number; targetDist: number
     topSeller: { person: string; total: number } | null
   }
 }
@@ -69,9 +86,9 @@ export async function buildSalesUpdate(mode: UpdateMode, now: Date = new Date())
 
   const [figures, targets] = await Promise.all([
     fetchSalesFigures(token, { since, until, now: bris }),
-    getSalesTargets(),
+    getSalesUpdateTargets(),
   ])
-  return renderSalesUpdate(figures, targets.perDay, mode, bris, since, until)
+  return renderSalesUpdate(figures, targets, mode, bris, since, until)
 }
 
 /**
@@ -82,7 +99,7 @@ export async function buildSalesUpdate(mode: UpdateMode, now: Date = new Date())
  */
 export function renderSalesUpdate(
   figures: Pick<SalesFiguresData, 'totals' | 'people' | 'daily'>,
-  perDayTarget: number,
+  perDay: DailyTargets,
   mode: UpdateMode,
   bris: Date,
   since: string,
@@ -94,8 +111,10 @@ export function renderSalesUpdate(
   // number of weekdays covered so far, so a Friday post is measured against a
   // full week and a mid-week preview is not flattered by comparing five days
   // of target to two days of sales.
-  const weekdaysCovered = countWeekdays(since, until)
-  const target = mode === 'weekly' ? perDayTarget * Math.max(1, weekdaysCovered) : perDayTarget
+  const weekdaysCovered = mode === 'weekly' ? Math.max(1, countWeekdays(since, until)) : 1
+  const targetJa = perDay.ja * weekdaysCovered
+  const targetDist = perDay.dist * weekdaysCovered
+  const target = targetJa + targetDist
 
   const t = figures.totals
   const pct = target > 0 ? Math.round((t.total / target) * 100) : 0
@@ -105,17 +124,20 @@ export function renderSalesUpdate(
     ordersValue: t.ordersValue, ordersCount: t.ordersCount,
     distValue: t.distValue, distCount: t.distCount,
     total: t.total, target, pctOfTarget: pct,
+    targetJa, targetDist,
     topSeller: top ? { person: top.person, total: top.total } : null,
   }
 
   const heading = mode === 'weekly'
-    ? `:bar_chart: *Week in review* — ${longDate(new Date(since + 'T00:00:00Z'))} to ${longDate(bris)}`
+    ? `:bar_chart: *Week in review* — ${longDate(new Date(since + 'T00:00:00Z'))} to ${longDate(new Date(until + 'T00:00:00Z'))}`
     : `:bar_chart: *Sales update* — ${longDate(bris)}`
 
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
+  const pctJa = targetJa > 0 ? Math.round((t.ordersValue / targetJa) * 100) : 0
+  const pctDist = targetDist > 0 ? Math.round((t.distValue / targetDist) * 100) : 0
   const lines = [
-    `*Just Autos bookings*  ${money(t.ordersValue)}   _(${plural(t.ordersCount, 'order')})_`,
-    `*Distributors*  ${money(t.distValue)}   _(${plural(t.distCount, 'order')})_`,
+    `*Just Autos bookings*  ${money(t.ordersValue)}  _(${plural(t.ordersCount, 'order')})_  ·  ${pctJa}% of ${money(targetJa)} ${statusEmoji(pctJa)}`,
+    `*Distributors*  ${money(t.distValue)}  _(${plural(t.distCount, 'order')})_  ·  ${pctDist}% of ${money(targetDist)} ${statusEmoji(pctDist)}`,
     `*Total*  ${money(t.total)}  —  ${pct}% of the ${money(target)} target ${statusEmoji(pct)}`,
   ]
 
@@ -137,7 +159,7 @@ export function renderSalesUpdate(
       .map(d => {
         const dt = new Date(d.date + 'T00:00:00Z')
         const name = DAY_NAMES[dt.getUTCDay()].slice(0, 3)
-        const hit = d.total >= perDayTarget ? ' :white_check_mark:' : ''
+        const hit = d.total >= perDay.combined ? ' :white_check_mark:' : ''
         return `${name}   ${money(d.total)}${hit}`
       })
     if (rows.length) {
@@ -148,7 +170,7 @@ export function renderSalesUpdate(
 
   blocks.push({
     type: 'context',
-    elements: [{ type: 'mrkdwn', text: 'Orders written, from the Monday boards — the same figures as Reports → Sales Report. Target is adjustable in the portal (Settings → Integrations → `SALES_TARGET_PER_DAY`).' }],
+    elements: [{ type: 'mrkdwn', text: 'Orders written, from the Monday boards — the same figures as Reports → Sales Report. Targets are adjustable in the portal: Settings → Integrations → `SALES_TARGET_JA_PER_DAY` and `SALES_TARGET_DIST_PER_DAY`.' }],
   })
 
   // Slack's notification/preview line. Built explicitly rather than by
@@ -159,8 +181,8 @@ export function renderSalesUpdate(
     : `Sales update — ${longDate(new Date(until + 'T00:00:00Z'))}`
   const text = [
     periodLabel,
-    `Just Autos bookings ${money(t.ordersValue)} (${plural(t.ordersCount, 'order')})`,
-    `Distributors ${money(t.distValue)} (${plural(t.distCount, 'order')})`,
+    `Just Autos bookings ${money(t.ordersValue)} (${plural(t.ordersCount, 'order')}) - ${pctJa}% of ${money(targetJa)}`,
+    `Distributors ${money(t.distValue)} (${plural(t.distCount, 'order')}) - ${pctDist}% of ${money(targetDist)}`,
     `Total ${money(t.total)} — ${pct}% of the ${money(target)} target`,
     top ? `Top seller: ${top.person} — ${money(top.total)}` : 'No orders written yet.',
   ].join('\n')
