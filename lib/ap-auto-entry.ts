@@ -810,11 +810,16 @@ const scanExtractionModel = () => (process.env.AP_SCAN_EXTRACTION_MODEL || 'clau
 // matches the extracted number but spells it differently, trust the file.
 // Invoice-number-looking tokens in an attachment filename, best first.
 // Stripped-of-word-prefix candidates FIRST ("InvoicePI13080287" → "PI13080287").
-function filenameNumberCandidates(attName: string | null | undefined): string[] {
+export function filenameNumberCandidates(attName: string | null | undefined): string[] {
   if (!attName) return []
   const tokens = String(attName).replace(/\.[a-z0-9]{2,5}$/i, '').split(/[^A-Za-z0-9]+/)
   return tokens
-    .flatMap(t => [t.replace(/^(invoice|creditnote|credit|inv|cr)/i, ''), t])
+    // 'partsinvoice' first, and BEFORE 'invoice', or the alternation strips
+    // nothing: Ken Mills name their files PartsInvoicePI13081826_CustomerCopy.pdf
+    // with no separator, so the whole thing arrives as ONE token and the number
+    // came out as "PARTSINVOICEPI13081826" (Chris 2026-09-01). The stripped form
+    // is listed first, so the missing-number fallback picks the clean number.
+    .flatMap(t => [t.replace(/^(partsinvoice|creditnote|invoice|credit|inv|cr)/i, ''), t])
     .filter(t => t.length >= 6 && /\d{4,}/.test(t))
 }
 
@@ -1042,7 +1047,19 @@ async function processInvoice(
     const cand = filenameNumberCandidates(attName)[0]
     if (cand) {
       extracted = { ...extracted, invoiceNumber: cand.toUpperCase() }
-      numberFallback = 'filename'
+      // Only a GUESS if the document doesn't say it too. When the PDF's own
+      // text layer contains the same number, the filename merely surfaced what
+      // is printed on the invoice — which is the number to trust (Chris
+      // 2026-09-01: "rely on the invoice number thats extracted from the
+      // invoice attachment"). Corroborated numbers post; uncorroborated ones
+      // still flag for a human. rawText is null on scans, so those keep
+      // flagging exactly as before.
+      const corroborated = !!rawText && rawText.toUpperCase().includes(cand.toUpperCase())
+      if (corroborated) {
+        console.log(`[ap-auto-entry] invoice number "${cand}" taken from the filename and CONFIRMED in the PDF text (${attName})`)
+      } else {
+        numberFallback = 'filename'
+      }
     } else {
       const d = String(extracted.invoiceDate || msg.receivedDateTime || '').slice(2, 10).replace(/-/g, '')
       extracted = { ...extracted, invoiceNumber: `NOINV${d || 'X'}` }
