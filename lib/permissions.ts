@@ -2,13 +2,14 @@
 // Role → permission mapping. Shared between client (for UI gating) and server (for API gating).
 // Source of truth — if you add a new feature, add its permission here first.
 
-export type UserRole = 'admin' | 'manager' | 'sales' | 'accountant' | 'viewer' | 'workshop'
+export type UserRole = 'admin' | 'manager' | 'sales' | 'accountant' | 'viewer' | 'workshop' | 'marketing'
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin:      'Admin',
   manager:    'Manager',
   sales:      'Sales',
   workshop:   'Workshop',
+  marketing:  'Marketing / reports only',
   accountant: 'Accountant',
   viewer:     'Viewer',
 }
@@ -18,6 +19,7 @@ export const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
   manager:    'All data, cannot manage users or settings',
   sales:      'Leads/Orders, read-only distributors',
   workshop:   'Workshop only — diary, jobs, quotes, inventory & tasks. No financial, leads or admin access.',
+  marketing:  'Reports only — nothing else. Narrow further to specific reports with the per-user report-tab list (e.g. the two maps).',
   accountant: 'P&L, invoices, payables, reports',
   viewer:     'Read-only view of dashboards',
 }
@@ -119,6 +121,17 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   workshop: [
     'view:diary','edit:bookings',
     'view:messages',
+  ],
+  // Least-privilege EXTERNAL login (migration 216). ONE permission. Everything
+  // else - dashboards, P&L, payables, calls, leads, B2B, admin - is refused by
+  // requirePageAuth, not merely hidden from the nav, because visible_tabs is a
+  // MENU FILTER and never a gate. Pair it with visible_report_tabs to pick
+  // which reports: Kate Sheridan (external agency) = workshop-map +
+  // distributor-map only, Chris 2026-09-01.
+  //
+  // Deliberately no 'generate:reports': that is the /reports builder page.
+  marketing: [
+    'view:reports',
   ],
   accountant: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:payables','view:reports',

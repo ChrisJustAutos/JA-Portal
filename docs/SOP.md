@@ -1043,6 +1043,19 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 
 ---
 
+### Restricting someone to just a few screens
+
+**Hiding tabs is not the same as removing access.** The tab list controls what a person SEES in the menu; their **role** controls what they can actually open. Someone left on Admin or Manager can still reach any page by typing its address, however few tabs they have.
+
+So when someone should only see part of the portal:
+
+1. **Set the role first.** *Marketing / reports only* is the narrowest — reports and nothing else. Use it for external people (agencies, contractors).
+2. **Then narrow the reports list** to the specific reports they need.
+
+Kate Sheridan is set up this way: role *Marketing / reports only*, reports limited to **Workshop Map** and **Distributor Map**. Signing in takes her straight to the Workshop Map.
+
+**⚠ If you are unsure whether someone's role is too wide, ask before widening it.** It is easy to give an external login far more than intended, because the menu makes it look narrow.
+
 ## Appendix — the golden rules
 
 1. **Book Shipment prepares. Ship Now despatches.** Nothing goes to the carrier and no tax invoice exists until Ship Now — whatever the button is called.

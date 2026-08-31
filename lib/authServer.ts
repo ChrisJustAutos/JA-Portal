@@ -160,12 +160,22 @@ export async function requirePageAuth(context: any, permission: Permission | nul
 // Redirects a restricted user (marketing → workshop-map only) to their first
 // allowed report instead of showing a tab they can't have.
 export async function requireReportPageAuth(context: any, tabId: string, permission: Permission = 'view:reports') {
-  const { reportTabAllowed, firstAllowedReportHref } = await import('./permissions')
-  const auth: any = await requirePageAuth(context, permission)
+  const { reportTabAllowed, firstAllowedReportHref, roleHasPermission } = await import('./permissions')
+  // Authenticate FIRST, then check the tab allowlist, then the permission.
+  // Order matters: /reports itself demands 'generate:reports', so checking the
+  // permission first bounced a report-tab-restricted user to /?forbidden=1 —
+  // and their nav tile points at /reports, so they ping-ponged instead of
+  // landing on the report they ARE allowed. Now the allowlist redirects them
+  // to their first permitted tab, and the permission still guards the page
+  // they actually reach.
+  const auth: any = await requirePageAuth(context, null)
   if (auth.redirect) return auth
   const list = auth.props?.user?.visibleReportTabs || null
   if (!reportTabAllowed(list, tabId)) {
     return { redirect: { destination: firstAllowedReportHref(list), permanent: false } }
+  }
+  if (permission && !roleHasPermission(auth.props?.user?.role, permission)) {
+    return { redirect: { destination: '/?forbidden=1', permanent: false } }
   }
   return auth
 }

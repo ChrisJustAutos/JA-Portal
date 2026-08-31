@@ -1,0 +1,35 @@
+-- 216 — a reports-only role for external/marketing logins.
+--
+-- WHY A NEW ROLE AND NOT AN EXISTING ONE
+-- Chris, 2026-09-01: "make sure User Kate in Portal only has access to
+-- Workshop Map & Distributor Map and that's it."
+--
+-- Kate Sheridan (kate.sheridan@devotedigital.com.au — an external agency) was
+-- role `admin`, with visible_tabs ['reports'] hiding everything else from her
+-- nav. THAT IS NOT A GATE. `requirePageAuth` checks ROLE PERMISSIONS only;
+-- visible_tabs is passed to the page as props for menu filtering. An admin who
+-- typed /admin/users, /ap, /calls or /admin/b2b/... would have been let
+-- straight in. Only the reports SUB-TABS are enforced server-side, by
+-- requireReportPageAuth against visible_report_tabs.
+--
+-- No existing role fits "reports only":
+--   viewer     — has view:reports, but ALSO invoices, P&L, payables, stock,
+--                leads, distributors and calls. Reachable by URL.
+--   workshop   — no view:reports at all, so the maps would 403.
+--   sales/manager/accountant/admin — all far wider.
+--
+-- So `marketing` carries exactly ONE permission, view:reports, and the report
+-- tab allowlist narrows that to the two maps. (lib/permissions.ts already
+-- referenced a "marketing → workshop-map only" user in a comment; this makes
+-- the role real.)
+--
+-- Note the code's UserRole union has always included `workshop`, which is NOT
+-- in this enum — the enum had drifted behind the code. Adding `marketing`
+-- here keeps the two in step for the role actually being assigned; `workshop`
+-- is left alone rather than fixed blind, since nothing is stored with it.
+--
+-- Apply to Supabase project qtiscbvhlvdvafwtdtcd via apply_migration.
+-- Kate's own row is updated separately (ALTER TYPE ... ADD VALUE cannot be
+-- used in the same transaction that adds it).
+
+alter type public.user_role add value if not exists 'marketing';
