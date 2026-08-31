@@ -168,11 +168,6 @@ export function renderSalesUpdate(
     }
   }
 
-  blocks.push({
-    type: 'context',
-    elements: [{ type: 'mrkdwn', text: 'Orders written, from the Monday boards — the same figures as Reports → Sales Report. Targets are adjustable in the portal: Settings → Integrations → `SALES_TARGET_JA_PER_DAY` and `SALES_TARGET_DIST_PER_DAY`.' }],
-  })
-
   // Slack's notification/preview line. Built explicitly rather than by
   // stripping markdown: a blanket /[*_]/ strip also eats the underscores
   // inside emoji shortcodes, turning :bar_chart: into :barchart:.
