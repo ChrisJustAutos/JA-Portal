@@ -71,6 +71,23 @@ export async function buildSalesUpdate(mode: UpdateMode, now: Date = new Date())
     fetchSalesFigures(token, { since, until, now: bris }),
     getSalesTargets(),
   ])
+  return renderSalesUpdate(figures, targets.perDay, mode, bris, since, until)
+}
+
+/**
+ * Pure rendering — no network, no clock of its own. Split out from
+ * buildSalesUpdate so the exact message can be checked against known figures
+ * without Monday or Slack credentials, which is the only way to verify the
+ * wording before it goes to a company-wide channel.
+ */
+export function renderSalesUpdate(
+  figures: Pick<SalesFiguresData, 'totals' | 'people' | 'daily'>,
+  perDayTarget: number,
+  mode: UpdateMode,
+  bris: Date,
+  since: string,
+  until: string,
+): SalesUpdate {
 
   // Target: the whole-business daily figure (SALES_TARGET_PER_DAY, editable in
   // the portal's integration settings). The weekly target is that times the
@@ -78,7 +95,7 @@ export async function buildSalesUpdate(mode: UpdateMode, now: Date = new Date())
   // full week and a mid-week preview is not flattered by comparing five days
   // of target to two days of sales.
   const weekdaysCovered = countWeekdays(since, until)
-  const target = mode === 'weekly' ? targets.perDay * Math.max(1, weekdaysCovered) : targets.perDay
+  const target = mode === 'weekly' ? perDayTarget * Math.max(1, weekdaysCovered) : perDayTarget
 
   const t = figures.totals
   const pct = target > 0 ? Math.round((t.total / target) * 100) : 0
@@ -120,7 +137,7 @@ export async function buildSalesUpdate(mode: UpdateMode, now: Date = new Date())
       .map(d => {
         const dt = new Date(d.date + 'T00:00:00Z')
         const name = DAY_NAMES[dt.getUTCDay()].slice(0, 3)
-        const hit = d.total >= targets.perDay ? ' :white_check_mark:' : ''
+        const hit = d.total >= perDayTarget ? ' :white_check_mark:' : ''
         return `${name}   ${money(d.total)}${hit}`
       })
     if (rows.length) {
@@ -134,7 +151,19 @@ export async function buildSalesUpdate(mode: UpdateMode, now: Date = new Date())
     elements: [{ type: 'mrkdwn', text: 'Orders written, from the Monday boards — the same figures as Reports → Sales Report. Target is adjustable in the portal (Settings → Integrations → `SALES_TARGET_PER_DAY`).' }],
   })
 
-  const text = [heading.replace(/[*_]/g, ''), ...lines.map(l => l.replace(/[*_]/g, '')), topLine.replace(/[*_]/g, '')].join('\n')
+  // Slack's notification/preview line. Built explicitly rather than by
+  // stripping markdown: a blanket /[*_]/ strip also eats the underscores
+  // inside emoji shortcodes, turning :bar_chart: into :barchart:.
+  const periodLabel = mode === 'weekly'
+    ? `Week in review — ${longDate(new Date(since + 'T00:00:00Z'))} to ${longDate(new Date(until + 'T00:00:00Z'))}`
+    : `Sales update — ${longDate(new Date(until + 'T00:00:00Z'))}`
+  const text = [
+    periodLabel,
+    `Just Autos bookings ${money(t.ordersValue)} (${plural(t.ordersCount, 'order')})`,
+    `Distributors ${money(t.distValue)} (${plural(t.distCount, 'order')})`,
+    `Total ${money(t.total)} — ${pct}% of the ${money(target)} target`,
+    top ? `Top seller: ${top.person} — ${money(top.total)}` : 'No orders written yet.',
+  ].join('\n')
   return { mode, since, until, text, blocks, summary }
 }
 
@@ -157,7 +186,9 @@ function countWeekdays(sinceYmd: string, untilYmd: string): number {
 
 /** Channel is a portal setting so it can be moved without a deploy. */
 export async function salesUpdateChannel(): Promise<string> {
-  return (await getIntegration('SALES_UPDATE_SLACK_CHANNEL')) || '#sales-updates'
+  // #sales-updates (id from Chris, 2026-08-31). An id rather than a name so it
+  // survives a channel rename; still overridable in the portal.
+  return (await getIntegration('SALES_UPDATE_SLACK_CHANNEL')) || 'C0BTL0TND6X'
 }
 
 export async function postSalesUpdate(mode: UpdateMode, now: Date = new Date()): Promise<{
