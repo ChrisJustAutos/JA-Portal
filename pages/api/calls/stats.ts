@@ -107,12 +107,50 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       // and Supabase will cache the second one.
       const agentKey = parseAgentKey(extensionParam)
 
+      // Load the roster FIRST — the KPI filter below needs it. Since
+      // hot-desking ended, a handset names exactly one advisor, and the
+      // per-agent list folds handset-attributed calls into that advisor. The
+      // KPI panel has to fold them the SAME way or picking an agent
+      // under-reports them: a call only carries effective_advisor_slack_user_id
+      // once the analyser has run, so everything newer than the last analysis
+      // pass has an extension and no slack id (Chris 2026-09-02 — selecting an
+      // agent should narrow the panel to that agent).
+      const { data: rosterEarly } = await sb.from('call_advisor_roster')
+        .select('name, slack_user_id, extensions, active').eq('active', true)
+      const claims = new Map<string, number>()
+      for (const r of (rosterEarly || []) as any[]) {
+        for (const e of (r.extensions || [])) {
+          const k = String(e).trim(); if (k) claims.set(k, (claims.get(k) || 0) + 1)
+        }
+      }
+      // slack id -> the extensions ONLY they claim. A shared handset is left
+      // out: folding it in would credit one advisor with another's calls.
+      const ownedExts = new Map<string, string[]>()
+      for (const r of (rosterEarly || []) as any[]) {
+        if (!r.slack_user_id) continue
+        const mine = (r.extensions || []).map((e: any) => String(e).trim())
+          .filter((e: string) => e && claims.get(e) === 1)
+        if (mine.length) ownedExts.set(r.slack_user_id, mine)
+      }
+
       let kpiQuery = sb.from('calls')
         .select('direction, disposition, billsec_seconds, agent_ext, effective_advisor_slack_user_id, call_date, external_number')
         .gte('call_date', periodFromIso)
       if (periodToIso) kpiQuery = kpiQuery.lte('call_date', periodToIso)
-      if (agentKey?.kind === 'slack') kpiQuery = kpiQuery.eq('effective_advisor_slack_user_id', agentKey.id)
-      else if (agentKey?.kind === 'ext') kpiQuery = kpiQuery.eq('agent_ext', agentKey.ext).is('effective_advisor_slack_user_id', null)
+      if (agentKey?.kind === 'slack') {
+        const exts = ownedExts.get(agentKey.id) || []
+        if (exts.length) {
+          // Their attributed calls PLUS the not-yet-analysed ones on their own
+          // handset — the same set the sidebar counts.
+          const ors = [`effective_advisor_slack_user_id.eq.${agentKey.id}`]
+            .concat(exts.map(e => `and(effective_advisor_slack_user_id.is.null,agent_ext.eq.${e})`))
+          kpiQuery = kpiQuery.or(ors.join(','))
+        } else {
+          kpiQuery = kpiQuery.eq('effective_advisor_slack_user_id', agentKey.id)
+        }
+      } else if (agentKey?.kind === 'ext') {
+        kpiQuery = kpiQuery.eq('agent_ext', agentKey.ext).is('effective_advisor_slack_user_id', null)
+      }
 
       let agentBreakdownQuery = sb.from('calls')
         .select('direction, disposition, billsec_seconds, agent_ext, agent_name, effective_advisor_name, effective_advisor_slack_user_id, call_date, external_number')
@@ -123,20 +161,12 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         kpiRes,
         agentRes,
         extensionsRes,
-        rosterRes,
         syncRes,
       ] = await Promise.all([
         kpiQuery,
         agentBreakdownQuery,
         sb.from('extensions')
           .select('extension, display_name, role')
-          .eq('active', true),
-        // The advisor roster maps each extension to ONE person. Since
-        // hot-desking ended (2026-08-31) a handset identifies its owner, so an
-        // un-attributed call can be folded into that advisor rather than
-        // becoming a second row for the same human.
-        sb.from('call_advisor_roster')
-          .select('name, slack_user_id, extensions, active')
           .eq('active', true),
         sb.from('sync_state')
           .select('last_synced_at, last_error, records_synced_total')
@@ -151,7 +181,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const kpiCalls = kpiRes.data || []
       const agentCalls = agentRes.data || []
       const extensions = extensionsRes.data || []
-      const rosterRows = rosterRes.error ? [] : (rosterRes.data || [])
+      const rosterRows = rosterEarly || []   // loaded above, for the KPI filter
       const sync = syncRes.data || { last_synced_at: null, last_error: null, records_synced_total: 0 }
 
       // "Rescued" detection: a ring that shows NO ANSWER but whose caller was

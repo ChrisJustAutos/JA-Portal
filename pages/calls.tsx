@@ -12,7 +12,6 @@ import { requirePageAuth } from '../lib/authServer'
 import { roleHasPermission } from '../lib/permissions'
 import { useChatContext } from '../components/GlobalChatbot'
 import { groupCalls, type LiveChannel, type LiveCallCard, type SpyMode } from '../lib/live-calls'
-import CallInsights, { CallTabBar, type CallView } from '../components/calls/CallInsights'
 import type { PortalUserSSR } from '../lib/authServer'
 import { dimensionLabel, callTypeLabel } from '../lib/calls-dimensions'
 import { T } from '../lib/ui/theme'
@@ -1257,7 +1256,6 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
   const [stats, setStats] = useState<StatsPayload | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [selectedCall, setSelectedCall] = useState<CallRow | null>(null)
-  const [view, setView] = useState<CallView>('overview')
 
   // Date range state — explicit YYYY-MM-DD strings (Brisbane time)
   const [startDate, setStartDate] = useState<string>(ymdToday())
@@ -1529,12 +1527,12 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
               </div>
             ) : (
               <>
-                {/* Icon tab bar — Overview + insight tabs (same AppIcon style as the Settings hub) */}
-                <CallTabBar view={view} onChange={setView} />
-
-                {view !== 'overview' ? (
-                  <CallInsights view={view} startDate={startDate} endDate={endDate} agent={filterAgent} onOpenCall={openCallById} />
-                ) : (
+                {/* Sentiment / Coaching / Words & objections / Conversion were
+                    removed 2026-09-02 (Chris) — the page is the Overview only,
+                    so the tab bar went with them rather than sitting there with
+                    a single tab. components/calls/CallInsights.tsx and
+                    /api/calls/insights are left in place, unreferenced, so the
+                    tabs can be restored by putting <CallTabBar> back. */}
                 <>
                 {/* Live call monitoring — management only */}
                 <LiveCallsBoard canMonitor={canMonitor} />
@@ -1788,7 +1786,6 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                   <span style={{ color: T.text2, fontWeight: 600 }}>✓ Phase 3 · AI Coaching &amp; Insights</span>
                 </div>
                 </>
-                )}
               </>
             )}
           </div>
