@@ -786,6 +786,17 @@ Two layers now, mirroring the quote guard's "document-type read OR quote-named a
 
 **The consolidated-invoice exception still wins over both signals.** Suppliers whose "statement" IS a single tax invoice for the period (Time Express Courier, Supagas) are checked with `consolidatedInvoiceSupplier` after either signal fires, so they keep posting — verified against the three such invoices already posted from statement-named files. The skip now records WHY on the log row rather than a bare outcome, so a wrongly-skipped supplier is diagnosable.
 
+**The B2B reorder sheet undercounted sales (2026-09-01).** Chris: SKU `3070010` showed **598** units over 1 Jan – 31 Aug while MYOB showed **829**. `pages/api/b2b/admin/reorder/sync.ts` rolled its own MYOB pull and got two already-documented traps wrong at once:
+
+1. **Only `Sale/Invoice/Item`.** `lib/myob-reporting` carries an explicit warning that querying just the Item layout **undercounts, because JAWS raises some sales as Service invoices**, which is why it merges all five types (Item, Service, Professional, Miscellaneous, TimeBilling).
+2. **No `$orderby`.** The same file notes that skip-based paging without a deterministic order can drop rows at page boundaries — it passes `$orderby: Number` for exactly that reason.
+
+The sales pull now calls `fetchSaleInvoicesWithLines('JAWS', …)` instead, which fixes both, propagates mid-pagination errors rather than swallowing them (the 2026-07-21 EOFY bug), and returns lines already flattened with `ItemNumber` / `ShipQuantity`. Its end bound is **exclusive**, so `to_date` is advanced one day to keep the last day in range.
+
+**Not yet confirmed to be the whole gap.** Service and Professional layout lines carry an account, not an item, so they may contribute no item quantities — in which case the remaining difference is either the MYOB figure covering a different period, or it including sale ORDERS not yet invoiced (B2B writes an order first and converts on shipment, so unshipped stock is committed but not sold). Re-sync the sheet and compare before assuming it is closed.
+
+**The stock pull in the same file still pages `Inventory/Item` by `$skip` with no `$orderby`** — the identical trap, on the on-hand/committed/on-order figures that drive the order quantity. `fetchInventoryItems` in myob-reporting is the drop-in fix; not done here to keep this change to the reported fault.
+
 **Per-agent on /calls listed the same person twice (2026-09-01).** The panel showed *Tyronne (identified) 27 calls, 2h48m* AND *Tyronne Wright (Ext 203) 32 calls, 18m* — same human, split across two rows, with the talk time divided between them. Same for Graham/4001, Dom/204 and James/201.
 
 `pages/api/calls/stats.ts` keyed an agent by `slack:<id>` when the call had an effective advisor and by `ext:<n>` when it only had a handset. That split was deliberate while hot-desking meant a handset identified nothing — but hot-desking ended 2026-08-31, so an extension now names exactly one person, and any call not yet attributed became a phantom second agent.

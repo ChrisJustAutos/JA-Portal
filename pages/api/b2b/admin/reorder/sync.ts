@@ -2,12 +2,14 @@
 // POST — refresh every reorder row from MYOB (JAWS) over the portal's direct
 // OAuth connection (no CData):
 //   • on-hand / committed / available / on-order  — /Inventory/Item
-//   • total sales qty over the settings date range — /Sale/Invoice/Item lines
+//   • total sales qty over the settings date range — sale-invoice lines across
+//     ALL invoice types, via lib/myob-reporting (see the note on the sales pull)
 // Permission: edit:b2b_catalogue.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../lib/authServer'
 import { getConnection, myobFetch } from '../../../../../lib/myob'
+import { fetchSaleInvoicesWithLines } from '../../../../../lib/myob-reporting'
 
 export const config = { maxDuration: 120 }
 
@@ -55,23 +57,35 @@ export default withAuth('edit:b2b_catalogue', async (req, res, user) => {
     }
   } catch (e: any) { warnings.push(`Stock pull failed: ${e?.message || e}`) }
 
-  // ── Sales qty over the range: page Item-layout invoices, sum line ShipQuantity ──
+  // ── Sales qty over the range ──────────────────────────────────────────
+  //
+  // Via lib/myob-reporting, NOT a hand-rolled pull, because this used to page
+  // `Sale/Invoice/Item` itself and got two documented traps wrong at once
+  // (Chris 2026-09-01: SKU 3070010 read 598 in the sheet against 829 in MYOB):
+  //
+  //   1. ONLY the Item layout. JAWS raises some sales on other invoice types,
+  //      so an Item-only pull undercounts — the exact reason
+  //      myob-reporting queries all five (Item, Service, Professional,
+  //      Miscellaneous, TimeBilling) and merges them.
+  //   2. NO $orderby. Skip-based paging without a deterministic order can drop
+  //      rows at page boundaries, which silently loses whole invoices.
+  //
+  // fetchSaleInvoicesWithLines fixes both, propagates mid-pagination errors
+  // instead of swallowing them (the 2026-07-21 EOFY bug), and its end bound is
+  // EXCLUSIVE — so to_date is pushed one day forward to keep the last day in.
   const salesBySku: Record<string, number> = {}
   if (settings?.from_date && settings?.to_date) {
     try {
-      const filter = `Date ge datetime'${settings.from_date}T00:00:00' and Date le datetime'${settings.to_date}T23:59:59'`
-      for (let skip = 0, page = 0; page < 120; page++, skip += 400) {
-        const r = await myobFetch(conn.id, `${cf}/Sale/Invoice/Item`, { query: { '$filter': filter, '$top': 400, '$skip': skip }, performedBy: user.id })
-        if (r.status !== 200) { warnings.push(`Sales pull HTTP ${r.status}: ${(r.raw || '').slice(0, 120)}`); break }
-        const invoices: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
-        for (const inv of invoices) {
-          for (const l of (inv.Lines || [])) {
-            const sku = String(l.Item?.Number || '').trim()
-            if (!sku || !wantSku.has(sku)) continue
-            salesBySku[sku] = (salesBySku[sku] || 0) + num(l.ShipQuantity)
-          }
-        }
-        if (invoices.length < 400) break
+      const endExclusive = new Date(`${settings.to_date}T00:00:00Z`)
+      endExclusive.setUTCDate(endExclusive.getUTCDate() + 1)
+      const { lines } = await fetchSaleInvoicesWithLines('JAWS', {
+        start: settings.from_date,
+        endExclusive: endExclusive.toISOString().slice(0, 10),
+      })
+      for (const l of lines) {
+        const sku = String(l.ItemNumber || '').trim()
+        if (!sku || !wantSku.has(sku)) continue
+        salesBySku[sku] = (salesBySku[sku] || 0) + num(l.ShipQuantity)
       }
     } catch (e: any) { warnings.push(`Sales pull failed: ${e?.message || e}`) }
   } else {
