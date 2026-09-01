@@ -12,7 +12,10 @@ export default withAuth('view:diary', async (req, res, user) => {
   if (req.method === 'GET') {
     const limit = Math.min(Number(req.query.limit) || 100, 500)
     const offset = Number(req.query.offset) || 0
-    return res.status(200).json({ jobs: await listLetterJobs(limit, offset) })
+    // ?all=1 shows settled letters too (printed / skipped / written off);
+    // the default is the worklist.
+    const includeAll = String(req.query.all || '') === '1'
+    return res.status(200).json({ jobs: await listLetterJobs(limit, offset, includeAll) })
   }
 
   if (req.method === 'POST') {

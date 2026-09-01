@@ -158,17 +158,22 @@ export async function setAutomation(patch: Partial<LetterAutomation>): Promise<L
   return getLetterAutomation()
 }
 
-export async function listLetterJobs(limit = 100, offset = 0, includeSkipped = false): Promise<any[]> {
+// The Letters screen is a WORKLIST, not a history (Chris 2026-09-02: "printed
+// should just disappear, only thing left should be unprinted or queued"). So
+// the default shows only what still needs something to happen:
+//   queued      — sent to the printer, not confirmed back yet
+//   failed      — could not be produced, needs a human
+// and hides everything settled:
+//   printed     — confirmed printed, nothing to do
+//   skipped     — deposits / non-job invoices the poller deliberately ignored
+//   written_off — old print failures ruled too old to reprint
+// Pass includeAll (?all=1) to see the lot, which is how you check a letter
+// that HAS printed.
+export async function listLetterJobs(limit = 100, offset = 0, includeAll = false): Promise<any[]> {
   let q = sb().from('workshop_letter_jobs')
     .select('*, template:workshop_letter_templates(name)')
     .order('created_at', { ascending: false })
-  // 'skipped' rows are deposits / non-job invoices the poller examined and
-  // deliberately didn't print — noise in the history view by default.
-  // 'written_off' joins them: the 30 letters whose print failed between 24 Jun
-  // and 13 Jul (MSI laptop off-network) are kept for the audit trail but were
-  // ruled too old to reprint (Chris 2026-09-02), so they shouldn't sit in the
-  // working list either.
-  if (!includeSkipped) q = q.not('status', 'in', '("skipped","written_off")')
+  if (!includeAll) q = q.in('status', ['queued', 'failed'])
   const { data } = await q.range(offset, offset + limit - 1)
   return data || []
 }

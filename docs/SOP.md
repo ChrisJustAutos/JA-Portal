@@ -103,12 +103,16 @@ Six things remain, all on one tab strip:
 
 **What the statuses mean** (corrected 2 September 2026 — letters used to sit on **Queued** forever even after they had printed):
 
+**The Letters screen is a worklist, not a history.** It shows only letters that still need something:
+
 | Status | Meaning |
 |---|---|
-| **Queued** | Sent to the printer, not confirmed printed yet. Should clear within minutes |
-| **Printed** | Confirmed printed, with the time it printed |
+| **Queued** | Sent to the printer, not confirmed back yet. Should clear within minutes |
 | **Failed** | Could not be produced — needs a look |
-| **Written off** | Old failures nobody is going to reprint. Hidden from the list |
+
+Everything settled **disappears from the list**: printed letters, skipped ones (deposits and non-job invoices), and the old write-offs. **An empty screen is the healthy state** — it means every letter has printed.
+
+To see letters that HAVE printed, add `?all=1` to the page address.
 
 **⚠ If letters start piling up on Queued again, the print PC is the first thing to check** — PORTAL-CENTRE in the comms room. A letter only moves to Printed when the printer confirms it, so a growing Queued list means the agent is not collecting jobs. Failed jobs can be re-queued (failed → pending).
 
