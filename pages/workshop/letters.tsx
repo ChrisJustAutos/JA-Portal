@@ -105,6 +105,7 @@ export default function LettersPage({ user }: { user: PortalUserSSR }) {
 
 // ── History ────────────────────────────────────────────────────────────
 function History({ canEdit, toast }: { canEdit: boolean; toast: (m: string, k?: any) => void }) {
+  const confirmDialog = useConfirm()
   const [jobs, setJobs] = useState<LetterJob[] | null>(null)
   const load = useCallback(async () => {
     const r = await fetch('/api/workshop/letters/jobs')
@@ -113,10 +114,25 @@ function History({ canEdit, toast }: { canEdit: boolean; toast: (m: string, k?: 
   }, [])
   useEffect(() => { load() }, [load])
 
-  const reprint = async (id: string) => {
-    const r = await fetch('/api/workshop/letters/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reprint', id }) })
-    const d = await r.json()
-    toast(r.ok ? 'Re-queued to the printer' : (d.error || 'Reprint failed'), r.ok ? 'success' : 'error')
+  // reprint = send the stored PDF again. retry = rebuild it (the usual failure
+  // is the render/upload, so there IS no stored PDF). dismiss = give up on it.
+  // All three reload, because retry and dismiss change what belongs on the
+  // worklist and a stale row would look like the action didn't take.
+  const act = async (action: 'reprint' | 'retry' | 'dismiss', id: string, ok: string, fail: string) => {
+    const r = await fetch('/api/workshop/letters/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, id }) })
+    const d = await r.json().catch(() => ({}))
+    toast(r.ok ? ok : (d.error || fail), r.ok ? 'success' : 'error')
+    if (r.ok) load()
+  }
+  const reprint = (id: string) => act('reprint', id, 'Re-queued to the printer', 'Reprint failed')
+  const retry   = (id: string) => act('retry',   id, 'Letter rebuilt and queued', 'Retry failed')
+  const dismiss = async (id: string) => {
+    if (!(await confirmDialog({
+      title: 'Remove this letter?',
+      message: 'It will be cleared off the list and never printed. The record is kept, but it stops being something to action.',
+      confirmLabel: 'Remove', danger: true,
+    }))) return
+    act('dismiss', id, 'Removed', 'Could not remove')
   }
 
   if (!jobs) return <SkeletonRows rows={6} />
@@ -136,7 +152,19 @@ function History({ canEdit, toast }: { canEdit: boolean; toast: (m: string, k?: 
           <div style={{ color: T.text2 }}>{money(j.invoice_total)}</div>
           <div><StatusPill label={j.trigger} color={j.trigger === 'auto' ? T.accent : T.text3} /></div>
           <div title={j.error || ''}><StatusPill label={j.status} color={statusColor(j.status)} /></div>
-          <div>{canEdit && j.letter_storage_path ? <button onClick={() => reprint(j.id)} style={miniBtn(T.accent)}>Reprint</button> : null}</div>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+            {canEdit && j.letter_storage_path && (
+              <button onClick={() => reprint(j.id)} style={miniBtn(T.accent)}>Reprint</button>
+            )}
+            {/* No stored PDF means the render or upload failed - reprint has
+                nothing to send, so offer a rebuild instead. */}
+            {canEdit && !j.letter_storage_path && j.status === 'failed' && (
+              <button onClick={() => retry(j.id)} style={miniBtn(T.accent)} title="Rebuild this letter from the customer and template and send it to the printer">Retry</button>
+            )}
+            {canEdit && j.status !== 'printed' && (
+              <button onClick={() => dismiss(j.id)} style={miniBtn(T.text3)} title="Clear it off the list without printing">Remove</button>
+            )}
+          </div>
         </div>
       ))}
     </div>

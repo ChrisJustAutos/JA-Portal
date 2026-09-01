@@ -433,6 +433,66 @@ export async function maybeAutoLetterForBooking(
 
 // Re-queue the print jobs for an already-rendered letter (paths still in the
 // workshop-letters bucket) — used by the history "Reprint" button.
+/**
+ * Clear a letter off the worklist without printing it (Chris 2026-09-02:
+ * "Need the option to remove failed letters"). Kept as a row for the audit
+ * trail, marked written_off so it drops out of the default list.
+ */
+export async function dismissLetter(jobId: string, note?: string): Promise<EnqueueResult> {
+  const c = sb()
+  const { data: job } = await c.from('workshop_letter_jobs').select('id, status, error').eq('id', jobId).maybeSingle()
+  if (!job) return { status: 'failed', error: 'Letter not found' }
+  if (job.status === 'printed') return { status: 'failed', error: 'That letter has already printed' }
+  const { error } = await c.from('workshop_letter_jobs').update({
+    status: 'written_off',
+    error: [job.error, note || 'removed by hand'].filter(Boolean).join(' | ').slice(0, 500),
+  }).eq('id', jobId)
+  if (error) return { status: 'failed', error: error.message }
+  return { status: 'skipped', jobId }
+}
+
+/**
+ * Re-make a FAILED letter from scratch.
+ *
+ * reprintLetter only re-queues an existing PDF, which is no use to the common
+ * failure: the render or the UPLOAD fell over, so there is no PDF at all (both
+ * live failures on 2026-09-02 were "letter upload: …"). This rebuilds it from
+ * the customer and template recorded on the row.
+ *
+ * It enqueues a NEW row as a MANUAL letter rather than re-using the old one,
+ * deliberately: the auto path carries partial unique indexes on booking_id and
+ * myob_invoice_uid, so re-inserting against the same invoice would collide and
+ * silently come back "skipped". The original is written off so the worklist
+ * ends up with exactly one live row.
+ */
+export async function retryLetter(jobId: string, createdBy?: string | null): Promise<EnqueueResult> {
+  const c = sb()
+  const { data: job } = await c.from('workshop_letter_jobs')
+    .select('id, customer_id, template_id, invoice_total, status').eq('id', jobId).maybeSingle()
+  if (!job) return { status: 'failed', error: 'Letter not found' }
+  if (job.status === 'printed') return { status: 'failed', error: 'That letter has already printed' }
+  if (!job.customer_id) return { status: 'failed', error: 'No customer on this letter — compose it manually instead' }
+  if (!job.template_id) return { status: 'failed', error: 'No template on this letter — compose it manually instead' }
+
+  const found = await getCustomerForLetter(job.customer_id)
+  if (!found) return { status: 'failed', error: 'That customer no longer exists' }
+  const template = await getTemplate(job.template_id)
+  if (!template) return { status: 'failed', error: 'That template no longer exists' }
+
+  const r = await enqueueLetter({
+    trigger: 'manual', customer: found.customer, vehicle: found.vehicle, template,
+    invoiceTotal: job.invoice_total ?? null, createdBy: createdBy || null,
+  })
+  // Only retire the original once the new one is safely queued — otherwise a
+  // failed retry would leave nothing on the worklist to try again.
+  if (r.status === 'queued') {
+    await c.from('workshop_letter_jobs').update({
+      status: 'written_off', error: `retried ${new Date().toISOString().slice(0, 10)} — replaced by a new letter`,
+    }).eq('id', jobId)
+  }
+  return r
+}
+
 export async function reprintLetter(jobId: string): Promise<EnqueueResult> {
   const c = sb()
   const { data: job } = await c.from('workshop_letter_jobs').select('letter_storage_path, envelope_storage_path').eq('id', jobId).maybeSingle()

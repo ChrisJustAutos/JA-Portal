@@ -3,10 +3,12 @@
 // POST { action:'manual', customerId, templateId, body?, recipientName?, recipientAddress? }
 //                              — render + queue a manual letter (edit:bookings)
 // POST { action:'reprint', id } — re-queue an existing letter's print jobs (edit:bookings)
+// POST { action:'retry',   id } — rebuild a FAILED letter from scratch (edit:bookings)
+// POST { action:'dismiss', id } — clear a letter off the worklist (edit:bookings)
 
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { listLetterJobs, enqueueLetter, reprintLetter, getTemplate, getCustomerForLetter } from '../../../../lib/workshop-letters'
+import { listLetterJobs, enqueueLetter, reprintLetter, retryLetter, dismissLetter, getTemplate, getCustomerForLetter } from '../../../../lib/workshop-letters'
 
 export default withAuth('view:diary', async (req, res, user) => {
   if (req.method === 'GET') {
@@ -26,6 +28,20 @@ export default withAuth('view:diary', async (req, res, user) => {
     if (body.action === 'reprint') {
       if (!body.id) return res.status(400).json({ error: 'id required' })
       const r = await reprintLetter(String(body.id))
+      return res.status(r.status === 'failed' ? 500 : 200).json(r)
+    }
+
+    // Rebuild a failed letter. reprint only re-queues an EXISTING pdf, which is
+    // no help when the render or upload is what failed and there is no pdf.
+    if (body.action === 'retry') {
+      if (!body.id) return res.status(400).json({ error: 'id required' })
+      const r = await retryLetter(String(body.id), user.id)
+      return res.status(r.status === 'failed' ? 500 : 200).json(r)
+    }
+
+    if (body.action === 'dismiss') {
+      if (!body.id) return res.status(400).json({ error: 'id required' })
+      const r = await dismissLetter(String(body.id), typeof body.note === 'string' ? body.note : undefined)
       return res.status(r.status === 'failed' ? 500 : 200).json(r)
     }
 
