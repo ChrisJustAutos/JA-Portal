@@ -468,20 +468,38 @@ export async function dismissLetter(jobId: string, note?: string): Promise<Enque
 export async function retryLetter(jobId: string, createdBy?: string | null): Promise<EnqueueResult> {
   const c = sb()
   const { data: job } = await c.from('workshop_letter_jobs')
-    .select('id, customer_id, template_id, invoice_total, status').eq('id', jobId).maybeSingle()
+    .select('id, customer_id, template_id, recipient_name, recipient_address, invoice_total, status')
+    .eq('id', jobId).maybeSingle()
   if (!job) return { status: 'failed', error: 'Letter not found' }
   if (job.status === 'printed') return { status: 'failed', error: 'That letter has already printed' }
-  if (!job.customer_id) return { status: 'failed', error: 'No customer on this letter — compose it manually instead' }
   if (!job.template_id) return { status: 'failed', error: 'No template on this letter — compose it manually instead' }
-
-  const found = await getCustomerForLetter(job.customer_id)
-  if (!found) return { status: 'failed', error: 'That customer no longer exists' }
   const template = await getTemplate(job.template_id)
   if (!template) return { status: 'failed', error: 'That template no longer exists' }
 
+  // AUTO letters have NO customer_id — they are built from a MYOB invoice, not
+  // from workshop_customers (all 609 auto rows have it null, which is why the
+  // first cut of this refused with "No customer on this letter"). What they DO
+  // carry is the recipient name and address as printed. So rebuild from those
+  // via the overrides, and only fall back to the customer record for a manual
+  // letter that has one.
+  let customer: any = null
+  let vehicle: any = null
+  if (job.customer_id) {
+    const found = await getCustomerForLetter(job.customer_id)
+    if (found) { customer = found.customer; vehicle = found.vehicle }
+  }
+  const name = String(job.recipient_name || '').trim()
+  if (!customer) {
+    if (!name) return { status: 'failed', error: 'No recipient on this letter — compose it manually instead' }
+    // Minimal stand-in so {{first_name}} / {{customer_name}} still render.
+    customer = { name, first_name: name.split(/\s+/)[0] }
+  }
+
   const r = await enqueueLetter({
-    trigger: 'manual', customer: found.customer, vehicle: found.vehicle, template,
+    trigger: 'manual', customer, vehicle, template,
     invoiceTotal: job.invoice_total ?? null, createdBy: createdBy || null,
+    recipientNameOverride: name || null,
+    recipientAddressOverride: job.recipient_address || null,
   })
   // Only retire the original once the new one is safely queued — otherwise a
   // failed retry would leave nothing on the worklist to try again.
