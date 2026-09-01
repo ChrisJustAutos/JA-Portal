@@ -42,6 +42,7 @@ export interface B2BSettings {
   myob_card_fee_item_uid: string | null         // NEW — required
   myob_card_fee_item_name: string | null
   myob_default_freight_account_uid: string | null
+  manual_approval_threshold_inc: number | null   // migration 218
   slack_new_order_webhook_url: string | null
   tax_codes_refreshed_at: string | null
 }
@@ -134,6 +135,12 @@ export async function assertCheckoutConfigured(): Promise<{
   freTaxCodeUid: string
   cardFeePct: number
   cardFeeFixed: number
+  /**
+   * Order totals (goods + GST + freight) at or above this cannot be paid at
+   * checkout — they submit for manual processing and a bank transfer instead
+   * (migration 218). null disables the rule.
+   */
+  manualApprovalThresholdInc: number | null
   surchargeEndsOn: string | null
 }> {
   const settings = await loadSettings()
@@ -153,6 +160,8 @@ export async function assertCheckoutConfigured(): Promise<{
     // require at-or-below cost; || silently reverted 0 to the default).
     cardFeePct:        Number(settings.card_fee_percent ?? 0.017),
     cardFeeFixed:      Number(settings.card_fee_fixed   ?? 0.30),
+    manualApprovalThresholdInc: settings.manual_approval_threshold_inc != null
+      ? Number(settings.manual_approval_threshold_inc) : null,
     // All surcharges stop on/after this date - see surchargesEnded().
     surchargeEndsOn:   (settings as any).payment_surcharge_ends_on ?? null,
   }

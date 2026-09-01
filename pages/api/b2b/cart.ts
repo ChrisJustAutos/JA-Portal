@@ -373,7 +373,18 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     console.error('cart freight-quote failed (non-fatal):', e?.message)
   }
 
+  // Orders at or above this (goods + GST + freight) cannot be paid at
+  // checkout - the cart warns and the button becomes a submit-for-approval
+  // (migration 218). Sent with every cart so the warning appears as the
+  // total climbs, not as a surprise at the payment step.
+  let manualApprovalThresholdInc: number | null = null
+  try {
+    const { data: sRow } = await c.from('b2b_settings').select('manual_approval_threshold_inc').eq('id', 'singleton').maybeSingle()
+    if (sRow?.manual_approval_threshold_inc != null) manualApprovalThresholdInc = Number(sRow.manual_approval_threshold_inc)
+  } catch { /* no warning rather than a broken cart */ }
+
   return res.status(200).json({
+    manual_approval_threshold_inc: manualApprovalThresholdInc,
     cart_id: cart.id,
     // The delivery sites this distributor can pick from, and which one this
     // cart is quoting against.

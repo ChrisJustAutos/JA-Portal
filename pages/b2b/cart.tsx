@@ -124,6 +124,8 @@ interface ShipAddress {
 }
 
 interface CartResponse {
+  /** Orders at/above this (goods + GST + freight) are processed by hand (migration 218). */
+  manual_approval_threshold_inc: number | null
   cart_id: string
   // Delivery sites on this account, and the one this cart is quoting against.
   ship_addresses?: ShipAddress[]
@@ -314,6 +316,11 @@ export default function B2BCartPage({ b2bUser }: Props) {
         }
         throw new Error(j?.error || `HTTP ${r.status}`)
       }
+      // Over the manual-processing threshold there is no Stripe session — the
+      // order is already placed and waiting for Just Autos to approve it, so go
+      // straight to it rather than looking for a checkout URL that will never
+      // come (migration 218).
+      if (j?.manualApproval) { window.location.href = `/b2b/orders/${j.orderId}?submitted=1`; return }
       if (!j?.checkout_url) throw new Error('No checkout URL returned')
       window.location.href = j.checkout_url
     } catch (e: any) {
@@ -439,6 +446,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
 
             {/* Checkout rail */}
             <CheckoutRail
+              manualThreshold={data.manual_approval_threshold_inc}
               totals={data.totals}
               cardFee={data.card_fee}
               customerPo={customerPo}
@@ -639,7 +647,7 @@ function incGst(ex: number, taxable: boolean): number {
 
 // ─── Checkout rail ─────────────────────────────────────────────────────
 function CheckoutRail({
-  totals, cardFee, customerPo, onCustomerPoChange, paymentMethod, onPaymentMethodChange, onCheckout, checkoutBusy, blockedReason,
+  totals, cardFee, customerPo, onCustomerPoChange, paymentMethod, onPaymentMethodChange, onCheckout, checkoutBusy, blockedReason, manualThreshold,
   freight, shipAddresses, shipAddressId, onChooseShipAddress, shipBusy, selectedFreightId, onSelectFreight, isMobile,
 }: {
   totals: CartTotals
@@ -650,6 +658,8 @@ function CheckoutRail({
   onPaymentMethodChange: (m: 'card' | 'becs' | 'payto') => void
   onCheckout: () => void
   checkoutBusy: boolean
+  /** Orders at/above this (goods + GST + freight) are processed by hand. */
+  manualThreshold?: number | null
   blockedReason: string | null
   freight: FreightPayload | null
   selectedFreightId: string | null
@@ -678,8 +688,15 @@ function CheckoutRail({
   const newCardFeeInc  = applySurcharge ? Math.max(0, charged - newSubtotalInc) : 0
   // PayTo and BECS carry the same Stripe pricing (1% + 30c capped $3.50), so
   // they share the surcharge helper.
-  const paytoFeeInc    = (paymentMethod === 'payto' || paymentMethod === 'becs') ? paytoSurchargeInc(newSubtotalInc) : 0
-  const grandTotalInc  = newSubtotalInc + newCardFeeInc + paytoFeeInc
+  const rawPaytoFeeInc = (paymentMethod === 'payto' || paymentMethod === 'becs') ? paytoSurchargeInc(newSubtotalInc) : 0
+
+  // Over the threshold the order is not paid here at all — it goes through for
+  // approval and is settled by bank transfer, so NO surcharge applies. Zero the
+  // fees rather than showing a charge that will never be made (migration 218).
+  const needsApproval  = manualThreshold != null && manualThreshold > 0 && newSubtotalInc >= manualThreshold
+  const cardFeeShown   = needsApproval ? 0 : newCardFeeInc
+  const paytoFeeInc    = needsApproval ? 0 : rawPaytoFeeInc
+  const grandTotalInc  = newSubtotalInc + cardFeeShown + paytoFeeInc
 
   const poTrimmed = customerPo.trim()
   const poTooLong = poTrimmed.length > 20
@@ -854,16 +871,33 @@ function CheckoutRail({
       <div style={{borderTop:`1px solid ${T.border}`, paddingTop:10}}>
         <Row label="Items (inc GST)" value={`$${totals.subtotal_inc_gst.toFixed(2)}`}/>
         {selectedFreight && <Row label="Freight" value={`$${freightInc.toFixed(2)}`} muted/>}
-        {applySurcharge
-          ? <Row label="Card surcharge" value={`$${newCardFeeInc.toFixed(2)}`} muted/>
-          : <Row label={paymentMethod === 'becs' ? 'Bank debit fee' : 'PayTo fee'} value={`$${paytoFeeInc.toFixed(2)}`} muted/>}
-        <Row label="Total to pay" value={`$${grandTotalInc.toFixed(2)}`} large/>
+        {/* No surcharge on a manual order - it is settled by bank transfer. */}
+        {!needsApproval && (applySurcharge
+          ? <Row label="Card surcharge" value={`$${cardFeeShown.toFixed(2)}`} muted/>
+          : <Row label={paymentMethod === 'becs' ? 'Bank debit fee' : 'PayTo fee'} value={`$${paytoFeeInc.toFixed(2)}`} muted/>)}
+        <Row label={needsApproval ? 'Order total' : 'Total to pay'} value={`$${grandTotalInc.toFixed(2)}`} large/>
         <div style={{fontSize:12,color:T.text3,marginTop:2}}>Includes ${newGst.toFixed(2)} GST</div>
       </div>
 
+      {needsApproval && (
+        <div style={{
+          background: alpha(A.warn, '14'), border: `1px solid ${alpha(A.warn, '55')}`,
+          borderRadius: RADIUS.sm, padding: '12px 14px', fontSize: 13, lineHeight: 1.55, color: T.text,
+        }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            Orders of ${manualThreshold!.toLocaleString('en-AU')} or more are processed by hand
+          </div>
+          This order will be <strong>sent through without payment</strong>. Just Autos will confirm freight,
+          pick and pack it, and send you an invoice to pay by <strong>bank transfer</strong> — there is no
+          card surcharge. Nothing is charged now.
+        </div>
+      )}
+
       <div>
         <Btn full size="lg" disabled={!canCheckout || checkoutBusy || poTooLong} onClick={onCheckout}>
-          {checkoutBusy ? 'Connecting to Stripe…' : 'Check Out'}
+          {checkoutBusy
+            ? (needsApproval ? 'Submitting…' : 'Connecting to Stripe…')
+            : (needsApproval ? 'Submit order for approval' : 'Check Out')}
         </Btn>
         <div style={{fontSize:12,color: blockedReason ? A.bad : T.text3,marginTop:8,textAlign:'center',lineHeight:1.5}}>
           {blockedReason || 'You’ll be redirected to Stripe to pay securely.'}

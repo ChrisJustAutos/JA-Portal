@@ -580,18 +580,28 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   }
   const totalInc   = round2(subtotalInc + cardFeeInc)
 
+  // Large orders are processed by hand (migration 218). The test is on
+  // subtotalInc — goods + GST + freight — deliberately NOT totalInc: the card
+  // fee is an artefact of paying by card, and a manual order is settled by bank
+  // transfer with no surcharge at all. Testing the figure that includes a fee
+  // the distributor will never be charged would tip borderline orders over.
+  const approvalThreshold = cfg.manualApprovalThresholdInc
+  const needsApproval = approvalThreshold != null && approvalThreshold > 0 && subtotalInc >= approvalThreshold
+
   // 4. Insert order header (status pending_payment, no Stripe ID yet)
   const { data: order, error: orderErr } = await c
     .from('b2b_orders')
     .insert({
       distributor_id: user.distributor.id,
       placed_by_user_id: user.id,
-      status: 'pending_payment',
-      payment_method: paymentMethod,
+      status: needsApproval ? 'awaiting_approval' : 'pending_payment',
+      // No surcharge on a manual order — it is paid by bank transfer, so the
+      // total owing is goods + GST + freight and nothing else.
+      payment_method: needsApproval ? 'bank_transfer' : paymentMethod,
       subtotal_ex_gst: subtotalEx,
       gst: gst,
-      card_fee_inc: cardFeeInc,
-      total_inc: totalInc,
+      card_fee_inc: needsApproval ? 0 : cardFeeInc,
+      total_inc: needsApproval ? subtotalInc : totalInc,
       currency: 'AUD',
       myob_company_file: 'JAWS',
       customer_po: customerPo,
@@ -652,6 +662,24 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   if (olErr) {
     await c.from('b2b_orders').delete().eq('id', order.id)
     return res.status(500).json({ error: `Order lines insert failed: ${olErr.message}` })
+  }
+
+  // Over the threshold: no Stripe session at all. The order is placed and
+  // waits for a human (migration 218).
+  //
+  // The cart is emptied here rather than in the payment pipeline, which is
+  // where a normal order clears it. That pipeline does not run until the money
+  // arrives, so leaving the cart full would let a distributor submit the same
+  // $30k order again while the first one is still being approved.
+  if (needsApproval) {
+    await c.from('b2b_cart_items').delete().eq('cart_id', cart.id)
+    return res.status(200).json({
+      manualApproval: true,
+      orderId: order.id,
+      orderNumber: order.order_number,
+      totalInc: subtotalInc,
+      threshold: approvalThreshold,
+    })
   }
 
   // 6. Build Stripe line_items (one per cart line + surcharge)

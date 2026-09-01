@@ -104,6 +104,10 @@ const STATUS_ICON: Record<string, string> = {
 // settle, so those sit amber until payment_settled_at lands.
 function paymentState(o: OrderRow): { label: string; color: string } {
   if (Number(o.refunded_total) > 0) return { label: 'Refunded', color: A.bad }
+  // Submitted over the manual-processing threshold and not yet released to the
+  // warehouse (migration 218). Deliberately its own label, not "Not paid" -
+  // nobody abandoned a checkout here, it is waiting on US.
+  if (o.status === 'awaiting_approval') return { label: 'Needs approval', color: A.warn }
   if (o.status === 'pending_payment') return { label: 'Not paid', color: T.text3 }
   if (o.cancelled_at) return { label: 'Cancelled', color: T.text3 }
   if (!o.paid_at) return { label: 'Not paid', color: T.text3 }

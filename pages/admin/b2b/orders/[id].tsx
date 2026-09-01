@@ -970,6 +970,32 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   // then is normal packing work - it just needs a Re-book to apply.
   const planLocked = isManifestedFor(order)
   const [shipNowBusy,  setShipNowBusy]  = useState(false)
+  const [approveBusy,  setApproveBusy]  = useState(false)
+
+  // Large orders (migration 218) arrive unpaid and do NOTHING until approved.
+  // Approving releases them to the warehouse and writes the MYOB sale order;
+  // drop-ship POs still wait for the bank transfer to be recorded.
+  async function approveOrder() {
+    if (!await confirmDialog({
+      title: 'Approve this order?',
+      message: `${order.order_number} was submitted without payment because it is over the manual-processing threshold. Approving releases it to the warehouse and writes the MYOB sale order. Drop-ship POs are NOT raised until you record the bank transfer.`,
+      confirmLabel: 'Approve',
+    })) return
+    setApproveBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/approve`, { method: 'POST', credentials: 'same-origin' })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      onFlash(j?.myob?.ok === false
+        ? `Approved — but the MYOB write failed (${j.myob.error}). Use Retry MYOB.`
+        : 'Approved — released to the warehouse. Record the bank transfer when it lands.')
+      onReloaded()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+    } finally {
+      setApproveBusy(false)
+    }
+  }
   const [bookingBusy,  setBookingBusy]  = useState(false)
   const [refreshBusy,  setRefreshBusy]  = useState(false)
   const [pickBusy,     setPickBusy]     = useState(false)
@@ -1266,6 +1292,14 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                 className="al-press al-focus"
                 style={mb({ background: alpha(A.accent, '15'), color: A.accent, cursor: bookingBusy ? 'wait' : 'pointer' })}>
                 {bookingBusy ? 'Booking…' : 'Book Shipment'}
+              </button>
+            )}
+            {order.status === 'awaiting_approval' && (
+              <button onClick={approveOrder} disabled={approveBusy}
+                title="Release this large order to the warehouse and write the MYOB sale order. Drop-ship POs wait for payment."
+                className="al-press al-focus"
+                style={mb({ background: A.warn, color: '#fff', cursor: approveBusy ? 'wait' : 'pointer' })}>
+                {approveBusy ? 'Approving…' : 'Approve order'}
               </button>
             )}
             {awaitingDespatch && (
