@@ -68,7 +68,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const q = req.query
       const startDateParam = q.startDate ? String(q.startDate) : null
       const endDateParam = q.endDate ? String(q.endDate) : null
-      const extensionParam = q.extension ? String(q.extension) : null
+      // The Calls page sends `agent` (the sidebar's key: slack:<id> or
+      // ext:<n>); this route only ever read `extension`, so selecting an
+      // agent changed nothing on the KPI panel - it silently fell back to the
+      // whole team (Chris 2026-09-02: "nothing is changing when an agent is
+      // selected"). Accept both: `agent` first, `extension` for any older
+      // caller or bookmarked URL.
+      const extensionParam = q.agent ? String(q.agent) : (q.extension ? String(q.extension) : null)
 
       const now = new Date()
       let periodFromIso: string
