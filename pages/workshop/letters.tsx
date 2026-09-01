@@ -139,11 +139,11 @@ function History({ canEdit, toast }: { canEdit: boolean; toast: (m: string, k?: 
   if (!jobs.length) return <Empty>Nothing waiting — every letter has printed. Letters appear here only while they are queued or if one fails.</Empty>
   return (
     <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 0.8fr 0.7fr 0.6fr 90px', gap: 8, padding: '10px 14px', background: T.bg2, fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 0.8fr 0.7fr 0.6fr 170px', gap: 8, padding: '10px 14px', background: T.bg2, fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase' }}>
         <div>Recipient</div><div>Template</div><div>Invoice</div><div>Source</div><div>Status</div><div></div>
       </div>
       {jobs.map(j => (
-        <div key={j.id} style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 0.8fr 0.7fr 0.6fr 90px', gap: 8, padding: '10px 14px', borderTop: `1px solid ${T.border}`, fontSize: 13, alignItems: 'center' }}>
+        <div key={j.id} style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 0.8fr 0.7fr 0.6fr 170px', gap: 8, padding: '10px 14px', borderTop: `1px solid ${T.border}`, fontSize: 13, alignItems: 'center' }}>
           <div>
             <div style={{ fontWeight: 500 }}>{j.recipient_name || '—'}</div>
             <div style={{ fontSize: 11, color: T.text3 }}>{fmtDateTime(j.created_at)}</div>
@@ -152,7 +152,7 @@ function History({ canEdit, toast }: { canEdit: boolean; toast: (m: string, k?: 
           <div style={{ color: T.text2 }}>{money(j.invoice_total)}</div>
           <div><StatusPill label={j.trigger} color={j.trigger === 'auto' ? T.accent : T.text3} /></div>
           <div title={j.error || ''}><StatusPill label={j.status} color={statusColor(j.status)} /></div>
-          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
             {canEdit && j.letter_storage_path && (
               <button onClick={() => reprint(j.id)} style={miniBtn(T.accent)}>Reprint</button>
             )}
