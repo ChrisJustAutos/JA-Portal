@@ -360,7 +360,9 @@ async function fetchAccountMap(connId: string, cfId: string): Promise<Map<string
   let skip = 0
   while (true) {
     const result = await myobFetch(connId, `/accountright/${cfId}/GeneralLedger/Account`, {
-      query: { '$top': PAGE_SIZE, '$skip': skip },
+      // $orderby is required with $skip - without it pages can shift and a
+      // whole page of accounts goes missing, which mis-codes AP lines.
+      query: { '$orderby': 'DisplayID', '$top': PAGE_SIZE, '$skip': skip },
     })
     if (result.status !== 200) {
       throw new Error(`HTTP ${result.status}: ${(result.raw || '').substring(0, 200)}`)

@@ -298,7 +298,10 @@ async function fetchAllBillsInRange(
     // even over a long window.
     for (let page = 0; page < 10; page++) {
       const result = await myobFetch(connId, path, {
-        query: { '$filter': filter, '$top': MYOB_PAGE_SIZE, '$skip': skip },
+        // $orderby is required with $skip - without a deterministic order the
+        // server can shift rows between pages and a whole page is skipped,
+        // which reads as an invoice MYOB "doesn't have".
+        query: { '$orderby': 'Number', '$filter': filter, '$top': MYOB_PAGE_SIZE, '$skip': skip },
       })
       if (result.status !== 200) {
         throw new Error(`MYOB ${billType} bill fetch failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 200)}`)

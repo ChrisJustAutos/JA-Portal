@@ -39,7 +39,10 @@ export default withAuth('edit:b2b_catalogue', async (req, res, user) => {
   const stockBySku: Record<string, { on_hand: number; committed: number; available: number; on_order: number }> = {}
   try {
     for (let skip = 0, page = 0; page < 80; page++, skip += 400) {
-      const r = await myobFetch(conn.id, `${cf}/Inventory/Item`, { query: { '$top': 400, '$skip': skip }, performedBy: user.id })
+      // $orderby with $skip - same trap the sales pull above hit. Without it
+      // pages can drop items, understating on-hand and on-order and so the
+      // suggested order quantity.
+      const r = await myobFetch(conn.id, `${cf}/Inventory/Item`, { query: { '$orderby': 'Number', '$top': 400, '$skip': skip }, performedBy: user.id })
       if (r.status !== 200) { warnings.push(`Stock pull HTTP ${r.status}`); break }
       const rows: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
       for (const it of rows) {

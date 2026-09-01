@@ -786,6 +786,23 @@ Two layers now, mirroring the quote guard's "document-type read OR quote-named a
 
 **The consolidated-invoice exception still wins over both signals.** Suppliers whose "statement" IS a single tax invoice for the period (Time Express Courier, Supagas) are checked with `consolidatedInvoiceSupplier` after either signal fires, so they keep posting — verified against the three such invoices already posted from statement-named files. The skip now records WHY on the log row rather than a bare outcome, so a wrongly-skipped supplier is diagnosable.
 
+**Every `$skip`-paged MYOB pull now sets `$orderby` (2026-09-01).** Chris made the point that settled the reorder diagnosis: **stock only moves on Item invoices**, so merging the other invoice layouts could not have explained 598 against 829. That rules out the invoice-type theory and leaves the paging bug as the actual cause — the old pull fetched 400 rows at a time with `$skip` and never told MYOB what order to return them in, so rows shift between requests and whole pages are skipped. It does not error; it just returns less than the truth, which is exactly what an arbitrary ~28% shortfall looks like.
+
+An audit found the same pattern in five more places, all fixed:
+
+| File | Endpoint | What a dropped page does |
+|---|---|---|
+| `lib/jaws-stocktake.ts` | Inventory/Item | Invents stocktake variances against MYOB on-hand |
+| `pages/api/b2b/admin/reorder/sync.ts` | Inventory/Item | Understates on-hand/on-order, so under-orders |
+| `lib/b2b-stock-transfer.ts` | Inventory/Item | Missing items on a JAWS↔VPS transfer |
+| `lib/ap-statement-match.ts` | Purchase/Bill | Reads as an invoice MYOB "doesn't have" |
+| `lib/workshop-myob-sync.ts` | Contact/Customer, Inventory/Item | Missing customers/items in the workshop sync |
+| `pages/api/ap/backfill-line-history.ts` | GeneralLedger/Account | Missing accounts, so AP lines mis-code |
+
+Sort keys follow the proven pattern: `Number` for items, bills and invoices, `DisplayID` for contacts and accounts. `pageAll` in workshop-myob-sync now **requires** an `orderBy` argument rather than defaulting, so a future caller cannot reintroduce it silently.
+
+**Still not clean:** `backfill-line-history` line ~180 orders bills by `Date desc`, which is deterministic but **not unique** — ties can still shuffle between pages. Left alone as a smaller risk than a bare `$skip`, but a `Number` tiebreak would close it.
+
 **The B2B reorder sheet undercounted sales (2026-09-01).** Chris: SKU `3070010` showed **598** units over 1 Jan – 31 Aug while MYOB showed **829**. `pages/api/b2b/admin/reorder/sync.ts` rolled its own MYOB pull and got two already-documented traps wrong at once:
 
 1. **Only `Sale/Invoice/Item`.** `lib/myob-reporting` carries an explicit warning that querying just the Item layout **undercounts, because JAWS raises some sales as Service invoices**, which is why it merges all five types (Item, Service, Professional, Miscellaneous, TimeBilling).

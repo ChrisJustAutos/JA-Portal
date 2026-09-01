@@ -109,7 +109,8 @@ export async function fetchJawsItemCosts(): Promise<Record<string, ItemCost>> {
   let skip = 0
   while (true) {
     const result = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Inventory/Item`, {
-      query: { '$top': PAGE_SIZE, '$skip': skip },
+      // $orderby is required with $skip - without it pages can drop items.
+      query: { '$orderby': 'Number', '$top': PAGE_SIZE, '$skip': skip },
     })
     if (result.status !== 200) {
       throw new Error(`MYOB inventory fetch failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 200)}`)

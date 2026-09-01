@@ -42,13 +42,20 @@ async function workshopConn(): Promise<{ connId: string; cfPath: string }> {
 }
 
 // Page through an AccountRight collection endpoint, returning all Items.
-async function pageAll(connId: string, path: string, performedBy: string | null): Promise<any[]> {
+//
+// `orderBy` is NOT optional in practice. $skip paging without a deterministic
+// order lets the server return rows in a different sequence between requests,
+// so records shift across page boundaries and a whole page is silently
+// skipped - no error, just fewer rows than exist (Chris 2026-09-01: the B2B
+// reorder sheet read 598 units against MYOB's 829). Pass a field that every
+// row has and that is unique: 'Number' for items, 'DisplayID' for contacts.
+async function pageAll(connId: string, path: string, performedBy: string | null, orderBy: string): Promise<any[]> {
   const all: any[] = []
   let skip = 0
   for (let page = 0; page < MAX_PAGES; page++) {
     const { status, data, raw } = await myobFetch(connId, path, {
       method: 'GET',
-      query: { '$top': PAGE_SIZE, '$skip': skip },
+      query: { '$orderby': orderBy, '$top': PAGE_SIZE, '$skip': skip },
       performedBy,
     })
     if (status !== 200) {
@@ -86,7 +93,7 @@ export async function syncWorkshopCustomers(performedBy: string | null = null): 
   const start = Date.now()
   const { connId, cfPath } = await workshopConn()
   const errors: string[] = []
-  const contacts = await pageAll(connId, `${cfPath}/Contact/Customer`, performedBy)
+  const contacts = await pageAll(connId, `${cfPath}/Contact/Customer`, performedBy, 'DisplayID')
 
   const nowIso = new Date().toISOString()
   const rows = contacts
@@ -125,7 +132,7 @@ export async function syncWorkshopInventory(performedBy: string | null = null): 
   const start = Date.now()
   const { connId, cfPath } = await workshopConn()
   const errors: string[] = []
-  const items = await pageAll(connId, `${cfPath}/Inventory/Item`, performedBy)
+  const items = await pageAll(connId, `${cfPath}/Inventory/Item`, performedBy, 'Number')
 
   // Items edited in the portal but not yet pushed to MYOB: don't overwrite the
   // user's edited fields (still refresh live stock quantities for them).

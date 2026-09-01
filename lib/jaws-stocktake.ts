@@ -87,7 +87,12 @@ export async function loadJawsInventory(performedBy?: string | null): Promise<Ja
 
   // $top 400 × up to 200 pages = 80k items — well past any realistic catalogue.
   for (let skip = 0, page = 0; page < 200; page++, skip += 400) {
-    const r = await myobFetch(conn.id, `${cf}/Inventory/Item`, { query: { '$top': 400, '$skip': skip }, performedBy })
+    // $orderby is REQUIRED with $skip paging. Without a deterministic order the
+    // server can return rows in a different sequence between requests, so records
+    // shift across page boundaries and whole pages are silently skipped - it does
+    // not error, it just returns less than the truth (Chris 2026-09-01: the B2B
+    // reorder sheet read 598 units against MYOB's 829).
+    const r = await myobFetch(conn.id, `${cf}/Inventory/Item`, { query: { '$orderby': 'Number', '$top': 400, '$skip': skip }, performedBy })
     if (r.status !== 200) {
       throw new Error(`MYOB Inventory/Item pull failed (HTTP ${r.status}): ${(r.raw || '').slice(0, 200)}`)
     }
