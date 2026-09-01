@@ -123,12 +123,20 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         kpiRes,
         agentRes,
         extensionsRes,
+        rosterRes,
         syncRes,
       ] = await Promise.all([
         kpiQuery,
         agentBreakdownQuery,
         sb.from('extensions')
           .select('extension, display_name, role')
+          .eq('active', true),
+        // The advisor roster maps each extension to ONE person. Since
+        // hot-desking ended (2026-08-31) a handset identifies its owner, so an
+        // un-attributed call can be folded into that advisor rather than
+        // becoming a second row for the same human.
+        sb.from('call_advisor_roster')
+          .select('name, slack_user_id, extensions, active')
           .eq('active', true),
         sb.from('sync_state')
           .select('last_synced_at, last_error, records_synced_total')
@@ -143,6 +151,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const kpiCalls = kpiRes.data || []
       const agentCalls = agentRes.data || []
       const extensions = extensionsRes.data || []
+      const rosterRows = rosterRes.error ? [] : (rosterRes.data || [])
       const sync = syncRes.data || { last_synced_at: null, last_error: null, records_synced_total: 0 }
 
       // "Rescued" detection: a ring that shows NO ANSWER but whose caller was
@@ -184,6 +193,25 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       // (incl. hot-deskers with no extension of their own) group by slack id;
       // everything else groups by extension. This stops one person's calls
       // being miscredited to whichever handset happened to ring.
+      // ext -> the ONE advisor who owns it. Only where exactly one active
+      // advisor claims the extension: a shared handset must stay keyed by
+      // extension, or two people's calls merge into one row.
+      const extOwner = new Map<string, { slackId: string; name: string }>()
+      const extClaims = new Map<string, number>()
+      for (const r of rosterRows as any[]) {
+        for (const e of (r.extensions || [])) {
+          const k = String(e).trim()
+          if (!k) continue
+          extClaims.set(k, (extClaims.get(k) || 0) + 1)
+          if (r.slack_user_id) extOwner.set(k, { slackId: r.slack_user_id, name: r.name })
+        }
+      }
+      for (const [k, n] of Array.from(extClaims.entries())) if (n > 1) extOwner.delete(k)
+      // slack id -> extension, so an identified advisor still shows their handset
+      // and the merged row is labelled the same whichever call arrives first.
+      const slackExt = new Map<string, string>()
+      for (const [ext, o] of Array.from(extOwner.entries())) if (!slackExt.has(o.slackId)) slackExt.set(o.slackId, ext)
+
       const extMap = new Map<string, { display_name: string; role: string | null }>()
       for (const ext of extensions) {
         extMap.set(ext.extension, { display_name: ext.display_name, role: ext.role })
@@ -198,8 +226,19 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         if (c.effective_advisor_slack_user_id) {
           key = `slack:${c.effective_advisor_slack_user_id}`
           displayName = c.effective_advisor_name || c.agent_name || 'Advisor'
-          extLabel = null
+          extLabel = slackExt.get(c.effective_advisor_slack_user_id) || null
           role = null
+        } else if (c.agent_ext && extOwner.has(c.agent_ext)) {
+          // Un-attributed, but the handset belongs to exactly one advisor, so
+          // credit it to THEM. Without this the same person appeared twice -
+          // once as "Tyronne (identified)" and again as "Tyronne Wright
+          // (Ext 203)" - and their calls and talk time were split across the
+          // two rows (Chris 2026-09-01).
+          const owner = extOwner.get(c.agent_ext)!
+          key = `slack:${owner.slackId}`
+          displayName = owner.name
+          extLabel = c.agent_ext
+          role = extMap.get(c.agent_ext)?.role || null
         } else if (c.agent_ext) {
           key = `ext:${c.agent_ext}`
           const e = extMap.get(c.agent_ext)
