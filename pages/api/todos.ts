@@ -56,7 +56,7 @@ interface BoardConfig {
 const MANAGER_BOARDS: BoardConfig[] = [
   { manager: 'Chris',   boardId: 1838427899, hasPriority: true },
   { manager: 'Matt H',  boardId: 2006328423, hasPriority: false },
-  { manager: 'Amanda',  boardId: 2063839393, hasPriority: false },
+  // Amanda's board retired 2026-09-02 - she has left the business.
   { manager: 'Morgan',  boardId: 2006328760, hasPriority: false },
   { manager: 'Ryan',    boardId: 1839578010, hasPriority: false },
   { manager: 'Sam',     boardId: 5024204351, hasPriority: false },

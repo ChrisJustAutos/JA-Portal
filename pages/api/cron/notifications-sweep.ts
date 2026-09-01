@@ -38,7 +38,7 @@ const QUOTE_BOARDS = [
 const TODO_BOARDS = [
   { owner: 'Chris', id: 1838427899 },
   { owner: 'Matt H', id: 2006328423 },
-  { owner: 'Amanda', id: 2063839393 },
+  // Amanda's board retired 2026-09-02 (she has left) - no longer swept.
   { owner: 'Morgan', id: 2006328760 },
   { owner: 'Ryan', id: 1839578010 },
   { owner: 'Sam', id: 5024204351 },

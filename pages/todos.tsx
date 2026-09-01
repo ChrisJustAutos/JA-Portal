@@ -23,7 +23,6 @@ const T = {
 const MC: Record<string, string> = {
   'Chris':  T.blue,
   'Matt H': T.purple,
-  'Amanda': T.pink,
   'Morgan': T.amber,
   'Ryan':   T.teal,
   'Sam':    T.green,
@@ -252,7 +251,7 @@ export default function TodosDashboard({ user }: { user: PortalUserSSR }) {
           {/* Toolbar */}
           <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 20px',background:T.bg2,borderBottom:`1px solid ${T.border}`,flexWrap:'wrap'}}>
             <div style={{display:'flex',gap:4}}>
-              {['All', 'Chris', 'Matt H', 'Amanda', 'Morgan', 'Ryan', 'Sam'].map(m =>
+              {['All', 'Chris', 'Matt H', 'Morgan', 'Ryan', 'Sam'].map(m =>
                 <button key={m} onClick={() => setManagerFilter(m)}
                   style={{padding:'4px 12px',borderRadius:5,border:`1px solid ${managerFilter===m?(MC[m]||T.accent):T.border}`,fontSize:11,background:managerFilter===m?(MC[m]||T.accent):'transparent',color:managerFilter===m?'#fff':T.text2,cursor:'pointer',fontFamily:'inherit'}}>{m}</button>
               )}
@@ -437,7 +436,7 @@ export default function TodosDashboard({ user }: { user: PortalUserSSR }) {
                   if (!byManager[it.manager]) byManager[it.manager] = []
                   byManager[it.manager].push(it)
                 }
-                const groupOrder = ['Chris','Matt H','Amanda','Morgan','Ryan','Sam'].filter(m => byManager[m])
+                const groupOrder = ['Chris','Matt H','Morgan','Ryan','Sam'].filter(m => byManager[m])
 
                 return <Card style={{marginTop:16}}>
                   <SH right={<span style={{fontSize:11,color:T.text3}}>{filtered.length.toLocaleString()} of {openAll.length.toLocaleString()} open</span>}>All Open Tasks</SH>

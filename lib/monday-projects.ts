@@ -22,7 +22,9 @@ export interface PersonBoard {
 export const PERSON_BOARDS: PersonBoard[] = [
   { key: 'Chris',  name: 'Chris',  color: '#4f8ef7', boardId: 1838427899 },
   { key: 'Matt H', name: 'Matt H', color: '#a78bfa', boardId: 2006328423 },
-  { key: 'Amanda', name: 'Amanda', color: '#ff5ac4', boardId: 2063839393 },
+  // Amanda's board retired 2026-09-02 - she has left; Jarred is Financial
+  // Manager and Danielle Accounts Assistant. Board 2063839393 is no longer
+  // swept, filtered or grouped. Re-add a row here to bring a person back.
   { key: 'Morgan', name: 'Morgan', color: '#f5a623', boardId: 2006328760 },
   { key: 'Ryan',   name: 'Ryan',   color: '#2dd4bf', boardId: 1839578010 },
   { key: 'Sam',    name: 'Sam',    color: '#34c77b', boardId: 5024204351 },
@@ -34,7 +36,6 @@ export const PERSON_BOARDS: PersonBoard[] = [
 const NAME_TO_KEY: Record<string, string> = {
   chris: 'Chris', christopher: 'Chris',
   matt: 'Matt H', matthew: 'Matt H',
-  amanda: 'Amanda',
   morgan: 'Morgan',
   ryan: 'Ryan',
   sam: 'Sam', samuel: 'Sam',
