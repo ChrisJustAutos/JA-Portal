@@ -52,6 +52,7 @@ import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
 import { proformaOkSupplier } from './ap-proforma-suppliers'
 import { overseasSupplier } from './ap-overseas-suppliers'
 import { reattachStagedPdf, sameInvoiceNumberLoose, findExistingMyobBill, findMyobBillsByInvoiceNumber, findRecentSupplierBills } from './ap-myob-bill'
+import { findCrossCompanyDuplicate, describeCrossCompanyHit } from './ap-cross-company'
 import { postApInvoice } from './accounting/post-ap-invoice'
 import { getConnection } from './myob'
 import { postWebhook, type SlackBlock } from './slack'
@@ -1208,6 +1209,41 @@ async function processInvoice(
   // Never auto-post a foreign-currency invoice at face value — the amount
   // would be wrong in AUD. Flag it for a human to enter at the converted rate.
   if (foreignCurrency) failReasons.push(`RED:foreign-currency:${extracted.currency}`)
+
+  // ── Already entered against the OTHER company? ─────────────────────────
+  //
+  // A JMACX invoice was paid in JAWS (sitting at the ORDER stage) and then a
+  // second copy, billed to the wrong entity, was paid in VPS as well — one
+  // supply, paid twice (Chris 2026-09-02). Nothing caught it: the existing
+  // duplicate check reads BILLS in ONE company file, so a JAWS order was
+  // invisible on both counts. This searches both files across bills, orders
+  // AND quotes. See lib/ap-cross-company.
+  //
+  // Fails OPEN: if MYOB can't be reached the invoice proceeds as before, but
+  // an incomplete search is stated on the card rather than passing silently —
+  // "we didn't find one" and "we couldn't look" must not read the same.
+  try {
+    const xc = await findCrossCompanyDuplicate({
+      postingTo: companyFile,
+      supplierName: extracted.vendor?.name || null,
+      supplierInvoiceNumber: extracted.invoiceNumber || null,
+      totalAmount: total,
+      invoiceDate: extracted.invoiceDate || null,
+    })
+    for (const h of xc.hits.slice(0, 4)) {
+      // A matching invoice NUMBER in the other file is as close to certain as
+      // this gets; a matching amount is a prompt to look, not a verdict.
+      const sev = h.matchedOn === 'number' ? 'RED' : 'YELLOW'
+      failReasons.push(`${sev}:possible-double-up-across-companies — ${describeCrossCompanyHit(h)}; check before approving`)
+    }
+    if (xc.hits.length > 4) failReasons.push(`YELLOW:possible-double-up-across-companies — and ${xc.hits.length - 4} more matching documents`)
+    if (xc.incomplete && xc.hits.length === 0) {
+      failReasons.push(`YELLOW:cross-company-check-incomplete — ${xc.notes.slice(0, 2).join('; ') || 'MYOB unavailable'}; could not rule out a double-up`)
+    }
+  } catch (e: any) {
+    console.error('cross-company duplicate check failed (non-fatal):', e?.message || e)
+    failReasons.push('YELLOW:cross-company-check-failed — could not rule out a double-up; check both companies before approving')
+  }
   // A number we filled in (filename / generated) is a guess — never ignorable,
   // always a human Approve with the number visible on the card.
   if (numberFallback) failReasons.push(`YELLOW:no-invoice-number-on-document — using ${extracted.invoiceNumber} (${numberFallback === 'filename' ? 'from the attachment filename' : 'generated from the date'}); check the PDF before approving`)
