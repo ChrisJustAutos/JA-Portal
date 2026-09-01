@@ -786,6 +786,16 @@ Two layers now, mirroring the quote guard's "document-type read OR quote-named a
 
 **The consolidated-invoice exception still wins over both signals.** Suppliers whose "statement" IS a single tax invoice for the period (Time Express Courier, Supagas) are checked with `consolidatedInvoiceSupplier` after either signal fires, so they keep posting — verified against the three such invoices already posted from statement-named files. The skip now records WHY on the log row rather than a bare outcome, so a wrongly-skipped supplier is diagnosable.
 
+**Workshop letters were never marked printed (migration `217`, 2026-09-02).** Chris: *"Letter section has quite a few queued letters. Why's that?"* — 368 of them, back to 24 June. They were not stuck. `workshop_letter_jobs.status` was only ever written as `queued` (on create), `failed` (render/queue error) or `skipped` (deposits and non-job invoices). **There was no printed state at all.** The printing happens on child `label_print_jobs` rows (letter + envelope) and the print agent marks its OWN rows done, never the parent — so "queued" only ever meant "handed to the printer".
+
+Checked before changing anything: of the 368, **338 already had a `label_print_jobs` row at `done`** and 30 at `failed`. Every failure fell between 24 Jun and 13 Jul — the window when letters printed from the MSI laptop and it was off-network — and nothing has failed since the move to PORTAL-CENTRE.
+
+- 338 → **`printed`**, stamped with the print job's own `printed_at`, not `now()`, so the history reads when it actually printed.
+- 30 → **`written_off`** (Chris: "Write them off, too old"). Kept for the audit trail, excluded from the default list alongside `skipped`, shown amber.
+- A **database TRIGGER** (`mark_letter_printed` on `label_print_jobs`) keeps it right from here. It has to be a trigger: the print agent talks to Supabase directly, so there is no API route to hook. It fires only on the transition INTO `done` and only for `kind = 'letter'` — the envelope is a second row against the same letter and must not flip the parent on its own.
+
+`pages/workshop/letters.tsx` already coloured `printed` green, so the UI had been waiting for this value all along. **Two genuine `failed` rows remain** (13 and 27 August) — those failed at render/queue time, not at the printer, so they are a different fault and were left for inspection.
+
 **Every `$skip`-paged MYOB pull now sets `$orderby` (2026-09-01).** Chris made the point that settled the reorder diagnosis: **stock only moves on Item invoices**, so merging the other invoice layouts could not have explained 598 against 829. That rules out the invoice-type theory and leaves the paging bug as the actual cause — the old pull fetched 400 rows at a time with `$skip` and never told MYOB what order to return them in, so rows shift between requests and whole pages are skipped. It does not error; it just returns less than the truth, which is exactly what an arbitrary ~28% shortfall looks like.
 
 An audit found the same pattern in five more places, all fixed:

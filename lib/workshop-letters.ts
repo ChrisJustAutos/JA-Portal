@@ -164,7 +164,11 @@ export async function listLetterJobs(limit = 100, offset = 0, includeSkipped = f
     .order('created_at', { ascending: false })
   // 'skipped' rows are deposits / non-job invoices the poller examined and
   // deliberately didn't print — noise in the history view by default.
-  if (!includeSkipped) q = q.neq('status', 'skipped')
+  // 'written_off' joins them: the 30 letters whose print failed between 24 Jun
+  // and 13 Jul (MSI laptop off-network) are kept for the audit trail but were
+  // ruled too old to reprint (Chris 2026-09-02), so they shouldn't sit in the
+  // working list either.
+  if (!includeSkipped) q = q.not('status', 'in', '("skipped","written_off")')
   const { data } = await q.range(offset, offset + limit - 1)
   return data || []
 }

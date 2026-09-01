@@ -101,6 +101,19 @@ Six things remain, all on one tab strip:
 
 ### 3.1 Customer letters
 
+**What the statuses mean** (corrected 2 September 2026 — letters used to sit on **Queued** forever even after they had printed):
+
+| Status | Meaning |
+|---|---|
+| **Queued** | Sent to the printer, not confirmed printed yet. Should clear within minutes |
+| **Printed** | Confirmed printed, with the time it printed |
+| **Failed** | Could not be produced — needs a look |
+| **Written off** | Old failures nobody is going to reprint. Hidden from the list |
+
+**⚠ If letters start piling up on Queued again, the print PC is the first thing to check** — PORTAL-CENTRE in the comms room. A letter only moves to Printed when the printer confirms it, so a growing Queued list means the agent is not collecting jobs. Failed jobs can be re-queued (failed → pending).
+
+The 368 that had built up since June were **already printed** — the portal simply never recorded it. Nothing was missed and nothing needed reprinting, apart from 30 from June/July that genuinely failed while the old laptop was off-network, which have been written off as too old.
+
 A thank-you letter and envelope are queued automatically for every newly finalised MYOB invoice and printed on the Apeos in the comms room. Deposit-only invoices are skipped deliberately.
 
 - Reprint one, compose one by hand, or edit the templates: **Workshop → Letters**.

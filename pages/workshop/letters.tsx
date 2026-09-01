@@ -36,7 +36,7 @@ interface LetterJob {
 
 const money = (n: number | null) => n == null ? '' : `$${Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const fmtDateTime = (iso: string) => { try { return new Date(iso).toLocaleString('en-AU', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return iso } }
-const statusColor = (s: string) => s === 'queued' ? T.accent : s === 'printed' ? T.green : s === 'failed' ? T.red : T.text3
+const statusColor = (s: string) => s === 'queued' ? T.accent : s === 'printed' ? T.green : s === 'failed' ? T.red : s === 'written_off' ? T.amber : T.text3
 
 export default function LettersPage({ user }: { user: PortalUserSSR }) {
   const [tab, setTab] = useState<Tab>('history')
