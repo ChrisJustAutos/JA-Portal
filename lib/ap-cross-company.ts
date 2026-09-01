@@ -33,6 +33,12 @@
 //     reported as suspicious. Suppliers do bill identical amounts legitimately
 //     (a monthly retainer), so this one exists to be looked at, not obeyed.
 //
+// THE NUMBER NET HAS NO DATE LIMIT. An order can sit open in one file for
+// months before the matching invoice reaches the other, so any window is a
+// blind spot (Chris 2026-09-02). It is queried by SupplierInvoiceNumber
+// server-side, which makes searching all of history cheaper than scanning a
+// date range, not dearer.
+//
 // THE AMOUNT NET IS DELIBERATELY NARROWER THAN THE NUMBER NET, because a check
 // that cries wolf gets ignored and then it protects nothing. A recurring charge
 // — the same supplier, the same figure, every month — would trip a naive
@@ -58,7 +64,16 @@ const LAYOUTS = ['Service', 'Item'] as const
 
 // Matching on amount alone is a weak signal, so it is bounded on both axes.
 const AMOUNT_NET_MIN = 1000      // below this a coincidence is likelier than a double-up
-const AMOUNT_NET_DAYS = 14       // two copies of one invoice arrive close together
+// Chris 2026-09-02: "the time difference between when it's ordered vs when it's
+// invoiced may not be picked up — sometimes could be months." An order can sit
+// open for a long time before the matching invoice turns up in the other file.
+const AMOUNT_NET_DAYS = 180
+
+// The NUMBER net has no date bound at all. A supplier invoice number is a
+// near-unique key, so an old match is still a match, and windowing it only
+// creates the blind spot Chris described. It is queried by number server-side
+// rather than scanned by date, so an unbounded search is also the CHEAPER one.
+const NUMBER_QUERY_TOP = 50
 
 export interface CrossCompanyHit {
   entity: CompanyFileLabel
@@ -133,7 +148,10 @@ export async function findCrossCompanyDuplicate(args: {
   supplierInvoiceNumber: string | null
   totalAmount: number | null
   invoiceDate: string | null
-  /** Days either side of the invoice date to search. Default 45. */
+  /**
+   * Days either side of the invoice date for the AMOUNT net only. The number
+   * net is unbounded. Defaults to AMOUNT_NET_DAYS.
+   */
   dayWindow?: number
 }): Promise<CrossCompanyResult> {
   const notes: string[] = []
@@ -153,7 +171,7 @@ export async function findCrossCompanyDuplicate(args: {
 
   const base = args.invoiceDate ? new Date(args.invoiceDate) : new Date()
   if (isNaN(+base)) base.setTime(Date.now())
-  const win = args.dayWindow ?? 45
+  const win = args.dayWindow ?? AMOUNT_NET_DAYS
   const from = new Date(base.getTime() - win * 86400_000)
   const to = new Date(base.getTime() + win * 86400_000)
   const filter = `Date ge datetime'${iso(from)}T00:00:00' and Date le datetime'${iso(to)}T23:59:59'`
@@ -174,23 +192,66 @@ export async function findCrossCompanyDuplicate(args: {
 
       for (const layout of LAYOUTS) {
         const path = `/accountright/${conn.company_file_id}/Purchase/${docType}/${layout}`
-        let r: any
-        try {
-          r = await myobFetch(conn.id, path, { query: { '$filter': filter, '$top': 400 } })
-        } catch (e: any) {
-          incomplete = true
-          notes.push(`${entity} ${docType}/${layout}: ${String(e?.message || e).slice(0, 80)}`)
-          continue
-        }
-        // A file with that document type disabled just 404s — not a failure.
-        if (r.status === 404 || r.status === 400) continue
-        if (r.status !== 200) {
-          incomplete = true
-          notes.push(`${entity} ${docType}/${layout}: HTTP ${r.status}`)
-          continue
+        const docs: any[] = []
+
+        // (a) By invoice number, across ALL time. Selective server-side, so it
+        //     costs one small request and has no date blind spot.
+        if (number) {
+          const esc = number.replace(/'/g, "''")
+          try {
+            const rn = await myobFetch(conn.id, path, {
+              query: { '$filter': `SupplierInvoiceNumber eq '${esc}'`, '$top': NUMBER_QUERY_TOP },
+            })
+            if (rn.status === 200) docs.push(...(Array.isArray(rn.data?.Items) ? rn.data.Items : []))
+            else if (rn.status !== 404 && rn.status !== 400) {
+              incomplete = true
+              notes.push(`${entity} ${docType}/${layout} by-number: HTTP ${rn.status}`)
+            }
+          } catch (e: any) {
+            incomplete = true
+            notes.push(`${entity} ${docType}/${layout} by-number: ${String(e?.message || e).slice(0, 60)}`)
+          }
         }
 
-        for (const d of (Array.isArray(r.data?.Items) ? r.data.Items : [])) {
+        // (b) By date range, for the amount net. PAGED, and with $orderby —
+        //     $skip without a deterministic order drops rows at page
+        //     boundaries, which on a duplicate check means silently failing to
+        //     find the duplicate. A wide window makes that a real risk rather
+        //     than a theoretical one.
+        if (amount != null && amount >= AMOUNT_NET_MIN) {
+          let truncated = true
+          for (let skip = 0, page = 0; page < 8; page++, skip += 400) {
+            let rd: any
+            try {
+              rd = await myobFetch(conn.id, path, {
+                query: { '$filter': filter, '$orderby': 'Number', '$top': 400, '$skip': skip },
+              })
+            } catch (e: any) {
+              incomplete = true
+              notes.push(`${entity} ${docType}/${layout} by-date: ${String(e?.message || e).slice(0, 60)}`)
+              truncated = false
+              break
+            }
+            if (rd.status === 404 || rd.status === 400) { truncated = false; break }
+            if (rd.status !== 200) {
+              incomplete = true
+              notes.push(`${entity} ${docType}/${layout} by-date: HTTP ${rd.status}`)
+              truncated = false
+              break
+            }
+            const batch: any[] = Array.isArray(rd.data?.Items) ? rd.data.Items : []
+            docs.push(...batch)
+            if (batch.length < 400) { truncated = false; break }
+          }
+          // Ran out of pages with a full batch still coming — say so rather
+          // than quietly reporting "no duplicate found".
+          if (truncated) {
+            incomplete = true
+            notes.push(`${entity} ${docType}/${layout}: more than 3200 documents in range, search truncated`)
+          }
+        }
+
+        for (const d of docs) {
           if (!supplierLooksSame(d?.Supplier?.Name, supplier)) continue
           const theirNumber = d?.SupplierInvoiceNumber ?? null
           const theirTotal = typeof d?.TotalAmount === 'number' ? Math.abs(d.TotalAmount) : null
