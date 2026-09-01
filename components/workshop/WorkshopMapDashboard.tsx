@@ -19,7 +19,9 @@ import { pcState } from '../../lib/workshop-map/postcode-state'
 type ViewKey = 'jobs' | 'quotes' | 'conv' | 'state' | 'trend'
 
 // n = how many quotes `a` is the average of (quotes only, omitted when 1).
-interface Pt { la: number; ln: number; pc: string; l: string; m: number; g: string; c: string; a: number; j?: string; i?: string; d?: string; x?: number; w?: number; n?: number }
+// la/ln are NULL on a quote we could not geocode. It still counts in every
+// total - it is a real quote - it just gets no pin (Chris 2026-09-01).
+interface Pt { la: number | null; ln: number | null; pc: string; l: string; m: number; g: string; c: string; a: number; j?: string; i?: string; d?: string; x?: number; w?: number; n?: number }
 interface Payload {
   fy: number
   months: { k: string; label: string }[]
@@ -234,6 +236,7 @@ export default function WorkshopMapDashboard() {
     // Aggregate per location.
     const M: Record<string, { pc: string; l: string; la: number; ln: number; n: number; t: number; won: number; byg: Record<string, { n: number; t: number }>; inv: Pt[] }> = {}
     selPoints.forEach(p => {
+      if (p.la == null || p.ln == null) return    // no coords = no pin; still in the totals
       const k = p.pc + '@' + p.la + ',' + p.ln
       const o = (M[k] ||= { pc: p.pc, l: p.l, la: p.la, ln: p.ln, n: 0, t: 0, won: 0, byg: {}, inv: [] })
       o.n++; o.t += p.a; o.won += (p.w || 0)
@@ -303,7 +306,9 @@ export default function WorkshopMapDashboard() {
     if (!d) return 0
     return month < 0 ? d.total : (d.byMonth[month] || 0)
   }, [data, month])
-  const locCount = useMemo(() => new Set(selPoints.map(p => p.pc + '@' + p.la + ',' + p.ln)).size, [selPoints])
+  // Un-geocoded quotes are not a location — they'd otherwise all collapse into
+  // one phantom "@null,null" pin and inflate this by exactly 1.
+  const locCount = useMemo(() => new Set(selPoints.filter(p => p.la != null && p.ln != null).map(p => p.pc + '@' + p.la + ',' + p.ln)).size, [selPoints])
   const bygMonth = useMemo(() => {
     const m: Record<string, { n: number; t: number }> = {}
     baseMonth.forEach(p => { const g = (m[p.g] ||= { n: 0, t: 0 }); g.n++; g.t += p.a })
@@ -869,7 +874,10 @@ function StateView({ P, month, cat }: { P: Payload; month: number; cat: string }
 
   const S: Record<string, { st: string; jn: number; jt: number; qn: number; qt: number; won: number; locs: Set<string> }> = {}
   const row = (st: string) => (S[st] ||= { st, jn: 0, jt: 0, qn: 0, qt: 0, won: 0, locs: new Set() })
-  jobs.forEach(p => { const r = row(pcState(p.pc)); r.jn++; r.jt += p.a; r.locs.add(p.pc + '@' + p.la + ',' + p.ln) })
+  // Count the job in the state row regardless, but only add a LOCATION when it
+  // actually has coordinates - otherwise every un-geocoded row lands in one
+  // phantom "@null,null" location.
+  jobs.forEach(p => { const r = row(pcState(p.pc)); r.jn++; r.jt += p.a; if (p.la != null && p.ln != null) r.locs.add(p.pc + '@' + p.la + ',' + p.ln) })
   quotes.forEach(p => { const r = row(pcState(p.pc)); r.qn++; r.qt += p.a; r.won += (p.w || 0) })
   const rows = Object.values(S).sort((a, b) => b.jt - a.jt || b.qt - a.qt)
 

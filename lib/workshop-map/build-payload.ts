@@ -165,9 +165,16 @@ export function buildFyPayload(fy: number, invoices: MapInvoiceRow[], quotes: Ma
     ...g.row.row, totalAmount: r2(g.amount), quoteCount: g.count,
   }))
 
-  const quotePoints = dedupQuotes.filter(r => r.lat != null && r.lng != null).map(r => {
+  // EVERY deduped quote becomes a point, geocoded or not (Chris 2026-09-01:
+  // "Unknown should be in the All AU total and Quotes inc GST total — they are
+  // still quotes, just can't be placed on the map"). Un-geocoded points carry
+  // la/ln = null: the dashboard skips them when drawing markers and counting
+  // locations, but they COUNT in every total. Before this they were dropped
+  // from the payload entirely, so the headline understated quoted value by
+  // roughly 8%.
+  const quotePoints = dedupQuotes.map(r => {
     const p: any = {
-      la: r.lat, ln: r.lng, pc: r.postcode || '', l: r.locality || r.suburb || '',
+      la: r.lat ?? null, ln: r.lng ?? null, pc: r.postcode || '', l: r.locality || r.suburb || '',
       m: r.monthIndex, g: r.group, c: r.customerName || '', a: r2(r.totalAmount),
       i: r.quoteNumber, d: r.quoteDate || '',
     }
@@ -204,7 +211,7 @@ export function buildFyPayload(fy: number, invoices: MapInvoiceRow[], quotes: Ma
       points: quotePoints,
       meta: {
         total_quotes: dedupQuotes.length,
-        mapped: quotePoints.length,
+        mapped: quotePoints.filter(p => p.la != null && p.ln != null).length,
         total_value: r2(dedupQuotes.reduce((s, r) => s + r.totalAmount, 0)),
       },
     },

@@ -292,6 +292,82 @@ export function dedupLargestPerCustomerMonth<T extends { customerId?: string | n
 // generated from the Matthew Proctor open dataset).
 // ----------------------------------------------------------------------------
 export interface LatLng { lat: number; lng: number; locality?: string; }
+/**
+ * REGIONS people type instead of a suburb, mapped to a representative locality.
+ *
+ * "Gold Coast" is not a suburb and never will be in the postcode dataset, but a
+ * customer there is a real customer in a real place - dropping them off the map
+ * loses a genuine data point (Chris 2026-09-01: "Recover as many as we can and
+ * place"). Each maps to the recognised centre of that region, so the pin is
+ * approximately right rather than absent.
+ *
+ * DELIBERATELY NOT HERE: bare states ("VIC", "TASMANIA") and overseas towns. A
+ * pin in the geographic middle of Victoria implies a precision the data does
+ * not have, and an overseas address cannot sit on an Australian map at all.
+ * Those stay unplaced - and, since 2026-09-01, still count in the totals.
+ */
+const REGION_ALIASES: Record<string, string> = {
+  "GOLD COAST": "SOUTHPORT", "GOLDCOAST": "SOUTHPORT",
+  "SUNSHINE COAST": "MAROOCHYDORE", "NOOSA": "NOOSA HEADS",
+  "CENTRAL COAST": "GOSFORD", "NORTHERN BEACHES": "MANLY",
+  "SUTHERLAND SHIRE": "SUTHERLAND", "WESTERN SYDNEY": "PARRAMATTA",
+  "NW SYDNEY": "BLACKTOWN", "NORTH WEST MELBOURNE": "MELBOURNE",
+  "CENTRAL SYDNEY": "SYDNEY", "SOUTH SYDNEY": "MASCOT",
+  "BLUE MOUNTAINS": "KATOOMBA", "SOUTHERN HIGHLANDS": "BOWRAL",
+  "LAKE MACQUARIE": "SPEERS POINT", "ADELAIDE HILLS": "STIRLING",
+  "YARRA VALLEY": "HEALESVILLE", "MORNINGTON PENINSULA": "MORNINGTON",
+  "GIPPSLAND": "TRARALGON", "SOUTH GIPPSLAND": "LEONGATHA",
+  "PHILLIP ISLAND": "COWES", "YORKE PENINSULA": "MINLATON",
+  "LOCKYER VALLEY": "GATTON", "NORTH BRISBANE": "CHERMSIDE",
+  "CAPE YORK": "WEIPA", "PILBARA": "KARRATHA",
+  "WHITSUNDAYS": "AIRLIE BEACH", "WHIT SUNDAYS": "AIRLIE BEACH",
+  "COFFS": "COFFS HARBOUR", "NORTHERN NSW": "LISMORE",
+};
+
+/**
+ * Values that are NOT a suburb and must never be fuzzy-matched into one.
+ * States, countries and "no fixed address" answers. Without this "VICTORIA"
+ * lands on Vittoria NSW and "TASMANIA" on something equally arbitrary.
+ */
+const NEVER_A_SUBURB = new Set([
+  "NSW", "QLD", "VIC", "TAS", "WA", "SA", "NT", "ACT",
+  "NEW SOUTH WALES", "QUEENSLAND", "VICTORIA", "TASMANIA",
+  "WESTERN AUSTRALIA", "SOUTH AUSTRALIA", "NORTHERN TERRITORY",
+  "AUSTRALIAN CAPITAL TERRITORY", "AUSTRALIA",
+  "TRAVELLING", "TRAVEL FULL TIME", "FULL TIME TRAVELLING", "TRAVELLING FULL TIME",
+  "UNITED STATES OF AMERICA", "USA", "NEW ZEALAND", "UNKNOWN", "N/A",
+]);
+
+/** Levenshtein, bounded - only used to rescue a misspelt suburb. */
+function editDistance(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (Math.abs(m - n) > 2) return 99;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+/** Spelling variants worth trying before giving up on an exact match. */
+function suburbVariants(sk: string): string[] {
+  const out = new Set<string>();
+  const base = sk.replace(/[.,]/g, " ").replace(/\s+/g, " ").trim();
+  out.add(base);
+  out.add(base.replace(/^MT\s+/, "MOUNT "));
+  out.add(base.replace(/^MOUNT\s+/, "MT "));
+  out.add(base.replace(/^SAINT\s+/, "ST "));
+  out.add(base.replace(/^ST\s+/, "SAINT "));
+  out.add(base.replace(/-/g, " "));
+  out.add(base.replace(/\s/g, "-"));
+  out.add(base.replace(/\s/g, ""));
+  return Array.from(out).filter(Boolean);
+}
+
 export function geocode(
   postcode: string | null | undefined,
   suburb: string | null | undefined,
@@ -300,8 +376,61 @@ export function geocode(
 ): LatLng | null {
   const pc = (postcode ?? "").match(/\d{3,4}/)?.[0]?.padStart(4, "0");
   if (pc && postcodeMap[pc]) return postcodeMap[pc];
+
   const sk = (suburb ?? "").toUpperCase().trim();
-  if (sk && suburbMap[sk]) return suburbMap[sk];
+  if (!sk) return null;
+  if (suburbMap[sk]) return suburbMap[sk];
+
+  // A postcode typed into the suburb box ("2456", "PO BOX 703 BEENLEIGH QLD
+  // 4207"). Try EVERY 3-4 digit run and take the first that is a real
+  // postcode - "703" in that example is not, "4207" is, and taking the first
+  // match blindly would geocode the PO box number.
+  for (const m of sk.match(/\d{3,4}/g) || []) {
+    const cand = m.padStart(4, "0");
+    if (postcodeMap[cand]) return postcodeMap[cand];
+  }
+
+  // Formatting differences: MT/MOUNT, SAINT/ST, hyphen vs space vs nothing.
+  for (const v of suburbVariants(sk)) if (suburbMap[v]) return suburbMap[v];
+
+  // A region typed instead of a suburb.
+  const region = REGION_ALIASES[sk] || REGION_ALIASES[sk.replace(/[.,]/g, "").replace(/\s+/g, " ").trim()];
+  if (region && suburbMap[region]) return suburbMap[region];
+
+  // A name that is a state, a country or "no fixed address" must NEVER reach
+  // the fuzzy pass. Left to it, "VICTORIA" matched Vittoria NSW - a real pin,
+ // confidently in the wrong place, which is worse than no pin at all.
+  if (NEVER_A_SUBURB.has(sk)) return null;
+
+  // Prefix match before fuzzy, in BOTH directions, and only when unique:
+  //   "COOLUM"         -> "COOLUM BEACH"  (the dataset name is longer)
+  //   "WOODGATE BEACH" -> "WOODGATE"      (the typed name is longer)
+  // This has to come first: COOLUM is one edit from COOLUP in WA, so the fuzzy
+  // pass would have put a Sunshine Coast customer in Western Australia.
+  {
+    let best: string | null = null, ties = 0;
+    for (const key in suburbMap) {
+      if (key.startsWith(sk + " ") || sk.startsWith(key + " ")) { best = best ?? key; ties++; }
+    }
+    if (best && ties === 1) return suburbMap[best];
+  }
+
+  // Last resort: a misspelling within one or two edits of exactly ONE suburb.
+  // Requires 6+ characters (shorter names collide too easily) and a UNIQUE
+  // winner - two candidates at the same distance means we do not know which,
+  // and a wrong pin is worse than no pin.
+  if (sk.length >= 6) {
+    const limit = sk.length >= 8 ? 2 : 1;
+    let best: string | null = null, bestD = 99, ties = 0;
+    for (const key in suburbMap) {
+      if (Math.abs(key.length - sk.length) > limit) continue;
+      const d = editDistance(key, sk);
+      if (d < bestD) { bestD = d; best = key; ties = 1; }
+      else if (d === bestD) ties++;
+    }
+    if (best && bestD <= limit && ties === 1) return suburbMap[best];
+  }
+
   return null;
 }
 

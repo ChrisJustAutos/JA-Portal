@@ -1055,6 +1055,10 @@ The workshop re-quotes the same job all the time — a revision, a changed spec,
 
 **Expect totals about 6% lower than before**, which is the change in method, not a drop in quoting. Around a quarter of customer-months have more than one quote.
 
+**Quotes with no address still count in the totals.** A quote we cannot place on the map is still a quote, so it is included in **Quoted (inc GST)** and in **All AU** — it just gets no dot and is not counted as a Location. Before 1 September 2026 those quotes were left out of the totals entirely, which understated quoted value by roughly 8%.
+
+**Most "unknown" quotes have no address at all** — three quarters of them have neither suburb nor postcode, so there is nothing to place. The rest are now recovered where possible: misspellings, a postcode typed in the suburb box, and regions like "Gold Coast" or "Sunshine Coast" (pinned at the centre of that region). A quote that only says a state, or an overseas address, is deliberately left unplaced — a dot in the middle of Victoria would be misleading. **If you want fewer unknowns, the fix is putting suburbs on customers in Mechanics Desk.**
+
 **⚠ The map updates overnight.** The figures rebuild in the 3:30am run, so a change made today shows tomorrow.
 
 ### Restricting someone to just a few screens
