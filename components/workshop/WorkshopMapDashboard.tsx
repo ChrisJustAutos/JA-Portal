@@ -592,6 +592,40 @@ export default function WorkshopMapDashboard() {
         </div>
       )}
 
+      {/* The per-distributor line. The aggregate above answers "how much of our
+          quoting sits in distributor territory"; this answers "whose". Every
+          located distributor is listed even on nought, because a distributor
+          with no quotes near them is the finding, not a blank. Click one to fly
+          to their area. */}
+      {view === 'quotes' && areasOn && areas && areaStats && (
+        <div className="strip">
+          <span className="striplabel">In area</span>
+          {areas.distributors
+            .filter(d => d.lat != null && d.lng != null)
+            .map(d => ({ d, s: areaStats.per.get(d.key) || { n: 0, t: 0 } }))
+            .sort((a, b) => b.s.t - a.s.t || a.d.name.localeCompare(b.d.name))
+            .map(({ d, s }) => (
+              <button key={d.key} className="mbtn" style={{ opacity: s.n ? 1 : .45 }}
+                title={`${d.name}${d.suburb ? ` — ${d.suburb}` : ''} · ${s.n} quote${s.n === 1 ? '' : 's'} within ${areas.radiusKm}km${d.quotesOnly ? ' · Just Autos’ own workshop' : ''}`}
+                onClick={() => {
+                  const map = mapRef.current
+                  if (!map || d.lat == null || d.lng == null) return
+                  map.fitBounds(L.latLng(d.lat, d.lng).toBounds(areas.radiusKm * 2200))
+                }}>
+                {d.name.length > 22 ? d.name.slice(0, 21) + '…' : d.name}
+                <span className="mt">{s.n} · {fmtK(s.t)}</span>
+              </button>
+            ))}
+          {areaStats.outN > 0 && (
+            <button className="mbtn" style={{ opacity: .7 }}
+              title="Quotes that fall outside every distributor's radius"
+              onClick={() => { const b = boundsRef.current; if (b && mapRef.current) mapRef.current.fitBounds(b) }}>
+              Outside every area<span className="mt">{areaStats.outN} · {fmtK(areaStats.outT)}</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {hasStrips && (
         <div className="strip vehs">
           <span className="striplabel">Vehicle</span>
