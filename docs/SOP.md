@@ -532,11 +532,19 @@ Before this (31 August 2026) two separate numbers ran and drifted apart — orde
 
 On an order where the distributor did not enter their own PO, MYOB's "Purchase Order No." box now repeats the document number. It has always fallen back to the portal order number — which is now the same thing. Harmless.
 
-Until the invoice is written it reads **"Not written to MYOB yet"** in amber. The MYOB card lower down the page — beside Stripe, under the items — still carries the diagnostics: company file, write attempts, and the error if a write failed.
+Until the invoice is written it reads **"Not written to MYOB yet"** in amber. **If a write fails, the reason appears in red directly under that row**, with the attempt count and a *Retry MYOB write* button for admins. There is no separate MYOB card any more — the company file is always JAWS, and the order number, the invoiced date and every write attempt are in the Summary and the Timeline already.
 
 The **Timeline** card shows the **three most recent events** with "N earlier events hidden" above them; **Show all N events** opens the lot. A busy order — drop-ship POs, freight polls, a refund — used to run to a wall of entries, and what you almost always want is what happened last.
 
-**The order page was condensed on 3 September 2026.** Summary and Ship to now sit side by side, the totals moved into the bottom of the Items card, and the Timeline moved from the top of the right-hand rail to the foot of it — so **Actions and Shipping are what you land on** rather than a list of what has already happened. Nothing was removed; the same figures are on the same page, higher up.
+**The order page was condensed on 3 September 2026**, to fit on one screen without scrolling:
+
+- **Summary and Ship to sit side by side**, and the totals moved into the bottom of the Items card, under the money column they add up.
+- **The Stripe and MYOB cards are gone.** Both repeated what the Summary and the Timeline already say. What they uniquely held was kept: **Open in Stripe →** is now a link under the Payment row, and a failed MYOB write shows its reason under the MYOB invoice row.
+- **Actions is one button and one dropdown.** The action you would normally take next — *Mark as picking*, *Mark as packed*, *Mark as shipped* — stays a button. The undo, **Refund…**, **Cancel order…** and **Delete order** are under *More actions…*. Each still asks for confirmation, so choosing one from the list does not do anything on its own.
+- **The Timeline is at the foot of the rail**, so Actions and Shipping are what you land on rather than a list of what has already happened.
+- **Boxes and consignments** stays folded up until you open it, and **Method** is only shown separately from **Carrier** when the two actually differ.
+
+Nothing was removed but duplication; every figure is still on the page.
 
 ### 4.2b "Consignment Missing" on a shipped order
 

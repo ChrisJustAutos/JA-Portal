@@ -461,6 +461,43 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   {data.myob.order_number && data.myob.written_at && (
                     <KV label="Invoiced" value={fullDate(data.myob.written_at)} mono small/>
                   )}
+                  {/* The MYOB write ERROR is the one thing the old MYOB card
+                      carried that nothing else does — company file, order
+                      number, written date and attempt count were all either
+                      already in this card or in the Timeline, which is why that
+                      card is gone (Chris 2026-09-03). So the error stays, under
+                      the invoice row it explains, and only when there is one.
+                      retry-myob is admin:b2b, so a manager sees the error but
+                      not the button. */}
+                  {data.myob.write_error && (
+                    <div style={{margin:'6px 0 2px',padding:'8px 10px',background:alpha(A.bad,'14'),borderRadius:RADIUS.sm,color:A.bad,fontSize:12.5,lineHeight:1.5}}>
+                      {data.myob.write_error}
+                      {!!data.myob.write_attempts && (
+                        <span style={{color:T.text3}}> ({data.myob.write_attempts} attempt{data.myob.write_attempts === 1 ? '' : 's'})</span>
+                      )}
+                      {canRefund && (
+                        <div style={{marginTop:8}}>
+                          <button
+                            disabled={actionBusy}
+                            onClick={async () => {
+                              setActionBusy(true); setActionError(null)
+                              try {
+                                const r = await fetch(`/api/b2b/admin/orders/${orderId}/retry-myob`, { method: 'POST', credentials: 'same-origin' })
+                                const j = await r.json()
+                                if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+                                flashMsg(j.myob_write_error ? 'Retry ran — MYOB failed again, see error' : 'MYOB write retried successfully')
+                                await load()
+                              } catch (e: any) { setActionError(e?.message || String(e)) }
+                              finally { setActionBusy(false) }
+                            }}
+                            className="al-press al-focus"
+                            style={{padding:'6px 13px',borderRadius:RADIUS.pill,border:'1px solid transparent',background:alpha(A.bad,'14'),color:A.bad,fontSize:12.5,fontWeight:600,fontFamily:'inherit',cursor:'pointer',minHeight:32}}>
+                            {actionBusy ? 'Retrying…' : 'Retry MYOB write'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <KV label="Distributor"    value={data.distributor?.display_name || '—'}/>
                   <KV label="Customer PO"    value={data.customer_po || '—'} mono/>
                   {(() => {
@@ -470,6 +507,18 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     const state = settled ? 'Settled' : (m === 'becs' ? 'Awaiting settlement' : m === 'payto' ? 'Awaiting confirmation' : 'Unsettled')
                     return <KV label="Payment" value={`${label} · ${state}`} valueColor={settled ? A.good : (m === 'card' ? undefined : A.warn)}/>
                   })()}
+                  {/* All the old Stripe card was ever used for. The payment
+                      intent and session id are on the far side of this link. */}
+                  {data.stripe.payment_intent_id && (
+                    <div style={{display:'flex', justifyContent:'flex-end'}}>
+                      <a href={`https://dashboard.stripe.com/payments/${data.stripe.payment_intent_id}`}
+                        target="_blank" rel="noopener noreferrer"
+                        title={`Payment intent ${data.stripe.payment_intent_id}`}
+                        style={{fontSize:12,color:A.accent,textDecoration:'none'}}>
+                        Open in Stripe →
+                      </a>
+                    </div>
+                  )}
                   {/* Offered while there is something to find out (a paid order
                       whose funds aren't confirmed cleared) AND when the money
                       HAS cleared but never reached MYOB — the second case is
@@ -622,56 +671,6 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   </div>
                 </Card>
 
-                {/* Stripe + MYOB info */}
-                <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',gap:14,minWidth:0}}>
-                  <Card title="Stripe">
-                    <KV label="Status" value={data.paid_at ? 'Paid' : 'Pending'} valueColor={data.paid_at ? A.good : A.warn}/>
-                    <KV label="Payment Intent" value={data.stripe.payment_intent_id || '—'} mono small/>
-                    <KV label="Session ID"     value={data.stripe.checkout_session_id || '—'} mono small/>
-                    {data.stripe.payment_intent_id && (
-                      <div style={{marginTop:8}}>
-                        <a href={`https://dashboard.stripe.com/payments/${data.stripe.payment_intent_id}`}
-                          target="_blank" rel="noopener noreferrer"
-                          style={{fontSize:12,color:A.accent,textDecoration:'none'}}>
-                          Open in Stripe →
-                        </a>
-                      </div>
-                    )}
-                  </Card>
-                  <Card title="MYOB">
-                    <KV label="Company file" value={data.myob.company_file || 'JAWS'}/>
-                    <KV label="Order #"      value={data.myob.order_number || '—'} mono valueColor={data.myob.order_number ? T.text2 : A.warn}/>
-                    <KV label="Written"      value={data.myob.written_at ? fullDate(data.myob.written_at) : '—'} mono small/>
-                    <KV label="Attempts"     value={String(data.myob.write_attempts ?? 0)}/>
-                    {data.myob.write_error && (
-                      <div style={{marginTop:8,padding:'8px 10px',background:alpha(A.bad,'14'),borderRadius:RADIUS.sm,color:A.bad,fontSize:12.5,lineHeight:1.5}}>
-                        {data.myob.write_error}
-                        {/* retry-myob is admin:b2b, so a manager sees the
-                            error but not the button (Chris 2026-09-03). */}
-                        {canRefund && <div style={{marginTop:8}}>
-                          <button
-                            disabled={actionBusy}
-                            onClick={async () => {
-                              setActionBusy(true); setActionError(null)
-                              try {
-                                const r = await fetch(`/api/b2b/admin/orders/${orderId}/retry-myob`, { method: 'POST', credentials: 'same-origin' })
-                                const j = await r.json()
-                                if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-                                flashMsg(j.myob_write_error ? 'Retry ran — MYOB failed again, see error' : 'MYOB write retried successfully')
-                                await load()
-                              } catch (e: any) { setActionError(e?.message || String(e)) }
-                              finally { setActionBusy(false) }
-                            }}
-                            className="al-press al-focus"
-                            style={{padding:'6px 13px',borderRadius:RADIUS.pill,border:'1px solid transparent',background:alpha(A.bad,'14'),color:A.bad,fontSize:12.5,fontWeight:600,fontFamily:'inherit',cursor:'pointer',minHeight:32}}>
-                            {actionBusy ? 'Retrying…' : 'Retry MYOB write'}
-                          </button>
-                        </div>}
-                      </div>
-                    )}
-                  </Card>
-                </div>
-
                 {/* Refund history */}
                 {data.refunds.length > 0 && (
                   <Card title={`Refunds (${data.refunds.length})`}>
@@ -707,54 +706,78 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 {/* Action buttons */}
                 {canEdit && (
                   <Card title="Actions">
-                    {allowedTransitions.length === 0 && !canCancel && !canDoRefund && (
-                      <div style={{fontSize:12,color:T.text3}}>No actions available for this status.</div>
-                    )}
+                    {/* ONE BUTTON AND ONE DROPDOWN (Chris 2026-09-03:
+                        "Actions should be a drop down selection to save
+                        space"). Up to five full-width buttons stacked down the
+                        rail cost about 230px at the very top of the page and
+                        pushed Shipping — the panel with the job in it — and the
+                        Timeline off the screen.
 
-                    {allowedTransitions.map(t => (
-                      <button
-                        key={t.to}
-                        disabled={actionBusy}
-                        onClick={() => {
-                          if (t.needsModal === 'shipped') setShipModal(true)
-                          else doTransition(t.to)
-                        }}
-                        className={`al-press al-focus${t.primary ? ' al-primary' : ''}`}
-                        style={actionBtn(!!t.primary, actionBusy)}>
-                        {t.label}
-                      </button>
-                    ))}
+                        The PRIMARY transition keeps its button: it is the one
+                        that actually gets pressed, and burying "Mark as
+                        shipped" a click deeper to save a row is a bad trade.
+                        The undo, refund, cancel and delete go in the dropdown.
 
-                    {canDoRefund && (
-                      <button
-                        disabled={actionBusy}
-                        onClick={() => setRefundModal(true)}
-                        className="al-press al-focus"
-                        style={actionBtn(false, actionBusy, A.bad)}>
-                        Refund…
-                      </button>
-                    )}
+                        A native select on purpose — it is what "Pack as" in the
+                        Shipping panel already uses, it cannot be clipped by the
+                        sticky rail the way an absolutely-positioned menu can,
+                        and every option behind it opens its own confirmation,
+                        so a stray selection still cannot refund or delete
+                        anything by itself. */}
+                    {(() => {
+                      const primary = allowedTransitions.find(t => t.primary)
+                      const runTransition = (t: { to: string; needsModal?: 'shipped' }) => {
+                        if (t.needsModal === 'shipped') setShipModal(true)
+                        else doTransition(t.to)
+                      }
+                      const others: { key: string; label: string; run: () => void }[] = [
+                        ...allowedTransitions.filter(t => !t.primary).map(t => ({
+                          key: `to:${t.to}`, label: t.label, run: () => runTransition(t),
+                        })),
+                        ...(canDoRefund ? [{ key: 'refund', label: 'Refund…',       run: () => setRefundModal(true) }] : []),
+                        ...(canCancel   ? [{ key: 'cancel', label: 'Cancel order…', run: () => setCancelModal(true) }] : []),
+                        ...(canRefund   ? [{ key: 'delete', label: 'Delete order',  run: () => { void doDelete() } }] : []),
+                      ]
 
-                    {canCancel && (
-                      <button
-                        disabled={actionBusy}
-                        onClick={() => setCancelModal(true)}
-                        className="al-press al-focus"
-                        style={actionBtn(false, actionBusy, A.bad)}>
-                        Cancel order…
-                      </button>
-                    )}
-
-                    {canRefund && (
-                      <button
-                        disabled={actionBusy}
-                        onClick={doDelete}
-                        title="Permanently delete this order from the portal"
-                        className="al-press al-focus"
-                        style={{ ...actionBtn(false, actionBusy, A.bad), marginTop: 6 }}>
-                        Delete order
-                      </button>
-                    )}
+                      if (!primary && others.length === 0) {
+                        return <div style={{fontSize:12,color:T.text3}}>No actions available for this status.</div>
+                      }
+                      return (
+                        <>
+                          {primary && (
+                            <button
+                              disabled={actionBusy}
+                              onClick={() => runTransition(primary)}
+                              className="al-press al-focus al-primary"
+                              style={actionBtn(true, actionBusy)}>
+                              {primary.label}
+                            </button>
+                          )}
+                          {others.length > 0 && (
+                            <select
+                              value=""
+                              disabled={actionBusy}
+                              aria-label="More actions"
+                              onChange={e => {
+                                const pick = others.find(o => o.key === e.target.value)
+                                if (pick) pick.run()
+                              }}
+                              className="al-focus"
+                              style={{
+                                width:'100%', background:T.bg3, border:'1px solid transparent',
+                                color:T.text2, borderRadius:RADIUS.pill,
+                                padding: isMobile ? '11px 13px' : '9px 13px',
+                                fontSize: isMobile ? 16 : 13, fontWeight:600,
+                                minHeight: isMobile ? 44 : 38, outline:'none',
+                                fontFamily:'inherit', cursor: actionBusy ? 'wait' : 'pointer',
+                              }}>
+                              <option value="">More actions…</option>
+                              {others.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                            </select>
+                          )}
+                        </>
+                      )
+                    })()}
                   </Card>
                 )}
 
@@ -1548,8 +1571,20 @@ function ShippingCard({ order, canShip, canAdmin, onEdit, onReloaded, onFlash }:
         <div style={{fontSize:12.5, color:A.bad, marginBottom:10, lineHeight:1.5}}>{actionError}</div>
       )}
 
-      <KV label="Method"   value={order.freight_service_label || order.freight_method_label || '—'}/>
-      <KV label="Carrier"  value={order.carrier || '—'}/>
+      {/* Method and Carrier were printing the same string on every MachShip
+         order — "TNT Express — Road Express" twice, a row of the rail spent
+         saying nothing (Chris 2026-09-03). */}
+      {(() => {
+        const method  = order.freight_service_label || order.freight_method_label || ''
+        const carrier = order.carrier || ''
+        const same = !!method && !!carrier && method.trim().toLowerCase() === carrier.trim().toLowerCase()
+        return (
+          <>
+            <KV label={same ? 'Carrier' : 'Method'} value={method || carrier || '—'}/>
+            {!same && <KV label="Carrier" value={carrier || '—'}/>}
+          </>
+        )
+      })()}
       <KV label="Tracking" value={order.tracking_number || '—'} mono/>
       {effectiveTrackingUrl && order.tracking_number && (
         <div style={{display:'grid', gridTemplateColumns:'90px 1fr', gap:'4px 12px', alignItems:'baseline'}}>
