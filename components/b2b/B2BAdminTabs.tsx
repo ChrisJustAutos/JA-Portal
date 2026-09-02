@@ -55,6 +55,21 @@ export default function B2BAdminTabs({ active }: { active: B2BAdminSection }) {
       <style>{`
         .b2b-admin-tabs{ scrollbar-width:none; -ms-overflow-style:none; }
         .b2b-admin-tabs::-webkit-scrollbar{ display:none; }
+        /* A horizontal swipe rail. Used for the orders status filters, which
+           are drag-to-combine tiles on a desktop and a tall stack of cards on
+           a phone — a row you flick through reads far better and keeps the
+           list itself above the fold. Snapping is proximity rather than
+           mandatory: mandatory fights a fast flick. */
+        .b2b-swipe{
+          display:flex; gap:8px; overflow-x:auto; overflow-y:hidden;
+          -webkit-overflow-scrolling:touch; scroll-snap-type:x proximity;
+          scrollbar-width:none; -ms-overflow-style:none;
+          /* Bleed to the screen edges so the rail reads as continuous, then
+             pad back in so the first and last pill are not clipped. */
+          margin:0 -14px; padding:2px 14px 2px;
+        }
+        .b2b-swipe::-webkit-scrollbar{ display:none; }
+        .b2b-swipe > *{ scroll-snap-align:start; flex:0 0 auto; }
         @media (max-width: 640px){
           .b2b-admin-tabs{ gap:4px; margin-bottom:14px; padding-bottom:10px; }
           .b2b-admin-tabs a{ padding:7px 12px !important; font-size:12.5px !important; }

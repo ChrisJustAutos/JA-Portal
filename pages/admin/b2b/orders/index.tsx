@@ -165,6 +165,10 @@ export default function AdminOrdersListPage({ user }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState(searchQuery)
+  // Phone only: distributor + date range fold away behind "Filters" so the
+  // search bar is a clean single row. Opens automatically when one is set,
+  // or a filter would be silently active with nothing on screen saying so.
+  const [moreFilters, setMoreFilters] = useState(false)
 
   // Per-user combined status buckets + drag-to-combine state.
   const { prefs, update } = usePreferences()
@@ -180,6 +184,9 @@ export default function AdminOrdersListPage({ user }: Props) {
 
   // Sync the search input with the URL when navigation happens externally
   useEffect(() => { setSearchInput(searchQuery) }, [searchQuery])
+  useEffect(() => {
+    if (distributorFilter || dateFromFilter || dateToFilter) setMoreFilters(true)
+  }, [distributorFilter, dateFromFilter, dateToFilter])
 
   const updateFilter = useCallback((next: Record<string, string | null>) => {
     const q: Record<string, string> = { ...router.query as any }
@@ -377,11 +384,39 @@ export default function AdminOrdersListPage({ user }: Props) {
                   style={btnStyle(tileEdit ? 'primary' : 'ghost','sm')}>
                   {tileEdit ? 'Done' : 'Edit buckets'}
                 </button>
-                {tileEdit
-                  ? <span style={{fontSize:12,color:T.text3}}>Rename or ungroup combined buckets. Drag is paused.</span>
-                  : <span style={{fontSize:12,color:T.text3}}>Drag one tile onto another to combine.</span>}
+                {isMobile
+                  ? null
+                  : tileEdit
+                    ? <span style={{fontSize:12,color:T.text3}}>Rename or ungroup combined buckets. Drag is paused.</span>
+                    : <span style={{fontSize:12,color:T.text3}}>Drag one tile onto another to combine.</span>}
               </div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))',gap:10}}>
+              {/* PHONE: one swipeable row of pills. The tiles below are a
+                  grid of 150px cards — on a phone that is a screenful of
+                  filters before you reach a single order (Chris 2026-09-02).
+                  Same buckets, same counts, same active state; the drag-to-
+                  combine editing stays a desktop affair, which is where anyone
+                  would do it anyway. */}
+              {isMobile && (
+                <div className="b2b-swipe">
+                  <FilterPill
+                    label="All" color={A.accent}
+                    count={data.status_counts['_all'] ?? null}
+                    active={activeSet.size === 0}
+                    onClick={() => updateFilter({ status: null })}
+                  />
+                  {tiles.map(t => (
+                    <FilterPill
+                      key={t.id}
+                      label={t.label} color={t.color}
+                      count={t.statuses.reduce((sum, s) => sum + statusCount(s), 0)}
+                      active={sameSet(t.statuses, activeSet)}
+                      onClick={() => updateFilter({ status: t.statuses.join(',') })}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <div style={{display: isMobile ? 'none' : 'grid',gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))',gap:10}}>
                 {/* All */}
                 <StatusCard
                   label="All orders" icon="all" color={A.accent}
@@ -423,25 +458,41 @@ export default function AdminOrdersListPage({ user }: Props) {
               display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',
               padding:'10px 12px',marginBottom:14,overflow:'visible',
             }}>
+              {/* PHONE: the search bar gets its own full-width row and nothing
+                  else. It used to share a wrapping flex row with a Search
+                  button, a distributor select and two date fields, which on a
+                  390px screen stacked into five lines of chrome above the
+                  orders. Enter searches; the rest is behind Filters. */}
               <input
                 type="text"
-                placeholder="Search order # or PO…"
+                placeholder={isMobile ? 'Search order # or PO' : 'Search order # or PO…'}
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') applySearch() }}
+                enterKeyHint="search"
+                inputMode="search"
                 className="al-focus"
-                style={{...filterInput(),flex:1,minWidth:220}}/>
-              <button onClick={applySearch}
-                className="al-press al-focus al-primary"
-                style={btnStyle('primary','sm')}>
-                Search
-              </button>
+                style={{...filterInput(), flex:1, minWidth: isMobile ? '100%' : 220, minHeight: isMobile ? 44 : undefined}}/>
+              {!isMobile && (
+                <button onClick={applySearch}
+                  className="al-press al-focus al-primary"
+                  style={btnStyle('primary','sm')}>
+                  Search
+                </button>
+              )}
+              {isMobile && (
+                <button onClick={() => setMoreFilters(v => !v)}
+                  className="al-press al-focus"
+                  style={{...btnStyle('ghost','sm'), minHeight:44, color: moreFilters ? A.accent : T.text2}}>
+                  {moreFilters ? 'Hide filters' : 'Filters'}
+                </button>
+              )}
 
               <select
                 value={distributorFilter}
                 onChange={e => updateFilter({ distributor: e.target.value || null })}
                 className="al-focus"
-                style={{...filterInput(),width:'auto',cursor:'pointer'}}>
+                style={{...filterInput(),width:'auto',cursor:'pointer',display: isMobile && !moreFilters ? 'none' : undefined,minHeight: isMobile ? 44 : undefined}}>
                 <option value="">All distributors</option>
                 {data.distributors.map(d => (
                   <option key={d.id} value={d.id}>{d.display_name}</option>
@@ -453,14 +504,14 @@ export default function AdminOrdersListPage({ user }: Props) {
                 value={dateFromFilter}
                 onChange={e => updateFilter({ from: e.target.value || null })}
                 className="al-focus"
-                style={{...filterInput(),width:'auto',colorScheme:'dark'}}/>
-              <span style={{color:T.text3,fontSize:12}}>→</span>
+                style={{...filterInput(),width:'auto',colorScheme:'dark',display: isMobile && !moreFilters ? 'none' : undefined,minHeight: isMobile ? 44 : undefined}}/>
+              <span style={{color:T.text3,fontSize:12,display: isMobile && !moreFilters ? 'none' : undefined}}>→</span>
               <input
                 type="date"
                 value={dateToFilter}
                 onChange={e => updateFilter({ to: e.target.value || null })}
                 className="al-focus"
-                style={{...filterInput(),width:'auto',colorScheme:'dark'}}/>
+                style={{...filterInput(),width:'auto',colorScheme:'dark',display: isMobile && !moreFilters ? 'none' : undefined,minHeight: isMobile ? 44 : undefined}}/>
 
               {(statusFilter || distributorFilter || dateFromFilter || dateToFilter || searchQuery) && (
                 <button
@@ -667,6 +718,35 @@ function OrderRowDisplay({ order, isFirst, selectable, checked, onToggle }: {
       </td>
 
     </tr>
+  )
+}
+
+// A compact filter pill for the mobile swipe rail. Deliberately not a small
+// StatusCard: the tile carries an icon, a drag handle and edit affordances that
+// mean nothing on a phone, and shrinking it would keep the weight without the
+// use.
+function FilterPill({ label, color, count, active, onClick }: {
+  label: string; color: string; count: number | null; active: boolean; onClick: () => void
+}) {
+  return (
+    <button onClick={onClick} className="al-press al-focus"
+      style={{
+        display:'inline-flex', alignItems:'center', gap:7,
+        padding:'0 14px', minHeight:40, borderRadius:RADIUS.pill,
+        border:`1px solid ${active ? color : T.border2}`,
+        background: active ? alpha(color,'1f') : 'transparent',
+        color: active ? color : T.text2,
+        fontSize:13, fontWeight: active ? 650 : 500, fontFamily:'inherit',
+        cursor:'pointer', whiteSpace:'nowrap',
+      }}>
+      {label}
+      {count != null && (
+        <span style={{
+          fontSize:12, fontWeight:700, fontVariantNumeric:'tabular-nums',
+          color: active ? color : T.text3,
+        }}>{count}</span>
+      )}
+    </button>
   )
 }
 
