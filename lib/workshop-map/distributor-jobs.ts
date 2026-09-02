@@ -21,7 +21,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fyMonths, isVin, normaliseVin, seriesFromVin, type VehicleGroup } from './vehicle-classification'
-import { matchLabel, geoForPostcode } from '../distributor-map'
+import { matchLabel, geoForPostcode, homeWorkshop } from '../distributor-map'
 
 export interface DistributorJobs {
   /** series → 12 FY months (Jul=0) → job count. Per MONTH this is already one
@@ -48,6 +48,13 @@ export interface DistributorJobs {
    * can put a pin on appear here; see `unlocated` for the rest.
    */
   byDistributor: DistributorTunePin[]
+  /**
+   * Just Autos' own workshop. Not a distributor and it carries no tunes — it is
+   * here so consumers can let it COMPETE for nearby quotes, which stops the
+   * workshop's own backyard reading as uncovered or being credited to a
+   * distributor a hundred kilometres away.
+   */
+  home: { name: string; lat: number; lng: number; suburb: string | null } | null
   /**
    * Tunes we could NOT place, and whose they are. Surfaced rather than dropped:
    * 28% of FY2026's tunes are at names with no b2b_distributors row, and a map
@@ -79,7 +86,7 @@ export interface DistributorTunePin {
 
 const EMPTY: DistributorJobs = {
   jcount: {}, jvehicles: {}, total: 0, vehicles: 0, unknown: 0, rejected: 0, sourceComputedAt: null,
-  byDistributor: [], unlocated: { tunes: 0, names: [] },
+  byDistributor: [], home: null, unlocated: { tunes: 0, names: [] },
 }
 
 // Chris 2026-09-02: "should just be tunes carried out". The PO number is
@@ -247,6 +254,7 @@ export async function distributorJobsForFy(db: SupabaseClient, fy: number): Prom
     rejected,
     sourceComputedAt: data.computed_at ?? null,
     byDistributor: Array.from(pins.values()).sort((a, b) => b.jobs - a.jobs),
+    home: homeWorkshop(),
     unlocated: { tunes: unlocatedTunes, names: unlocatedNames.sort() },
   }
 }

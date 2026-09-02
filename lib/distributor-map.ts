@@ -27,6 +27,22 @@ export function geoForPostcode(postcode: string | null | undefined): [number, nu
   return pc ? (PC[pc] || null) : null
 }
 
+/**
+ * Just Autos' own workshop as a place on the map.
+ *
+ * It has to compete for quotes alongside the distributors or its own backyard
+ * reads as somebody else's territory — or as nobody's at all, which is what
+ * Chris spotted on the marketing report: Sunshine Coast suburbs listed under
+ * "no distributor nearby" when the workshop is right there.
+ *
+ * Quotes only, never jobs: it is not a distributor and must never pick up
+ * distributor work.
+ */
+export function homeWorkshop(): { name: string; lat: number; lng: number; suburb: string | null } | null {
+  const geo = geoForPostcode(HOME_POSTCODE)
+  return geo ? { name: HOME_NAME, lat: geo[0], lng: geo[1], suburb: geo[2] || null } : null
+}
+
 const HOME_KEY = 'ja:home'
 const HOME_NAME = 'Just Autos (workshop)'
 const HOME_POSTCODE = (process.env.DISTRIBUTOR_MAP_HOME_POSTCODE || '4560').replace(/\D/g, '')

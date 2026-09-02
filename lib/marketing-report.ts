@@ -50,6 +50,8 @@ export interface MarketingReport {
   coverage: {
     radiusKm: number
     inside: { quotes: number; value: number }
+    /** Near OUR OWN workshop — covered, just not by a distributor. */
+    home: { name: string; quotes: number; value: number } | null
     outside: { quotes: number; value: number }
     /** Where the uncovered demand is, by postcode area — the actionable bit. */
     hotspots: { label: string; state: string; quotes: number; value: number }[]
@@ -143,7 +145,14 @@ export async function buildMarketingReport(
     if (pins.length) {
       const per = new Map<string, { quotes: number; value: number }>()
       const out = new Map<string, { state: string; quotes: number; value: number }>()
-      let inQ = 0, inV = 0, outQ = 0, outV = 0
+      let inQ = 0, inV = 0, outQ = 0, outV = 0, homeQ = 0, homeV = 0
+      // OUR OWN WORKSHOP COVERS ITS OWN BACKYARD (Chris 2026-09-02: "Just Autos
+      // is nearby" for some of the suburbs listed as uncovered). It competes on
+      // the same nearest-wins rule, so Sunshine Coast demand is neither called
+      // uncovered nor credited to a distributor hours away — but it is reported
+      // separately, because "we cover it" and "a distributor covers it" are
+      // different answers to the question this section asks.
+      const home = dj.home
       for (const p of qPoints) {
         if (p.la == null || p.ln == null) continue
         let best: DistributorTunePin | null = null, bestKm = Infinity
@@ -151,7 +160,13 @@ export async function buildMarketingReport(
           const km = haversineKm(p.la, p.ln, d.lat, d.lng)
           if (km <= radiusKm && km < bestKm) { bestKm = km; best = d }
         }
-        const amt = Number(p.a) || 0
+        const homeKm = home ? haversineKm(p.la, p.ln, home.lat, home.lng) : Infinity
+        const amt0 = Number(p.a) || 0
+        if (home && homeKm <= radiusKm && homeKm < bestKm) {
+          homeQ++; homeV += amt0
+          continue
+        }
+        const amt = amt0
         if (best) {
           inQ++; inV += amt
           const e = per.get(best.name) || { quotes: 0, value: 0 }
@@ -166,6 +181,7 @@ export async function buildMarketingReport(
       coverage = {
         radiusKm,
         inside: { quotes: inQ, value: r0(inV) },
+        home: home ? { name: home.name, quotes: homeQ, value: r0(homeV) } : null,
         outside: { quotes: outQ, value: r0(outV) },
         hotspots: Array.from(out.entries())
           .map(([label, v]) => ({ label, state: v.state, quotes: v.quotes, value: r0(v.value) }))

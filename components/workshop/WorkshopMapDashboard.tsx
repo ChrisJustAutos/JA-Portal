@@ -46,6 +46,7 @@ interface DistributorJobs {
   rejected: number
   sourceComputedAt: string | null
   byDistributor?: DistributorTunePin[]
+  home?: HomePin | null
   unlocated?: { tunes: number; names: string[] }
 }
 interface DistributorTunePin {
@@ -56,6 +57,7 @@ interface DistributorTunePin {
   jobs: number; jobsByMonth: number[]; tunes: number
   bySeries: Record<string, { jobs: number; months: number[] }>
 }
+interface HomePin { name: string; lat: number; lng: number; suburb: string | null }
 interface ConvBlock { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }
 interface CompareYear {
   fy: number
@@ -958,6 +960,11 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
   const distConv = useMemo(() => {
     const pins = dist?.byDistributor || []
     if (!pins.length || st !== 'all') return null
+    // Just Autos' own workshop competes for quotes here too. Without it, every
+    // quote on the Sunshine Coast is credited to whichever distributor happens
+    // to be nearest — inflating their denominator with work that was always
+    // ours (Chris 2026-09-02).
+    const home = dist?.home || null
     const per = new Map<string, { quotes: number; value: number }>()
     // The same in-radius quotes, broken down the way the vehicle table and the
     // month grid need them, so every figure on the Distributors tab comes from
@@ -970,6 +977,10 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
       for (const d of pins) {
         const km = haversineKm(q.la, q.ln, d.lat, d.lng)
         if (km <= radiusKm && km < bestKm) { bestKm = km; best = d }
+      }
+      if (home) {
+        const hk = haversineKm(q.la, q.ln, home.lat, home.lng)
+        if (hk <= radiusKm && (!best || hk < bestKm)) continue   // ours, not theirs
       }
       if (!best) continue
       const e = per.get(best.name) || { quotes: 0, value: 0 }

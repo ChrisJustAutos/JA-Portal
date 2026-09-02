@@ -65,10 +65,10 @@ export function renderMarketingHtml(r: MarketingReport, opts: { portalUrl?: stri
   // ── Coverage: the actionable section ──────────────────────────────────────
   if (r.coverage) {
     const c = r.coverage
-    const tot = c.inside.quotes + c.outside.quotes
+    const tot = c.inside.quotes + c.outside.quotes + (c.home?.quotes || 0)
     const pctOut = tot ? Math.round((100 * c.outside.quotes) / tot) : 0
     rows.push(h2('Demand with no distributor nearby',
-      `Financial year to date. Quotes further than ${c.radiusKm} km from every distributor we hold an address for.`))
+      `Financial year to date. Quotes further than ${c.radiusKm} km from every distributor we hold an address for${c.home ? ', and from our own workshop' : ''}.`))
     rows.push(`<tr><td style="padding:6px 24px 0">
       <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:${BG};border-radius:6px">
         <tr>
@@ -77,7 +77,9 @@ export function renderMarketingHtml(r: MarketingReport, opts: { portalUrl?: stri
           <td style="padding:14px 16px"><div style="font:700 24px/1 Arial,Helvetica,sans-serif;color:${INK}">${money(c.outside.value)}</div>
             <div style="font:400 11px/1.5 Arial,Helvetica,sans-serif;color:${MUTED}">quoted, uncovered</div></td>
           <td style="padding:14px 16px"><div style="font:700 24px/1 Arial,Helvetica,sans-serif;color:${INK}">${num(c.inside.quotes)}</div>
-            <div style="font:400 11px/1.5 Arial,Helvetica,sans-serif;color:${MUTED}">quotes inside an area</div></td>
+            <div style="font:400 11px/1.5 Arial,Helvetica,sans-serif;color:${MUTED}">quotes in a distributor area</div></td>
+          ${c.home ? `<td style="padding:14px 16px"><div style="font:700 24px/1 Arial,Helvetica,sans-serif;color:${INK}">${num(c.home.quotes)}</div>
+            <div style="font:400 11px/1.5 Arial,Helvetica,sans-serif;color:${MUTED}">on our own doorstep</div></td>` : ''}
         </tr>
       </table></td></tr>`)
     if (c.hotspots.length) {
