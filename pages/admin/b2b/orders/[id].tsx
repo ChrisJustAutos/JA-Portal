@@ -177,6 +177,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
   const [shipModal, setShipModal]     = useState(false)
   const [refundModal, setRefundModal] = useState(false)
   const [cancelModal, setCancelModal] = useState(false)
+  const [timelineOpen, setTimelineOpen] = useState(false)
 
   // Internal notes were removed from this page 2026-09-02 (Chris: "I don't
   // think it's going to get used"). The b2b_orders.internal_notes COLUMN and
@@ -376,7 +377,15 @@ export default function AdminOrderDetailPage({ user }: Props) {
   // moves picking -> packed -> shipped right beside the freight it moves on.
   // Built here rather than inside ShippingCard because every handler and
   // modal it drives belongs to this component.
-  const actionsNode = !canEdit ? null : (
+  // Takes hasOwnPrimary: when the Shipping panel is already showing a big
+  // button (Ship now / Book Shipment / Approve order), the status transition
+  // does NOT get one too - it drops into the dropdown with everything else.
+  // That is Chris's "Mark as shipped and Ship now are the same buttons": on a
+  // pending consignment they are two ways to say despatch it, and only one of
+  // them does the whole job (manifest + invoice + email), so only that one is
+  // offered. Mark as shipped stays reachable in the menu for freight booked
+  // outside the portal.
+  const actionsNode = !canEdit ? null : (hasOwnPrimary: boolean) => (
     <>
       {/* ONE BUTTON AND ONE DROPDOWN (Chris 2026-09-03:
           "Actions should be a drop down selection to save
@@ -397,13 +406,13 @@ export default function AdminOrderDetailPage({ user }: Props) {
           so a stray selection still cannot refund or delete
           anything by itself. */}
       {(() => {
-        const primary = allowedTransitions.find(t => t.primary)
+        const primary = hasOwnPrimary ? undefined : allowedTransitions.find(t => t.primary)
         const runTransition = (t: { to: string; needsModal?: 'shipped' }) => {
           if (t.needsModal === 'shipped') setShipModal(true)
           else doTransition(t.to)
         }
         const others: { key: string; label: string; run: () => void }[] = [
-          ...allowedTransitions.filter(t => !t.primary).map(t => ({
+          ...allowedTransitions.filter(t => t !== primary).map(t => ({
             key: `to:${t.to}`, label: t.label, run: () => runTransition(t),
           })),
           ...(canDoRefund ? [{ key: 'refund', label: 'Refund…',       run: () => setRefundModal(true) }] : []),
@@ -481,6 +490,14 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 <h1 style={{fontSize:24,fontWeight:700,margin:0,letterSpacing:'-0.02em',fontFamily:'monospace'}}>{data.order_number}</h1>
                 <StatusPill status={data.status}/>
                 <span style={{color:T.text2,fontSize:13}}>· {data.distributor?.display_name || '—'}</span>
+                {data.events.length > 0 && (
+                  <button onClick={() => setTimelineOpen(true)}
+                    className="al-press al-focus"
+                    title="Everything that has happened to this order"
+                    style={{background:'none',border:'none',padding:0,color:A.accent,fontSize:13,fontWeight:550,cursor:'pointer',fontFamily:'inherit'}}>
+                    · Timeline ({data.events.length})
+                  </button>
+                )}
                 {/* THE big figure sits up here (Chris 2026-09-03). It was 13px
                     in the header and 40px halfway down the page, which put the
                     money below the fold on a phone; the header is where you
@@ -518,8 +535,12 @@ export default function AdminOrderDetailPage({ user }: Props) {
             <div style={{padding:40,textAlign:'center',color:T.text3,fontSize:13}}>Loading…</div>
           )}
 
+          {/* The rail only holds staff panels, and the Timeline has left it for a
+              popup - so for a read-only role (sales or accountant on view:b2b)
+              there is nothing to put in it. Collapse to one column rather than
+              leaving 360px of empty page. */}
           {data && (
-            <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 360px',gap: isMobile ? 14 : 18,alignItems:'start',minWidth:0}}>
+            <div style={{display:'grid',gridTemplateColumns: (isMobile || !canEdit) ? '1fr' : '1fr 360px',gap: isMobile ? 14 : 18,alignItems:'start',minWidth:0}}>
 
               {/* ── LEFT COLUMN ── */}
               <div style={{display:'flex',flexDirection:'column',gap:14,minWidth:0}}>
@@ -807,14 +828,12 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   <DropShipCard order={data} canAdmin={!!canRefund} onReloaded={() => { void load() }} onFlash={flashMsg}/>
                 )}
 
-                {/* Timeline LAST (Chris 2026-09-03). It was the top of the rail,
-                    so the most valuable space on the page went to history while
-                    Actions and Shipping - the buttons you came to press - sat
-                    below the fold. What happened is a reference; what to do next
-                    is the job. */}
-                <Card title="Timeline">
-                  <Timeline events={data.events}/>
-                </Card>
+                {/* The Timeline is a POPUP now, opened from the header (Chris
+                    2026-09-03: "there is no reason for timeline so just remove
+                    or hide so that you can view as a pop up if need be"). It is
+                    the page's only piece of pure history, it was the tallest
+                    thing in the rail, and it is read perhaps once an order -
+                    when something has gone wrong. */}
 
 
               </div>
@@ -827,6 +846,15 @@ export default function AdminOrderDetailPage({ user }: Props) {
       {/* ── Modals ── */}
       {data && shipModal   && <ShipModal   order={data} busy={actionBusy} onClose={() => setShipModal(false)}   onConfirm={(body) => { setShipModal(false); shipOrder(body) }}/>}
       {data && refundModal && <RefundModal order={data} busy={actionBusy} onClose={() => setRefundModal(false)} onConfirm={doRefund}/>}
+      {data && timelineOpen && (
+        <Backdrop onClose={() => setTimelineOpen(false)}>
+          <h2 style={modalTitle()}>Timeline</h2>
+          <p style={modalDesc()}>Everything that has happened to {data.order_number}, newest last.</p>
+          <div style={{maxHeight:'60vh', overflowY:'auto', marginTop:4}}>
+            <Timeline events={data.events} showAll/>
+          </div>
+        </Backdrop>
+      )}
       {data && cancelModal && <CancelModal order={data} busy={actionBusy} canRefund={!!canDoRefund} onClose={() => setCancelModal(false)} onConfirm={doCancel}/>}
     </>
   )
@@ -883,8 +911,10 @@ function StatusPill({ status }: { status: string }) {
 // the answer you actually want is nearly always "what happened last".
 const TIMELINE_RECENT = 3
 
-function Timeline({ events }: { events: OrderEvent[] }) {
-  const [open, setOpen] = useState(false)
+function Timeline({ events, showAll }: { events: OrderEvent[]; showAll?: boolean }) {
+  // showAll: the popup has room, so it opens expanded instead of making you
+  // press "show all N events" every single time.
+  const [open, setOpen] = useState(!!showAll)
   if (events.length === 0) return <div style={{fontSize:12,color:T.text3}}>No events yet.</div>
 
   // Events arrive oldest-first, so the recent ones are the tail.
@@ -1010,7 +1040,9 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
   order: OrderDetail
   canShip: boolean          // ship:b2b_orders - book, despatch, label, refresh
   canAdmin: boolean         // admin:b2b - approve an order, bill a drop-ship PO
-  actions: React.ReactNode  // the status buttons, folded in from their own card
+  /** The status buttons, folded in from their own card. Told whether the panel
+   *  is already showing a primary button, so we never offer two. */
+  actions: ((hasOwnPrimary: boolean) => React.ReactNode) | null
   onEdit: () => void
   onReloaded: () => void
   onFlash: (msg: string) => void
@@ -1329,93 +1361,115 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
 
   return (
     <Card title="Shipping">
-      {actions && (
-        <div style={{marginBottom:12, paddingBottom:12, borderBottom:`1px solid ${T.border2}`}}>
-          {actions}
-        </div>
-      )}
       {(() => {
+        /* ONE PRIMARY ACTION, THEN AN EVEN GRID (Chris 2026-09-03: "Mark as
+           shipped and ship now are the same buttons... the ship now, manual
+           book, print label, print pick list could be laid out better and
+           cleaner").
+
+           Before, up to eight buttons of different colours wrapped across the
+           rail in whatever order the conditions happened to fire, and on a
+           pending consignment two of them - Ship now and Mark as shipped -
+           claimed to do the same thing while only one of them manifests the
+           freight, raises the invoice and emails the distributor.
+
+           Now: the status pill on its own line, then exactly one accent button
+           for the thing to do next, then the dropdown, then the standing tools
+           in a two-column grid so they line up instead of ragging. The status
+           transition only gets its own button when there is no bigger action
+           in play - see the actions render prop. */
+        const primary =
+          awaitingDespatch && canShip
+            ? { label: shipNowBusy ? 'Shipping…' : 'Ship now', busy: shipNowBusy, color: A.accent,
+                title: 'Manifests the consignment with MachShip (books the carrier pickup), raises the MYOB tax invoice, prints it and emails the distributor',
+                run: () => setPickupModal(true) }
+          : hasLiveQuote && !hasConsignment && canShip
+            ? { label: bookingBusy ? 'Booking…' : 'Book Shipment', busy: bookingBusy, color: A.accent,
+                title: 'Creates the consignment and pulls the label. Nothing reaches the carrier until Ship now.',
+                run: () => bookViaMachShip(false) }
+          : order.status === 'awaiting_approval' && canAdmin
+            ? { label: approveBusy ? 'Approving…' : 'Approve order', busy: approveBusy, color: A.warn,
+                title: 'Release this large order to the warehouse and write the MYOB sale order. Drop-ship POs wait for payment.',
+                run: approveOrder }
+          : null
+
         const mb = (extra: React.CSSProperties = {}): React.CSSProperties => ({
           borderRadius: RADIUS.pill, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
-          border: '1px solid transparent', whiteSpace: 'nowrap',
-          ...(isMobile ? { width: '100%', padding: '11px 14px', fontSize: 13, minHeight: 44 } : { padding: '6px 13px', fontSize: 12.5, minHeight: 32 }),
+          border: '1px solid transparent', whiteSpace: 'nowrap', width: '100%',
+          background: 'transparent', color: A.accent, textAlign: 'center',
+          ...(isMobile ? { padding: '11px 14px', fontSize: 13, minHeight: 44 } : { padding: '7px 10px', fontSize: 12.5, minHeight: 34 }),
           ...extra,
         })
         return (
           <>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              {awaitingDespatch ? (
-                <Pill color={A.warn}>Pending consignment — not manifested</Pill>
-              ) : order.delivered_at ? (
-                <Pill color={A.good}>Delivered {fullDate(order.delivered_at)}</Pill>
-              ) : isShipped ? (
-                <Pill color={A.accent}>Shipped {order.shipped_at ? fullDate(order.shipped_at) : ''}</Pill>
-              ) : (
-                <span style={{ fontSize: 12.5, color: T.text3 }}>Not shipped yet</span>
-              )}
-            </div>
-            {!isMobile && <span style={{ flex: 1 }}/>}
-            {hasLiveQuote && !hasConsignment && canShip && (
-              <button onClick={() => bookViaMachShip(false)} disabled={bookingBusy}
-                className="al-press al-focus"
-                style={mb({ background: alpha(A.accent, '15'), color: A.accent, cursor: bookingBusy ? 'wait' : 'pointer' })}>
-                {bookingBusy ? 'Booking…' : 'Book Shipment'}
-              </button>
+          <div style={{ marginBottom: 10 }}>
+            {awaitingDespatch ? (
+              <Pill color={A.warn}>Pending consignment — not manifested</Pill>
+            ) : order.delivered_at ? (
+              <Pill color={A.good}>Delivered {fullDate(order.delivered_at)}</Pill>
+            ) : isShipped ? (
+              <Pill color={A.accent}>Shipped {order.shipped_at ? fullDate(order.shipped_at) : ''}</Pill>
+            ) : (
+              <span style={{ fontSize: 12.5, color: T.text3 }}>Not shipped yet</span>
             )}
-            {order.status === 'awaiting_approval' && canAdmin && (
-              <button onClick={approveOrder} disabled={approveBusy}
-                title="Release this large order to the warehouse and write the MYOB sale order. Drop-ship POs wait for payment."
-                className="al-press al-focus"
-                style={mb({ background: A.warn, color: '#fff', cursor: approveBusy ? 'wait' : 'pointer' })}>
-                {approveBusy ? 'Approving…' : 'Approve order'}
-              </button>
-            )}
-            {awaitingDespatch && canShip && (
-              <button onClick={() => setPickupModal(true)} disabled={shipNowBusy}
-                title="Manifests the consignment with MachShip (books the carrier pickup), raises the MYOB tax invoice, prints it and emails the distributor"
-                className="al-press al-focus"
-                style={mb({ background: A.accent, color: '#fff', cursor: shipNowBusy ? 'wait' : 'pointer' })}>
-                {shipNowBusy ? 'Shipping…' : 'Ship now'}
-              </button>
-            )}
+          </div>
+
+          {primary && (
+            <button onClick={primary.run} disabled={primary.busy} title={primary.title}
+              className="al-press al-focus al-primary"
+              style={actionBtn(true, primary.busy, primary.color)}>
+              {primary.label}
+            </button>
+          )}
+
+          {actions && actions(!!primary)}
+
+          {/* The standing tools. Two even columns, so they read as a set
+              rather than a wrapped paragraph of buttons. */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
+            gap: 8, marginTop: 10, marginBottom: 10,
+          }}>
             {hasConsignment && canShip && (
               <button onClick={refreshFromMachShip} disabled={refreshBusy}
                 className="al-press al-focus al-ghost"
-                style={mb({ background: 'transparent', color: A.accent, cursor: refreshBusy ? 'wait' : 'pointer' })}>
-                {refreshBusy ? 'Refreshing…' : 'Refresh from MachShip'}
+                style={mb({ background: T.bg3, cursor: refreshBusy ? 'wait' : 'pointer' })}>
+                {refreshBusy ? 'Refreshing…' : 'Refresh'}
               </button>
             )}
             {canShip && (
-              <button onClick={onEdit} className="al-press al-focus al-ghost" style={mb({ background: 'transparent', color: A.accent })}>
+              <button onClick={onEdit} className="al-press al-focus al-ghost" style={mb({ background: T.bg3 })}>
                 {isShipped ? 'Edit shipping' : 'Manual book'}
               </button>
             )}
             {order.label_pdf_path && canShip && (
-              <button onClick={openLabel} className="al-press al-focus al-ghost" style={mb({ background: 'transparent', color: A.accent })}>
+              <button onClick={openLabel} className="al-press al-focus al-ghost" style={mb({ background: T.bg3 })}>
                 Print label
               </button>
             )}
             <button onClick={printPickList} disabled={pickBusy}
               title="Prints the box-by-box pick list on the upstairs printer (auto-prints on payment; this is a reprint)"
               className="al-press al-focus al-ghost"
-              style={mb({ background: 'transparent', color: pickDone ? A.good : A.accent, cursor: pickBusy ? 'wait' : 'pointer' })}>
+              style={mb({ background: T.bg3, color: pickDone ? A.good : A.accent, cursor: pickBusy ? 'wait' : 'pointer' })}>
               {pickDone ? 'Pick list queued' : pickBusy ? 'Queuing…' : 'Print pick list'}
             </button>
             {unbilledDropship.length > 0 && canAdmin && (
               <button onClick={receiveDropship} disabled={receiveBusy}
                 title="Supplier confirmed the drop-ship order — converts the PO to a bill in MYOB (receives the stock into the supplier's DS location), then converts this order to a tax invoice and receipts the payment"
                 className="al-press al-focus"
-                style={mb({ background: alpha(A.warn, '15'), color: A.warn, cursor: receiveBusy ? 'wait' : 'pointer' })}>
+                style={mb({ gridColumn: isMobile ? undefined : '1 / -1', background: alpha(A.warn, '15'), color: A.warn, cursor: receiveBusy ? 'wait' : 'pointer' })}>
                 {receiveBusy ? 'Billing PO…' : 'Supplier confirmed — bill PO + invoice'}
               </button>
             )}
-            {dropshipPos.length > 0 && unbilledDropship.length === 0 && (
-              <span title={dropshipPos.map(p => `${p.supplier_name}: bill ${p.myob_bill_number || p.myob_bill_uid}`).join(' · ')}>
-                <Pill color={A.good}>PO billed{lastBilledAt ? ` ${fullDate(lastBilledAt)}` : ''}</Pill>
-              </span>
-            )}
           </div>
+
+          {dropshipPos.length > 0 && unbilledDropship.length === 0 && (
+            <div style={{ marginBottom: 10 }}
+              title={dropshipPos.map(p => `${p.supplier_name}: bill ${p.myob_bill_number || p.myob_bill_uid}`).join(' · ')}>
+              <Pill color={A.good}>PO billed{lastBilledAt ? ` ${fullDate(lastBilledAt)}` : ''}</Pill>
+            </div>
+          )}
           {awaitingDespatch && pickupModal && (
             <PickupModal
               consignment={order.machship_consignment_number || order.machship_consignment_id || ''}
