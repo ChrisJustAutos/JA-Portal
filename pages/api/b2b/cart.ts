@@ -11,7 +11,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../lib/b2bAuthServer'
 import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../lib/b2b-stock'
 import { applyPricing, effectiveQtyCap } from '../../../lib/b2b-pricing'
-import { getFreightQuote, getLiveQuote, type LiveQuoteCartItem, type LiveQuoteRate } from '../../../lib/b2b-freight'
+import { getLiveQuote, type LiveQuoteCartItem, type LiveQuoteRate } from '../../../lib/b2b-freight'
 import { loadBundleChildren, bundleChildUnitPriceExGst } from '../../../lib/b2b-bundles'
 import { resolveOverLimit, lineShipsFromSupplier } from '../../../lib/b2b-over-limit'
 
@@ -351,20 +351,14 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
           rates: [], blocked: { reason: live.reason, missing: live.missing },
         }
       } else {
-        // Live unavailable — fall back to static postcode zones.
-        const stat = await getFreightQuote(shipPostcode)
-        if (stat) {
-          freight = {
-            postcode: shipPostcode, suburb: shipSuburb, mode: 'static',
-            zone: stat.zone,
-            rates: stat.rates.map(r => ({
-              id: r.id, label: r.label, price_ex_gst: Number(r.price_ex_gst),
-              transit_days: r.transit_days, source: 'static' as const,
-            })),
-          }
-        } else {
-          freight = { postcode: shipPostcode, suburb: shipSuburb, mode: 'no_zone', rates: [] }
-        }
+        // NO MANUAL FREIGHT PRICING (Chris 2026-09-02: "no manual freight
+        // pricing only auto"). This used to fall back to hand-maintained
+        // postcode zone rates when the live carrier quote was unavailable,
+        // which is the worst moment to be guessing: the numbers were entered
+        // by hand months earlier and nobody was told the cart had quietly
+        // stopped using real rates. Now an unavailable live quote reads as
+        // exactly that, and the office quotes it.
+        freight = { postcode: shipPostcode, suburb: shipSuburb, mode: 'no_zone', rates: [] }
       }
     }
   } catch (e: any) {

@@ -179,17 +179,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     baseMode = 'blocked'
     blocked = { reason: live.reason, missing: live.missing }
   } else {
-    const stat = await getFreightQuote(postcode)
-    if (stat) {
-      baseMode = 'static'
-      zone = stat.zone
-      baseRates = stat.rates.map(r => ({
-        id: r.id, label: r.label, price_ex_gst: Number(r.price_ex_gst),
-        transit_days: r.transit_days, source: 'static' as const,
-      }))
-    } else {
-      baseMode = 'no_zone'
-    }
+    // Live rates or nothing — the hand-maintained zone fallback is gone
+    // (Chris 2026-09-02: auto only). Drop-ship freight below still uses zones,
+    // because a supplier-shipped item can never be quoted live.
+    baseMode = 'no_zone'
   }
 
   // Fold drop-ship freight into every stock rate so the customer sees a single

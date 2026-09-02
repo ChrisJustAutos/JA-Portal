@@ -36,15 +36,13 @@ interface Props {
 const SETTINGS_SECTIONS: Array<{ id: string; title: string; icon: string; accent: string }> = [
   { id: 'models',            title: 'Models',                 icon: 'vehicle-sales', accent: A.good },
   { id: 'product-types',     title: 'Product Types',          icon: 'stock',         accent: A.accent },
-  { id: 'tiers',             title: 'Distributor Tiers',      icon: 'distributors',  accent: A.accent },
   { id: 'invoice-numbering', title: 'Invoice Numbering',      icon: 'invoices',      accent: A.warn },
   { id: 'credit-numbering',  title: 'Credit Note Numbering',  icon: 'ap',            accent: A.bad },
   { id: 'card-surcharge',    title: 'Card Surcharge',         icon: 'payables',      accent: A.accent },
   { id: 'carriers',          title: 'Freight Carriers',       icon: 'orders',        accent: A.good },
   { id: 'freight-pricing',   title: 'Freight Pricing & Sender', icon: 'payables',    accent: A.accent },
-  { id: 'freight-zones',     title: 'Freight Zones',          icon: 'stock',         accent: A.warn },
+  { id: 'freight-zones',     title: 'Drop-ship Zones',        icon: 'stock',         accent: A.warn },
   { id: 'freight-packaging', title: 'Freight Packaging',      icon: 'stock',         accent: A.good },
-  { id: 'slack',             title: 'Slack Notifications',    icon: 'calls',         accent: A.accent },
   { id: 'order-notify',      title: 'Order Notifications',    icon: 'messages',      accent: A.good },
   { id: 'email-templates',   title: 'Email Notifications',    icon: 'messages',      accent: A.accent },
   { id: 'status',            title: 'System Status',          icon: 'reports',       accent: T.text3 },
@@ -116,7 +114,6 @@ export default function B2BSettingsPage({ user }: Props) {
   const [feePct, setFeePct]   = useState(0)
   const [surchargeEnds, setSurchargeEnds] = useState('')
   const [feeFixed, setFeeFixed] = useState(0)
-  const [slackUrl, setSlackUrl] = useState('')
   const [adminEmails, setAdminEmails] = useState('')
   const [fromEmail, setFromEmail] = useState('')
   const [logoUrl, setLogoUrl] = useState('')
@@ -150,7 +147,6 @@ export default function B2BSettingsPage({ user }: Props) {
       setFeePct(Number(j.settings.card_fee_percent || 0.017))
       setSurchargeEnds(String(j.settings.payment_surcharge_ends_on || '').slice(0, 10))
       setFeeFixed(Number(j.settings.card_fee_fixed || 0.30))
-      setSlackUrl(j.settings.slack_new_order_webhook_url || '')
       setAdminEmails(j.settings.admin_order_notify_emails || '')
       setFromEmail(j.settings.outbound_from_email || '')
       setLogoUrl(j.settings.email_logo_url || '')
@@ -320,16 +316,6 @@ export default function B2BSettingsPage({ user }: Props) {
                 />
               </Section>
 
-              {/* ─── Tiers ─── */}
-              <Section id="tiers" activeId={openSectionId} onClose={closeSection} title="Distributor Tiers"
-                description="Pricing / access tiers (e.g. Bronze, Silver, Gold). Assign distributors to a tier from the distributor detail page. Tier-specific controls (visibility, discounts) are layered on in follow-up updates.">
-                <TaxonomyEditor
-                  endpoint="/api/b2b/admin/tiers"
-                  collectionKey="tiers"
-                  itemKey="tier"
-                  itemLabel="tier"
-                />
-              </Section>
 
               {/* ─── Invoice numbering ─── */}
               <Section id="invoice-numbering" activeId={openSectionId} onClose={closeSection} title="MYOB Invoice Numbering (fallback only)"
@@ -564,8 +550,8 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Freight zones (manual fallback) ─── */}
-              <Section id="freight-zones" activeId={openSectionId} onClose={closeSection} title="Freight Zones &amp; Rates (manual fallback)"
-                description="Postcode-driven shipping rates the cart shows when no live carrier rates are available. Add a zone, paste the postcode ranges it covers, then add 1+ rates (Standard, Express, etc.).">
+              <Section id="freight-zones" activeId={openSectionId} onClose={closeSection} title="Drop-ship Freight Zones"
+                description="Postcode zones used to price freight on DROP-SHIP items, which ship direct from the supplier and so can never be quoted live. These zones no longer price the warehouse cart — that is live carrier rates only (Chris 2026-09-02: no manual freight pricing, auto only). Rates added here are ignored by the cart.">
                 <FreightZonesManager/>
               </Section>
 
@@ -575,28 +561,6 @@ export default function B2BSettingsPage({ user }: Props) {
                 <FreightPackagingManager/>
               </Section>
 
-              {/* ─── Slack ─── */}
-              <Section id="slack" activeId={openSectionId} onClose={closeSection} title="Slack Notifications"
-                description="Optional. If set, a message posts to the channel each time an order is paid.">
-
-                <Field label="Incoming webhook URL" hint="Must start with https://hooks.slack.com/">
-                  <input
-                    type="text"
-                    value={slackUrl}
-                    onChange={e => setSlackUrl(e.target.value)}
-                    placeholder="https://hooks.slack.com/services/..."
-                    style={inputStyle()}
-                  />
-                </Field>
-
-                <div style={{marginTop:14}}>
-                  <Btn
-                    onClick={() => save({ slack_new_order_webhook_url: slackUrl })}
-                    disabled={saving}>
-                    {saving ? 'Saving…' : 'Save Slack URL'}
-                  </Btn>
-                </div>
-              </Section>
 
               {/* ─── Order notifications ─── */}
               <Section id="order-notify" activeId={openSectionId} onClose={closeSection} title="Order Notifications"
