@@ -21,6 +21,12 @@ const PC: Record<string, [number, number, string]> = (postcodes as any).pc
 // so a capture rate for JA would be comparing two different things. Its cells
 // render as "—" rather than 0%, and it is excluded from the distributor totals.
 // Override the location with DISTRIBUTOR_MAP_HOME_POSTCODE if the site moves.
+/** Postcode → [lat, lng, suburb]. The only source of distributor coordinates. */
+export function geoForPostcode(postcode: string | null | undefined): [number, number, string] | null {
+  const pc = String(postcode || '').replace(/\D/g, '')
+  return pc ? (PC[pc] || null) : null
+}
+
 const HOME_KEY = 'ja:home'
 const HOME_NAME = 'Just Autos (workshop)'
 const HOME_POSTCODE = (process.env.DISTRIBUTOR_MAP_HOME_POSTCODE || '4560').replace(/\D/g, '')
@@ -71,7 +77,15 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number): nu
 //      Motorsport", "Morpowa" ↔ "Morpowa Auto & Dyno"
 //   3. unique first-token (≥4 chars) — "Weirys - Darwin" ↔ "Weirys Diesel &
 //      Mechanical Services", "Harrop Melbourne" ↔ "Harrop Engineering"
-function matchLabel(label: string, names: string[]): number | null {
+/**
+ * Exported so the Workshop Map can reuse it. Distributor names reach us from
+ * three different systems that spell them three different ways - MYOB's
+ * customer base, Monday's booking labels, and b2b_distributors' display name -
+ * and this is the matcher that already reconciles the last two. A second,
+ * subtly different matcher for the same job is how the same distributor ends up
+ * in two places on one dashboard.
+ */
+export function matchLabel(label: string, names: string[]): number | null {
   const l = norm(label)
   if (!l) return null
   const lSquash = l.replace(/ /g, '')

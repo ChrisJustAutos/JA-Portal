@@ -42,6 +42,13 @@ interface DistributorJobs {
   unknown: number
   rejected: number
   sourceComputedAt: string | null
+  byDistributor?: DistributorTunePin[]
+  unlocated?: { tunes: number; names: string[] }
+}
+interface DistributorTunePin {
+  name: string; lat: number; lng: number; suburb: string | null
+  tunes: number; vehicles: number
+  bySeries: Record<string, number[]>
 }
 interface ConvBlock { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }
 interface CompareYear {
@@ -120,6 +127,14 @@ export default function WorkshopMapDashboard() {
   // month, vehicle and state pills work. OUTSIDE_KEY selects the quotes that
   // fall in nobody's area - the ones worth arguing about.
   const [areaSel, setAreaSel] = useState<string | null>(null)
+
+  // ── Distributor tunes on the Jobs Map ─────────────────────────────────
+  // Chris 2026-09-02: distributor tunes are "the closest indicator of jobs for
+  // distributors", pinned under their name and location with a breakdown by
+  // model. NOT called distOn - that is the Conversion view's fold, and a second
+  // dist* boolean meaning something else on another view is a trap.
+  const [tunesOn, setTunesOn] = useState(false)
+  const tuneLayerRef = useRef<L.LayerGroup | null>(null)
   const areaLayerRef = useRef<L.LayerGroup | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
@@ -386,6 +401,58 @@ export default function WorkshopMapDashboard() {
     }
   }, [areasOn, areas, areaStats, view, areaSel])
 
+  // Distributor tunes, counted under the month and vehicle filters in force.
+  // The state pills are deliberately NOT applied: a pin sits at the
+  // distributor's own address, so filtering it by the customer's state would
+  // be answering a different question from the one the pill asks.
+  const tunePins = useMemo(() => {
+    const pins = data?.distributor_jobs?.byDistributor
+    if (!tunesOn || view !== 'jobs' || !pins) return null
+    const out = pins.map(p => {
+      const bySeries: Record<string, number> = {}
+      let tunes = 0
+      for (const [series, months] of Object.entries(p.bySeries)) {
+        if (cat !== 'all' && series !== cat) continue
+        const n = month < 0 ? months.reduce((a, b) => a + b, 0) : (months[month] || 0)
+        if (n > 0) { bySeries[series] = n; tunes += n }
+      }
+      return { ...p, tunes, bySeries }
+    }).filter(p => p.tunes > 0)
+    return { pins: out, total: out.reduce((a, p) => a + p.tunes, 0) }
+  }, [data?.distributor_jobs, tunesOn, view, cat, month])
+
+  // Own layer, like the areas overlay: the jobs layer is cleared and rebuilt on
+  // every filter change and would wipe these.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (!tuneLayerRef.current) tuneLayerRef.current = L.layerGroup().addTo(map)
+    const layer = tuneLayerRef.current
+    layer.clearLayers()
+    if (!tunePins) return
+    const max = Math.max(1, ...tunePins.pins.map(p => p.tunes))
+    for (const p of tunePins.pins) {
+      // Square markers, deliberately unlike the round customer dots: this pin
+      // is a distributor's premises with work counted against it, not demand
+      // at that address, and the two must never read as the same thing.
+      const size = Math.max(12, Math.min(30, 12 + Math.sqrt(p.tunes / max) * 18))
+      const rows = Object.entries(p.bySeries).sort((a, b) => b[1] - a[1])
+        .map(([g, n]) => `<div><span>${esc(NAME[g] || g)}</span><b>${n}</b></div>`).join('')
+      L.marker([p.lat, p.lng], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div class="tunepin" style="width:${size}px;height:${size}px;line-height:${size}px">${p.tunes}</div>`,
+          iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+        }),
+      }).bindPopup(
+        `<div class="pop-h"><span>${esc(p.name)}${p.suburb ? `<span class="pc">${esc(p.suburb)}</span>` : ''}</span></div>`
+        + `<div class="pop-s"><div><b>${p.tunes}</b><span>Tune${p.tunes === 1 ? '' : 's'}</span></div>`
+        + `<div><b>${p.vehicles}</b><span>Vehicles</span></div></div>`
+        + `<div class="pop-list">${rows}</div>`,
+      ).addTo(layer)
+    }
+  }, [tunePins, NAME])
+
   // Fix tile layout when switching back from a non-map view.
   useEffect(() => {
     if (view !== 'conv' && view !== 'state' && mapRef.current) setTimeout(() => mapRef.current?.invalidateSize(), 60)
@@ -578,6 +645,38 @@ export default function WorkshopMapDashboard() {
               {mo.label.split(' ')[0]}<span className="mt">{fmtK(monthTotals[i])}</span>
             </button>
           ))}
+        </div>
+      )}
+
+      {view === 'jobs' && (data?.distributor_jobs?.byDistributor?.length || 0) > 0 && (
+        <div className="strip">
+          <span className="striplabel">Distributors</span>
+          <button className={'mbtn' + (tunesOn ? ' active' : '')} onClick={() => setTunesOn(v => !v)}
+            title="Pin each distributor at their own location with the tunes they carried out, broken down by model">
+            {tunesOn ? 'Hide tunes' : 'Show tunes'}
+          </button>
+          {tunesOn && tunePins && (
+            <>
+              <span style={{ fontSize: 11, color: 'var(--wm-muted2)', padding: '0 8px', whiteSpace: 'nowrap' }}>
+                <b style={{ color: '#6ea8fe' }}>{tunePins.total}</b> tune{tunePins.total === 1 ? '' : 's'} across {tunePins.pins.length} distributor{tunePins.pins.length === 1 ? '' : 's'}
+              </span>
+              {tunePins.pins.slice(0, 14).map(p => (
+                <button key={p.name} className="mbtn"
+                  title={`${p.name}${p.suburb ? ` — ${p.suburb}` : ''} · ${p.tunes} tune${p.tunes === 1 ? '' : 's'}`}
+                  onClick={() => mapRef.current?.setView([p.lat, p.lng], 9)}>
+                  {p.name.length > 20 ? p.name.slice(0, 19) + '…' : p.name}<span className="mt">{p.tunes}</span>
+                </button>
+              ))}
+              {/* Never silently short: a quarter of FY2026's tunes are at names
+                  with no distributor record, so no location and no pin. */}
+              {(data?.distributor_jobs?.unlocated?.tunes || 0) > 0 && (
+                <span style={{ fontSize: 11, color: 'var(--wm-amber)', paddingLeft: 8, whiteSpace: 'nowrap' }}
+                  title={`No location on file for: ${(data?.distributor_jobs?.unlocated?.names || []).join(', ')}`}>
+                  +{data!.distributor_jobs!.unlocated!.tunes} not placed
+                </span>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -1570,6 +1669,10 @@ const CSS = `
 .wm-dash .chip.dim{opacity:.38}.wm-dash .chip.active{box-shadow:0 0 0 1px currentColor inset}
 .wm-dash .wrap{flex:1 1 auto;position:relative;min-height:0}
 .wm-dash .mapdiv{position:absolute;inset:0;background:#080b10}
+/* Distributor tune pins. Square and outlined so they never read as one of the
+   round customer dots — this is a distributor's premises with work counted
+   against it, not demand at that address. */
+.wm-dash .tunepin{box-sizing:border-box;border-radius:4px;background:rgba(110,168,254,.85);border:1.5px solid #cfe0ff;color:#06131f;font:700 10px/1 'Space Mono',monospace;text-align:center;display:flex;align-items:center;justify-content:center}
 .wm-dash .leaflet-div-icon{background:transparent!important;border:0!important}
 .wm-dash .statelbl{font-family:'Barlow Condensed';font-weight:800;font-size:15px;color:rgba(150,164,182,.72);letter-spacing:3px;text-transform:uppercase;text-shadow:0 0 4px #0B0E13,0 1px 2px #000;white-space:nowrap;pointer-events:none}
 .wm-dash .citylbl{display:flex;align-items:center;gap:4px;white-space:nowrap;pointer-events:none}
