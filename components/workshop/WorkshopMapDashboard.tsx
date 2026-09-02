@@ -916,23 +916,6 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
   // carries two definitions of a job.
   const distYear = (c: string) => (dist?.jvehicles?.[c] ?? 0)
 
-  // The month-by-month grid. Per month a car is already counted once, so the
-  // cells are simply added; it is only the FY column that has to come from the
-  // distinct counts instead of a row sum.
-  const C = useMemo<ConvCounts>(() => {
-    if (!on || !dist) return base
-    const jcount: Record<string, number[]> = {}
-    if (jaOn) for (const k of Object.keys(base.jcount)) jcount[k] = [...(base.jcount[k] || [])]
-    for (const [k, arr] of Object.entries(dist.jcount)) {
-      const row = (jcount[k] ||= Array(12).fill(0))
-      arr.forEach((v, i) => { row[i] = (row[i] || 0) + v })
-    }
-    // Distributors only: no workshop quotes either, or every cell reads 0%.
-    const qcount = jaOn ? base.qcount : {}
-    const qval = jaOn ? base.qval : {}
-    return { qcount, qval, jcount }
-  }, [base, dist, on, jaOn])
-
   /**
    * CONVERSION FOR A DISTRIBUTOR (Chris 2026-09-02): their tunes against the
    * Just Autos quotes falling within a chosen radius of them.
@@ -950,6 +933,10 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
     const pins = dist?.byDistributor || []
     if (!pins.length || st !== 'all') return null
     const per = new Map<string, { quotes: number; value: number }>()
+    // The same in-radius quotes, broken down the way the vehicle table and the
+    // month grid need them, so every figure on the Distributors tab comes from
+    // one pass over one set of points and they cannot disagree.
+    const byGroup: Record<string, { quotes: number; value: number; months: number[] }> = {}
     let inQuotes = 0, inValue = 0
     for (const q of P.quotes.points) {
       if (q.la == null || q.ln == null) continue
@@ -961,6 +948,8 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
       if (!best) continue
       const e = per.get(best.name) || { quotes: 0, value: 0 }
       e.quotes++; e.value += q.a; per.set(best.name, e)
+      const g = (byGroup[q.g] ||= { quotes: 0, value: 0, months: Array(12).fill(0) })
+      g.quotes++; g.value += q.a; g.months[q.m] = (g.months[q.m] || 0) + 1
       inQuotes++; inValue += q.a
     }
     const rows = pins.map(d => {
@@ -968,15 +957,40 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
       return { ...d, quotes: e.quotes, value: e.value, pct: e.quotes ? (100 * d.jobs) / e.quotes : null }
     }).sort((a, b) => b.jobs - a.jobs)
     const placedJobs = rows.reduce((a, r) => a + r.jobs, 0)
-    return { rows, inQuotes, inValue, placedJobs, pct: inQuotes ? (100 * placedJobs) / inQuotes : null }
+    return { rows, byGroup, inQuotes, inValue, placedJobs, pct: inQuotes ? (100 * placedJobs) / inQuotes : null }
   }, [dist, P.quotes.points, radiusKm, st])
+
+  // The month-by-month grid. Per month a car is already counted once, so the
+  // cells are simply added; it is only the FY column that has to come from the
+  // distinct counts instead of a row sum.
+  const C = useMemo<ConvCounts>(() => {
+    if (!on || !dist) return base
+    const jcount: Record<string, number[]> = {}
+    if (jaOn) for (const k of Object.keys(base.jcount)) jcount[k] = [...(base.jcount[k] || [])]
+    for (const [k, arr] of Object.entries(dist.jcount)) {
+      const row = (jcount[k] ||= Array(12).fill(0))
+      arr.forEach((v, i) => { row[i] = (row[i] || 0) + v })
+    }
+    // Distributors only: the quotes are the in-radius ones, month by month, so
+    // the grid measures the same thing the tables above it do.
+    if (jaOn) return { qcount: base.qcount, qval: base.qval, jcount }
+    const qcount: Record<string, number[]> = {}
+    const qval: Record<string, number[]> = {}
+    for (const [g, v] of Object.entries(distConv?.byGroup || {})) qcount[g] = v.months
+    return { qcount, qval, jcount }
+  }, [base, dist, on, jaOn, distConv])
+
 
   const sum = (a: number[]) => a.reduce((x, y) => x + y, 0)
   const distTotalInCats = CK.reduce((s2, c) => s2 + distYear(c), 0)
 
   const rows = CK.map(c => {
-    const q = jaOn ? sum(base.qcount[c] || []) : 0
-    const v = jaOn ? sum(base.qval[c] || []) : 0
+    // Distributors tab: the denominator is the Just Autos quotes inside the
+    // chosen radius of a distributor, per vehicle type — the same measure as
+    // the by-distributor table below, cut by model instead of by name.
+    const radiusQ = distConv?.byGroup?.[c]
+    const q = jaOn ? sum(base.qcount[c] || []) : (radiusQ?.quotes ?? 0)
+    const v = jaOn ? sum(base.qval[c] || []) : (radiusQ?.value ?? 0)
     const jJa = jaOn ? sum(base.jcount[c] || []) : 0
     const d = distYear(c)
     const j = jJa + (on ? d : 0)
@@ -1048,11 +1062,18 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
           <div className={'segbtns' + (distUsable ? '' : ' off')} title={distUsable
             ? 'Whose jobs to count. Distributors have no quotes, so their own conversion cannot be worked out — see them alone for the job counts by model.'
             : 'Distributor jobs are national — clear the state filter to include them'}>
-            {([['ja', 'Just Autos'], ['both', 'Both'], ['dist', 'Distributors']] as [ConvSrc, string][]).map(([k, label]) => (
+            {([['ja', 'Just Autos'], ['dist', 'Distributors'], ['both', 'Both']] as [ConvSrc, string][]).map(([k, label]) => (
               <button key={k} className={src === k ? 'on' : ''} disabled={!distUsable && k !== 'ja'}
-                onClick={() => setSrc(k)}>{label}{k !== 'ja' ? ` +${distTotalInCats.toLocaleString('en-AU')}` : ''}</button>
+                onClick={() => setSrc(k)}>{label}</button>
             ))}
           </div>
+        )}
+        {on && (
+          <span className="segbtns" title="Quotes counted for a distributor are the Just Autos quotes falling within this distance of them">
+            {[50, 100, 150, 200].map(r => (
+              <button key={r} className={radiusKm === r ? 'on' : ''} onClick={() => setRadiusKm(r)}>{r} km</button>
+            ))}
+          </span>
         )}
         <div className="segbtns">
           <button className={chart ? '' : 'on'} onClick={() => setChart(false)}>Table</button>
@@ -1065,7 +1086,7 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
           Distributor jobs come from the Distributor report&apos;s invoices — the PO number is the car&apos;s VIN — and one car is
           one job for the year, however many times it came back.{' '}
           {src === 'dist'
-            ? <>Distributors never raise a workshop quote, so there is nothing to convert: the quote and % columns are blank on purpose. This is the job count by model.</>
+            ? <>Distributors raise no quotes of their own, so the quote columns here are the <b>Just Autos quotes within {radiusKm} km of a distributor</b> — the closest stand-in for demand they had a chance at. Change the radius above and every figure on this tab follows it.</>
             : <>They never had a workshop quote, so a combined conversion % reads higher than the workshop&apos;s own performance — the &ldquo;Just Autos&rdquo; tab is the one to judge the workshop on.</>}
           {dist && dist.unknown > 0 && <> {dist.unknown} VIN{dist.unknown > 1 ? 's' : ''} couldn&apos;t be matched to a model and {dist.unknown > 1 ? 'are' : 'is'} left out of the vehicle rows.</>}
         </p>
@@ -1120,14 +1141,7 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
 
       {on && distConv && (
         <>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            By distributor — full year
-            <span className="segbtns" style={{ marginLeft: 4 }}>
-              {[50, 100, 150, 200].map(r => (
-                <button key={r} className={radiusKm === r ? 'on' : ''} onClick={() => setRadiusKm(r)}>{r} km</button>
-              ))}
-            </span>
-          </h2>
+          <h2>By distributor — full year</h2>
           <p className="distNote">
             A distributor raises no quotes of their own, so their conversion is measured against the Just Autos quotes that
             fall within {radiusKm} km of them — the closest stand-in for the demand they had a chance at. Where two areas
