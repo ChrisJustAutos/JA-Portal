@@ -15,14 +15,8 @@ import 'leaflet/dist/leaflet.css'
 import { addDarkBasemap } from '../../lib/map-basemap'
 import { useToast } from '../ui/Feedback'
 import { pcState } from '../../lib/workshop-map/postcode-state'
-// The Distributor Map was its own Reports tab until 2026-09-02; it is now a
-// view in this strip. Hosted whole rather than merged - it brings its own
-// controls, month strip and PDF, and folding 370 lines of it into this file
-// would buy nothing. A static import is fine: this whole tree is loaded
-// ssr:false by the page.
-import DistributorMapDashboard from '../reports/DistributorMapDashboard'
 
-type ViewKey = 'jobs' | 'quotes' | 'dist' | 'conv' | 'state' | 'trend'
+type ViewKey = 'jobs' | 'quotes' | 'conv' | 'state' | 'trend'
 
 interface AreaDist { key: string; name: string; lat: number | null; lng: number | null; suburb: string | null; quotesOnly?: boolean }
 interface AreasResp { radiusKm: number; distributors: AreaDist[] }
@@ -85,6 +79,7 @@ const haversineKm = (aLa: number, aLn: number, bLa: number, bLn: number) => {
   const h = Math.sin(dLa / 2) ** 2 + Math.cos(aLa * r) * Math.cos(bLa * r) * Math.sin(dLn / 2) ** 2
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)))
 }
+const OUTSIDE_KEY = '__outside__'
 const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 const CK = ['70', '200', '300', 'HILUX', 'PRADO']
@@ -103,7 +98,7 @@ export default function WorkshopMapDashboard() {
   const [view, setView] = useState<ViewKey>(() => {
     if (typeof window === 'undefined') return 'jobs'
     const v = new URLSearchParams(window.location.search).get('view')
-    return (['jobs', 'quotes', 'dist', 'conv', 'state', 'trend'] as const).includes(v as any) ? (v as ViewKey) : 'jobs'
+    return (['jobs', 'quotes', 'conv', 'state', 'trend'] as const).includes(v as any) ? (v as ViewKey) : 'jobs'
   })
   const [month, setMonth] = useState(-1)          // -1 = all FY
   const [cat, setCat] = useState('all')
@@ -121,6 +116,10 @@ export default function WorkshopMapDashboard() {
   const [areas, setAreas] = useState<AreasResp | null>(null)
   const [areasRadius, setAreasRadius] = useState(100)
   const [areasErr, setAreasErr] = useState('')
+  // Selecting a distributor filters the map to their quotes, the same way the
+  // month, vehicle and state pills work. OUTSIDE_KEY selects the quotes that
+  // fall in nobody's area - the ones worth arguing about.
+  const [areaSel, setAreaSel] = useState<string | null>(null)
   const areaLayerRef = useRef<L.LayerGroup | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
@@ -260,6 +259,44 @@ export default function WorkshopMapDashboard() {
   const points = view === 'conv' || !P ? [] : (view === 'quotes' ? P.quotes.points : P.jobs.points)
   const selPoints = useMemo(() => points.filter(p => (month < 0 || p.m === month) && (cat === 'all' || p.g === cat) && (st === 'all' || pcState(p.pc) === st)), [points, month, cat, st])
 
+  // Which of the quotes CURRENTLY ON SCREEN fall inside someone's area, and
+  // whose. Nearest distributor wins when radii overlap, so a quote is never
+  // counted for two of them.
+  const areaStats = useMemo(() => {
+    if (!areasOn || !areas || view !== 'quotes') return null
+    const ds = areas.distributors.filter(d => d.lat != null && d.lng != null)
+    const per = new Map<string, { n: number; t: number }>()
+    const keyOf = new Map<Pt, string>()
+    let inN = 0, inT = 0, outN = 0, outT = 0
+    for (const p of selPoints) {
+      if (p.la == null || p.ln == null) continue
+      let best: AreaDist | null = null, bestKm = Infinity
+      for (const d of ds) {
+        const km = haversineKm(p.la, p.ln, d.lat as number, d.lng as number)
+        if (km <= areas.radiusKm && km < bestKm) { bestKm = km; best = d }
+      }
+      if (best) {
+        inN++; inT += p.a
+        keyOf.set(p, best.key)
+        const e = per.get(best.key) || { n: 0, t: 0 }
+        e.n++; e.t += p.a; per.set(best.key, e)
+      } else { outN++; outT += p.a; keyOf.set(p, OUTSIDE_KEY) }
+    }
+    return { per, keyOf, inN, inT, outN, outT }
+    // Deliberately NOT dependent on areaSel: these totals describe the whole
+    // picture, so selecting one distributor must not collapse everyone else's
+    // pill to nought.
+  }, [areasOn, areas, view, selPoints])
+
+  // What the map actually draws — the selection applied on top.
+  const shownPoints = useMemo(() => {
+    if (!areaSel || !areaStats) return selPoints
+    return selPoints.filter(p => areaStats.keyOf.get(p) === areaSel)
+  }, [selPoints, areaSel, areaStats])
+
+  // A selection that no longer means anything must not keep filtering the map.
+  useEffect(() => { if (!areasOn || view !== 'quotes') setAreaSel(null) }, [areasOn, view])
+
   useEffect(() => {
     const map = mapRef.current, layer = layerRef.current
     if (!map || !layer || !P || view === 'conv' || view === 'state') return
@@ -269,7 +306,7 @@ export default function WorkshopMapDashboard() {
     const amColor = view === 'jobs' ? 'var(--wm-mint)' : 'var(--wm-amber)'
     // Aggregate per location.
     const M: Record<string, { pc: string; l: string; la: number; ln: number; n: number; t: number; won: number; byg: Record<string, { n: number; t: number }>; inv: Pt[] }> = {}
-    selPoints.forEach(p => {
+    shownPoints.forEach(p => {
       if (p.la == null || p.ln == null) return    // no coords = no pin; still in the totals
       const k = p.pc + '@' + p.la + ',' + p.ln
       const o = (M[k] ||= { pc: p.pc, l: p.l, la: p.la, ln: p.ln, n: 0, t: 0, won: 0, byg: {}, inv: [] })
@@ -303,7 +340,7 @@ export default function WorkshopMapDashboard() {
       mk.on('mouseout', function (this: L.CircleMarker) { this.setStyle({ fillOpacity: .48 }) })
       mk.addTo(layer)
     })
-  }, [selPoints, view, cat, P, COL, NAME, exportLoc])
+  }, [shownPoints, view, cat, P, COL, NAME, exportLoc])
 
   // Fetched only when the overlay is actually switched on, and re-fetched when
   // the radius changes. The distributor list is small; the reason to go to the
@@ -319,29 +356,6 @@ export default function WorkshopMapDashboard() {
     return () => { dead = true }
   }, [areasOn, areasRadius, P?.fy])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Which of the quotes CURRENTLY ON SCREEN fall inside someone's area, and
-  // whose. Nearest distributor wins when radii overlap, so a quote is never
-  // counted for two of them.
-  const areaStats = useMemo(() => {
-    if (!areasOn || !areas || view !== 'quotes') return null
-    const ds = areas.distributors.filter(d => d.lat != null && d.lng != null)
-    const per = new Map<string, { n: number; t: number }>()
-    let inN = 0, inT = 0, outN = 0, outT = 0
-    for (const p of selPoints) {
-      if (p.la == null || p.ln == null) continue
-      let best: AreaDist | null = null, bestKm = Infinity
-      for (const d of ds) {
-        const km = haversineKm(p.la, p.ln, d.lat as number, d.lng as number)
-        if (km <= areas.radiusKm && km < bestKm) { bestKm = km; best = d }
-      }
-      if (best) {
-        inN++; inT += p.a
-        const e = per.get(best.key) || { n: 0, t: 0 }
-        e.n++; e.t += p.a; per.set(best.key, e)
-      } else { outN++; outT += p.a }
-    }
-    return { per, inN, inT, outN, outT }
-  }, [areasOn, areas, view, selPoints])
 
   // Draw pins and radius rings on their OWN layer — the quotes layer is
   // cleared and rebuilt on every filter change, so sharing it would wipe these.
@@ -356,11 +370,13 @@ export default function WorkshopMapDashboard() {
       if (d.lat == null || d.lng == null) continue
       const st = areaStats.per.get(d.key) || { n: 0, t: 0 }
       const col = d.quotesOnly ? '#f2f5f7' : '#6ea8fe'
+      // Muted when someone else is selected, so the chosen area reads at a glance.
+      const dim = areaSel != null && areaSel !== d.key
       L.circle([d.lat, d.lng], {
-        radius: areas.radiusKm * 1000, color: col, weight: 1, opacity: .5,
-        fillColor: col, fillOpacity: .05, interactive: false,
+        radius: areas.radiusKm * 1000, color: col, weight: dim ? 1 : 2, opacity: dim ? .18 : .65,
+        fillColor: col, fillOpacity: dim ? .02 : .07, interactive: false,
       }).addTo(layer)
-      L.circleMarker([d.lat, d.lng], { radius: 6, weight: 2, color: col, fillColor: col, fillOpacity: .9 })
+      L.circleMarker([d.lat, d.lng], { radius: dim ? 4 : 6, weight: 2, color: col, fillColor: col, fillOpacity: dim ? .35 : .9 })
         .bindPopup(`<div class="pop-h"><span>${esc(d.name)}${d.suburb ? `<span class="pc">${esc(d.suburb)}</span>` : ''}</span></div>`
           + `<div class="pop-s"><div><b>${st.n}</b><span>Quote${st.n === 1 ? '' : 's'} in range</span></div>`
           + `<div><b>${fmtK(st.t)}</b><span>Quoted</span></div>`
@@ -368,7 +384,7 @@ export default function WorkshopMapDashboard() {
           + (d.quotesOnly ? `<div class="pop-veh">Just Autos' own workshop</div>` : ''))
         .addTo(layer)
     }
-  }, [areasOn, areas, areaStats, view])
+  }, [areasOn, areas, areaStats, view, areaSel])
 
   // Fix tile layout when switching back from a non-map view.
   useEffect(() => {
@@ -467,11 +483,7 @@ export default function WorkshopMapDashboard() {
   }
 
   const isMapView = view === 'jobs' || view === 'quotes'
-  // The Distributor Map is self-contained: its own year, month, radius and PDF.
-  // Showing this header's versions of those next to it would be two sets of
-  // controls where only one set works.
-  const isDist = view === 'dist'
-  const canCompare = !isMapView && !isDist
+  const canCompare = !isMapView
   const hasStrips = isMapView || view === 'state'
 
   return (
@@ -485,12 +497,12 @@ export default function WorkshopMapDashboard() {
         <div className="titlerow">
           <h1>Just Autos <span className="b">·</span> FY{P.fy}{canCompare && compare.length > 0 ? ` vs ${compare.slice().sort((a, b) => b - a).map(f => `FY${f}`).join(', ')}` : ''} Workshop</h1>
           <span className="sub">
-            {isDist ? 'Distributor areas' : view === 'conv' ? 'Quotes vs booked jobs' : view === 'state' ? 'State breakdown' : view === 'trend' ? 'Vehicle trend' : (view === 'jobs' ? 'Booked jobs' : 'Quotes')}
+            {view === 'conv' ? 'Quotes vs booked jobs' : view === 'state' ? 'State breakdown' : view === 'trend' ? 'Vehicle trend' : (view === 'jobs' ? 'Booked jobs' : 'Quotes')}
             {hasStrips && <> · {month < 0 ? `${P.months[0]?.label} – ${P.months[11]?.label}` : P.months[month]?.label}{cat !== 'all' ? ` · ${NAME[cat]}` : ''}</>}
             {view !== 'state' && st !== 'all' && <> · {st === '?' ? 'Unknown state' : st}</>}
           </span>
           <span style={{ flex: 1 }} />
-          {!isDist && (data?.fys.length || 0) > 1 && (
+          {(data?.fys.length || 0) > 1 && (
             <span className="fysel">
               {data!.fys.map(fy => (
                 <button key={fy} className={'mbtn' + (fy === P.fy ? ' active' : '')}
@@ -518,10 +530,10 @@ export default function WorkshopMapDashboard() {
               )}
             </span>
           )}
-          {!isDist && <button className="pdfbtn" onClick={downloadPdf} disabled={pdfBusy || !data?.fy}
+          <button className="pdfbtn" onClick={downloadPdf} disabled={pdfBusy || !data?.fy}
             title="Download the whole financial year, month by month, as a PDF (keeps the vehicle and state filters)">
             {pdfBusy ? 'Preparing…' : 'Export PDF'}
-          </button>}
+          </button>
           <span className="sync">
             {runActive ? <span style={{ color: 'var(--wm-mint)' }}>syncing…</span> : <>synced {syncedLbl || '—'}</>}
             {!runActive && <button className="syncbtn" title="Pull fresh data from MechanicDesk (takes ~2–4 min)" onClick={triggerRefresh} disabled={refreshing}>⟳</button>}
@@ -530,7 +542,6 @@ export default function WorkshopMapDashboard() {
         <div className="tabs">
           <button className={'tab' + (view === 'jobs' ? ' active' : '')} onClick={() => setView('jobs')}>Jobs Map</button>
           <button className={'tab' + (view === 'quotes' ? ' active' : '')} onClick={() => setView('quotes')}>Quotes Map</button>
-          <button className={'tab' + (view === 'dist' ? ' active' : '')} onClick={() => setView('dist')}>Distributor Map</button>
           <button className={'tab' + (view === 'conv' ? ' active' : '')} onClick={() => setView('conv')}>Conversion</button>
           <button className={'tab' + (view === 'state' ? ' active' : '')} onClick={() => setView('state')}>By State</button>
           <button className={'tab' + (view === 'trend' ? ' active' : '')} onClick={() => setView('trend')}>Vehicle Trend</button>
@@ -605,21 +616,27 @@ export default function WorkshopMapDashboard() {
             .map(d => ({ d, s: areaStats.per.get(d.key) || { n: 0, t: 0 } }))
             .sort((a, b) => b.s.t - a.s.t || a.d.name.localeCompare(b.d.name))
             .map(({ d, s }) => (
-              <button key={d.key} className="mbtn" style={{ opacity: s.n ? 1 : .45 }}
+              <button key={d.key} className={'mbtn' + (areaSel === d.key ? ' active' : '')} style={{ opacity: s.n || areaSel === d.key ? 1 : .45 }}
                 title={`${d.name}${d.suburb ? ` — ${d.suburb}` : ''} · ${s.n} quote${s.n === 1 ? '' : 's'} within ${areas.radiusKm}km${d.quotesOnly ? ' · Just Autos’ own workshop' : ''}`}
                 onClick={() => {
+                  const next = areaSel === d.key ? null : d.key
+                  setAreaSel(next)
                   const map = mapRef.current
                   if (!map || d.lat == null || d.lng == null) return
-                  map.fitBounds(L.latLng(d.lat, d.lng).toBounds(areas.radiusKm * 2200))
+                  if (next) map.fitBounds(L.latLng(d.lat, d.lng).toBounds(areas.radiusKm * 2200))
+                  else if (boundsRef.current) map.fitBounds(boundsRef.current)
                 }}>
                 {d.name.length > 22 ? d.name.slice(0, 21) + '…' : d.name}
                 <span className="mt">{s.n} · {fmtK(s.t)}</span>
               </button>
             ))}
           {areaStats.outN > 0 && (
-            <button className="mbtn" style={{ opacity: .7 }}
+            <button className={'mbtn' + (areaSel === OUTSIDE_KEY ? ' active' : '')} style={{ opacity: areaSel === OUTSIDE_KEY ? 1 : .7 }}
               title="Quotes that fall outside every distributor's radius"
-              onClick={() => { const b = boundsRef.current; if (b && mapRef.current) mapRef.current.fitBounds(b) }}>
+              onClick={() => {
+                setAreaSel(areaSel === OUTSIDE_KEY ? null : OUTSIDE_KEY)
+                const b = boundsRef.current; if (b && mapRef.current) mapRef.current.fitBounds(b)
+              }}>
               Outside every area<span className="mt">{areaStats.outN} · {fmtK(areaStats.outT)}</span>
             </button>
           )}
@@ -683,7 +700,6 @@ export default function WorkshopMapDashboard() {
         {view === 'conv' && <ConversionView P={P} COL={COL} NAME={NAME} st={st}
           dist={data?.distributor_jobs || null} distOn={distOn} setDistOn={setDistOn}
           comparisons={data?.comparisons || []} />}
-        {isDist && <div style={{ position: 'absolute', inset: 0 }}><DistributorMapDashboard /></div>}
         {view === 'state' && <StateView P={P} month={month} cat={cat} />}
         {view === 'trend' && (
           <VehicleTrendView

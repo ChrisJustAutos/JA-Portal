@@ -46,7 +46,7 @@ const nextConfig = {
       // The Distributor Map became a view inside the Workshop Map (2026-09-02).
       // Carry the view through so the weekly recap email's "full map" link and
       // anyone's bookmark still open the distributor view, not Jobs.
-      { source: '/reports/distributor-map', destination: '/reports/map?view=dist', permanent: false },
+      { source: '/reports/distributor-map', destination: '/reports/map?view=quotes', permanent: false },
     ]
   },
   async rewrites() {

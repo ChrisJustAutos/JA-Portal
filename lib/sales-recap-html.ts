@@ -248,7 +248,7 @@ export function renderRecapHtml(r: SalesRecap): string {
     const da = r.distributorAreas
     parts.push(`<div data-section="distributor-areas">`)
     parts.push(sectionTitle('🗺️', `Distributor Areas — ${da.monthLabel}`,
-      `JA quotes to customers within ${da.radiusKm} km of each distributor vs the jobs they booked (Monday, confirmed) · month granularity · full map: justautos.app/reports/map?view=dist`))
+      `JA quotes to customers within ${da.radiusKm} km of each distributor vs the jobs they booked (Monday, confirmed) · month granularity · full map: justautos.app/reports/map?view=quotes`))
     const maxQ = Math.max(...da.rows.map(x => x.quotes), 1)
     const convPill = (b: number, q: number) => {
       if (!q) return `<span style="color:${GREY};font:600 12px Arial">—</span>`
