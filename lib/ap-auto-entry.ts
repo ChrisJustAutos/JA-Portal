@@ -131,7 +131,7 @@ function apSlackChannel(companyFile?: string): string {
 // Flagged / not-posted emails are left in place. Set to '' to disable the move.
 function processedFolder(): string { return (process.env.AP_AUTO_ENTRY_PROCESSED_FOLDER ?? 'Read /Printed').trim() }
 
-export type AutoEntryOutcomeKind = 'posted' | 'flagged' | 'skipped_not_invoice' | 'skipped_duplicate' | 'error'
+export type AutoEntryOutcomeKind = 'posted' | 'flagged' | 'skipped_not_invoice' | 'skipped_duplicate' | 'error' | 'rerouted'
 
 export interface AutoEntryItem {
   messageId: string
@@ -477,7 +477,7 @@ async function runMailbox(
     // that read perfectly "unreadable" (Chris 2026-09-01, credit note CR1066).
     const selfExplained = msgAllItems.some(i => i.notified)
     const handled = selfExplained
-      || thisMsgOutcomes.some(o => o === 'posted' || o === 'flagged' || o === 'skipped_duplicate')
+      || thisMsgOutcomes.some(o => o === 'posted' || o === 'flagged' || o === 'skipped_duplicate' || o === 'rerouted')
     const anyFresh = thisMsgOutcomes.length > 0
     if (!dryRun && anyFresh && !handled && invoiceySubject && isStaffSender(msg.from)) {
       // "not an invoice" rather than "unreadable": skipped_not_invoice means the
@@ -532,7 +532,11 @@ async function runMailbox(
         try {
           await forwardMessage(mailbox, msg.id, [target.mailbox],
             `Forwarded automatically by the JA Portal.<br><br>${rerouted.routedNote || ''}<br><br>`
-            + `It has already been read and ${rerouted.outcome === 'posted' ? 'posted' : 'flagged'} against ${rerouted.routedTo}, so this copy is for the ${rerouted.routedTo} accounts records — no action is needed here unless the card in Slack asks for it.`)
+            + (rerouted.outcome === 'rerouted'
+              // Gated destination: this copy is the ONLY one, and nothing has
+              // been entered anywhere. Say exactly what has to happen next.
+              ? `<b>Nothing has been entered yet.</b> If this invoice should be paid by ${rerouted.routedTo}, move it into the "${target.folder || 'Portal Invoices'}" folder and the portal will enter it from there with the usual checks. If it belongs to an open purchase order or a stock receival, handle it the way you normally would and leave it out of that folder.`
+              : `It has already been read and ${rerouted.outcome === 'posted' ? 'posted' : 'flagged'} against ${rerouted.routedTo}, so this copy is for the ${rerouted.routedTo} accounts records — no action is needed here unless the card in Slack asks for it.`))
           console.log(`[ap-auto-entry] ${msg.id}: forwarded to ${target.mailbox} (billed to ${rerouted.routedTo})`)
         } catch (e: any) {
           console.error(`[ap-auto-entry] ${msg.id}: forward to ${target.mailbox} failed:`, e?.message || e)
@@ -543,7 +547,9 @@ async function runMailbox(
       // not simply vanish from the company whose inbox received it.
       try {
         const where = rerouted.routedTo === 'JAWS' ? 'Just Autos Wholesale' : 'Vehicle Performance Solutions'
-        const text = `:twisted_rightwards_arrows: *${rerouted.supplierName || 'An invoice'}* ${rerouted.invoiceNumber ? rerouted.invoiceNumber + ' ' : ''}arrived in this inbox but is billed to *${where}* — it has been handled under ${rerouted.routedTo}${target ? `, and the email forwarded to ${target.mailbox}` : ''}. Nothing to do here.`
+        const text = rerouted.outcome === 'rerouted'
+          ? `:twisted_rightwards_arrows: *${rerouted.supplierName || 'An invoice'}* ${rerouted.invoiceNumber ? rerouted.invoiceNumber + ' ' : ''}arrived in this inbox but is billed to *${where}*${target ? ` — forwarded to ${target.mailbox}` : ''}. *Nothing has been entered*: ${rerouted.routedTo} invoices are only entered from the "${target?.folder || 'Portal Invoices'}" folder, so someone there decides whether it goes in. Nothing to do in ${companyFile}.`
+          : `:twisted_rightwards_arrows: *${rerouted.supplierName || 'An invoice'}* ${rerouted.invoiceNumber ? rerouted.invoiceNumber + ' ' : ''}arrived in this inbox but is billed to *${where}* — it has been handled under ${rerouted.routedTo}${target ? `, and the email forwarded to ${target.mailbox}` : ''}. Nothing to do here.`
         await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile)
       } catch (e: any) { console.error('reroute notice failed:', e?.message) }
     }
@@ -554,7 +560,11 @@ async function runMailbox(
     // handling. Move LAST (it invalidates the message id) and best-effort
     // (needs Mail.ReadWrite). Record the outcome on the log row(s) so move
     // failures are visible.
-    const shouldFile = anyPosted || (dupItems.length > 0 && !anyFlagged)
+    // A rerouted email has been forwarded to the company that owns it and
+    // announced here — it is finished with in THIS inbox, so file it rather
+    // than leaving it to sit in the Inbox looking unhandled.
+    const reroutedItems = msgAllItems.filter(i => i.outcome === 'rerouted')
+    const shouldFile = anyPosted || ((dupItems.length > 0 || reroutedItems.length > 0) && !anyFlagged)
     if (shouldFile && !dryRun) {
       let moved = false
       const notes: string[] = []
@@ -1131,8 +1141,48 @@ async function processInvoice(
     subject: msg.subject,
   })
   if (billedEntity && billedEntity.entity !== companyFile) {
-    routedNote = `Invoiced to ${billedEntity.entity === 'JAWS' ? 'Just Autos Wholesale' : 'Vehicle Performance Solutions'} but arrived in the ${mailbox} inbox — posting to ${billedEntity.entity}, per ${billedEntity.why}.`
+    const entityName = billedEntity.entity === 'JAWS' ? 'Just Autos Wholesale' : 'Vehicle Performance Solutions'
+    // Is the destination's intake GATED behind a folder? The JAWS one is, on
+    // purpose: its Inbox carries invoices against open purchase orders and
+    // stock receival that must never auto-post, so a human drags in the ones
+    // that should (Chris 2026-07-14, restated 2026-09-02: "nothing should have
+    // been posted into JAWS because it waits until you post it into the Portal
+    // inbox sub folder to do the check").
+    //
+    // Rerouting used to walk straight past that gate - entering an invoice into
+    // the gated company from an inbox that has no gate at all. So when the
+    // destination is gated we FORWARD AND STOP. The invoice gets entered the
+    // ordinary way, from the folder, with the normal checks around it.
+    const dest = autoEntryInboxes(false).find(b => b.companyFile === billedEntity.entity)
+    const destGated = !!dest?.folder && dest.mailbox.toLowerCase() !== mailbox.toLowerCase()
+
     base.routedTo = billedEntity.entity
+    if (destGated) {
+      routedNote = `Invoiced to ${entityName} but arrived in the ${mailbox} inbox — forwarded to ${dest!.mailbox}, per ${billedEntity.why}. Nothing entered from here: ${billedEntity.entity} invoices are only entered from the "${dest!.folder}" folder.`
+      base.routedNote = routedNote
+      console.log(`[ap-auto-entry] billed-to reroute ${companyFile} → ${billedEntity.entity} is GATED (${dest!.folder}) — forwarding only: "${msg.subject}" / ${attName}`)
+      if (!dryRun) {
+        await logRow(c, { mailbox, companyFile, msg, attId, attName }, {
+          outcome: 'rerouted',
+          supplierName: extracted.vendor?.name || null,
+          invoiceNumber: extracted.invoiceNumber,
+          invoiceDate: extracted.invoiceDate,
+          amount: extracted.totals.totalIncGst,
+          error: routedNote.slice(0, 300),
+        })
+      }
+      return {
+        ...base,
+        supplierName: extracted.vendor?.name || null,
+        invoiceNumber: extracted.invoiceNumber,
+        amount: extracted.totals.totalIncGst,
+        outcome: 'rerouted',
+        bankCheck: 'skipped',
+        failReasons: [],
+      }
+    }
+
+    routedNote = `Invoiced to ${entityName} but arrived in the ${mailbox} inbox — posting to ${billedEntity.entity}, per ${billedEntity.why}.`
     base.routedNote = routedNote
     console.log(`[ap-auto-entry] billed-to reroute ${companyFile} → ${billedEntity.entity} (${billedEntity.why}): "${msg.subject}" / ${attName}`)
     companyFile = billedEntity.entity
