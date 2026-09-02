@@ -24,8 +24,15 @@ import { fyMonths, isVin, normaliseVin, seriesFromVin, type VehicleGroup } from 
 import { matchLabel, geoForPostcode } from '../distributor-map'
 
 export interface DistributorJobs {
-  /** series → 12 FY months (Jul=0) → job count */
+  /** series → 12 FY months (Jul=0) → job count. Per MONTH this is already one
+   *  car counted once; it is only the SUM across months that double-counts. */
   jcount: Record<string, number[]>
+  /**
+   * series → DISTINCT vehicles for the year. The full-year figure must come
+   * from here and never from summing jcount: a car tuned in March and again in
+   * July belongs in both months but is one job (Chris 2026-09-02).
+   */
+  jvehicles: Record<string, number>
   /** distinct VIN-months counted */
   total: number
   /** distinct vehicles (a car tuned twice in the year counts once here) */
@@ -71,7 +78,7 @@ export interface DistributorTunePin {
 }
 
 const EMPTY: DistributorJobs = {
-  jcount: {}, total: 0, vehicles: 0, unknown: 0, rejected: 0, sourceComputedAt: null,
+  jcount: {}, jvehicles: {}, total: 0, vehicles: 0, unknown: 0, rejected: 0, sourceComputedAt: null,
   byDistributor: [], unlocated: { tunes: 0, names: [] },
 }
 
@@ -138,11 +145,13 @@ export async function distributorJobsForFy(db: SupabaseClient, fy: number): Prom
   }
 
   const jcount: Record<string, number[]> = {}
+  const jvehicles: Record<string, number> = {}
   let total = 0, unknown = 0
   for (const [vin, monthSet] of Array.from(seen.entries())) {
     const series = (seriesFromVin(vin) || 'OTH') as VehicleGroup
     if (series === 'OTH') unknown++
     const row = (jcount[series] ||= Array(12).fill(0))
+    jvehicles[series] = (jvehicles[series] || 0) + 1     // the car, counted once
     for (const mi of Array.from(monthSet)) { row[mi]++; total++ }
   }
 
@@ -231,6 +240,7 @@ export async function distributorJobsForFy(db: SupabaseClient, fy: number): Prom
 
   return {
     jcount,
+    jvehicles,
     total,
     vehicles: seen.size,
     unknown,

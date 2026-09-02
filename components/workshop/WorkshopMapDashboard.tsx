@@ -35,8 +35,11 @@ interface Payload {
 }
 // Distributor tunes counted as jobs — one per VIN per month, derived from the
 // Distributor report's MYOB invoices (the PO number is the car's VIN).
+type ConvSrc = 'ja' | 'both' | 'dist'
+
 interface DistributorJobs {
   jcount: Record<string, number[]>
+  jvehicles?: Record<string, number>
   total: number
   vehicles: number
   unknown: number
@@ -113,7 +116,10 @@ export default function WorkshopMapDashboard() {
   const [month, setMonth] = useState(-1)          // -1 = all FY
   const [cat, setCat] = useState('all')
   const [st, setSt] = useState('all')             // state pill — jobs/quotes maps + conversion
-  const [distOn, setDistOn] = useState(false)     // fold distributor tunes into booked jobs
+  // Conversion source: Just Autos only, both, or distributors only. Was a
+  // boolean "fold them in"; Chris 2026-09-02 wants the same theory as the maps,
+  // where you can look at either side on its own or together.
+  const [convSrc, setConvSrc] = useState<ConvSrc>('ja')
   // Comparison financial years. Maps stay single-year (overlapping dots are
   // unreadable); Conversion / By State / Vehicle Trend can hold several.
   const [compare, setCompare] = useState<number[]>([])
@@ -844,7 +850,7 @@ export default function WorkshopMapDashboard() {
           </div>
         )}
         {view === 'conv' && <ConversionView P={P} COL={COL} NAME={NAME} st={st}
-          dist={data?.distributor_jobs || null} distOn={distOn} setDistOn={setDistOn}
+          dist={data?.distributor_jobs || null} src={convSrc} setSrc={setConvSrc}
           comparisons={data?.comparisons || []} />}
         {view === 'state' && <StateView P={P} month={month} cat={cat} />}
         {view === 'trend' && (
@@ -873,9 +879,9 @@ export default function WorkshopMapDashboard() {
 
 interface ConvCounts { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }
 
-function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons }: {
+function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
   P: Payload; COL: Record<string, string>; NAME: Record<string, string>; st: string
-  dist: DistributorJobs | null; distOn: boolean; setDistOn: (v: boolean) => void
+  dist: DistributorJobs | null; src: ConvSrc; setSrc: (v: ConvSrc) => void
   comparisons: CompareYear[]
 }) {
   const [chart, setChart] = useState(false)
@@ -897,29 +903,48 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons
   // Distributor jobs are national — a state filter can't place them (the
   // invoice has no postcode), so they're only foldable on the all-Australia view.
   const distUsable = !!dist && dist.total > 0 && st === 'all'
-  const on = distOn && distUsable
+  // `on` = distributor numbers are in play at all; `jaOn` = Just Autos' own are.
+  const on = distUsable && (src === 'both' || src === 'dist')
+  const jaOn = !distUsable || src !== 'dist'
 
+  // FULL-YEAR distributor counts come from jvehicles (distinct cars), never
+  // from summing jcount across months — that is the double-count Chris caught
+  // on the map card, and the same rule has to hold here or one dashboard
+  // carries two definitions of a job.
+  const distYear = (c: string) => (dist?.jvehicles?.[c] ?? 0)
+
+  // The month-by-month grid. Per month a car is already counted once, so the
+  // cells are simply added; it is only the FY column that has to come from the
+  // distinct counts instead of a row sum.
   const C = useMemo<ConvCounts>(() => {
     if (!on || !dist) return base
     const jcount: Record<string, number[]> = {}
-    for (const k of Object.keys(base.jcount)) jcount[k] = [...(base.jcount[k] || [])]
+    if (jaOn) for (const k of Object.keys(base.jcount)) jcount[k] = [...(base.jcount[k] || [])]
     for (const [k, arr] of Object.entries(dist.jcount)) {
       const row = (jcount[k] ||= Array(12).fill(0))
       arr.forEach((v, i) => { row[i] = (row[i] || 0) + v })
     }
-    return { ...base, jcount }
-  }, [base, dist, on])
+    // Distributors only: no workshop quotes either, or every cell reads 0%.
+    const qcount = jaOn ? base.qcount : {}
+    const qval = jaOn ? base.qval : {}
+    return { qcount, qval, jcount }
+  }, [base, dist, on, jaOn])
 
   const sum = (a: number[]) => a.reduce((x, y) => x + y, 0)
-  let tq = 0, tj = 0, tv = 0
-  CK.forEach(c => { tq += sum(C.qcount[c] || []); tj += sum(C.jcount[c] || []); tv += sum(C.qval[c] || []) })
-  const distTotalInCats = dist ? CK.reduce((s, c) => s + sum(dist.jcount[c] || []), 0) : 0
+  const distTotalInCats = CK.reduce((s2, c) => s2 + distYear(c), 0)
 
   const rows = CK.map(c => {
-    const q = sum(C.qcount[c] || []), j = sum(C.jcount[c] || []), v = sum(C.qval[c] || [])
-    const d = dist ? sum(dist.jcount[c] || []) : 0
-    return { c, q, j, v, d, pct: q ? (100 * j) / q : 0 }
+    const q = jaOn ? sum(base.qcount[c] || []) : 0
+    const v = jaOn ? sum(base.qval[c] || []) : 0
+    const jJa = jaOn ? sum(base.jcount[c] || []) : 0
+    const d = distYear(c)
+    const j = jJa + (on ? d : 0)
+    return { c, q, j, v, d, jJa, pct: q ? (100 * j) / q : 0 }
   })
+  const tq = rows.reduce((a, r) => a + r.q, 0)
+  const tj = rows.reduce((a, r) => a + r.j, 0)
+  const tv = rows.reduce((a, r) => a + r.v, 0)
+  const tjJa = rows.reduce((a, r) => a + r.jJa, 0)
 
   // Comparison years, run through the SAME rules as the primary year — state
   // filter and the distributor fold included — so the percentages are
@@ -931,38 +956,53 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons
       ? cy.conv
       : (cy.convByState?.[st] || { qcount: {}, qval: {}, jcount: {} })
     const cd = cy.distributor_jobs
-    const useDist = distOn && st === 'all' && !!cd && cd.total > 0
+    const cdUsable = st === 'all' && !!cd && cd.total > 0
+    const useDist = cdUsable && (src === 'both' || src === 'dist')
+    const useJa = !cdUsable || src !== 'dist'
     const byVeh = CK.map(c => {
-      const q = sum(cc.qcount[c] || [])
-      const jBase = sum(cc.jcount[c] || [])
-      const d = cd ? sum(cd.jcount[c] || []) : 0
+      const q = useJa ? sum(cc.qcount[c] || []) : 0
+      const jBase = useJa ? sum(cc.jcount[c] || []) : 0
+      // Distinct cars, same as the primary year.
+      const d = cd?.jvehicles?.[c] ?? 0
       const j = jBase + (useDist ? d : 0)
       return { c, q, j, d, pct: q ? (100 * j) / q : 0 }
     })
     const tq2 = byVeh.reduce((a, b) => a + b.q, 0)
     const tj2 = byVeh.reduce((a, b) => a + b.j, 0)
     return { fy: cy.fy, byVeh, tq: tq2, tj: tj2, pct: tq2 ? (100 * tj2) / tq2 : 0 }
-  }), [comparisons, st, distOn])
+  }), [comparisons, st, src])
 
   return (
     <div className="convView">
       <div className="cards">
         <div className="card"><div className="v">{tq.toLocaleString('en-AU')}</div><div className="k">Quotes issued</div></div>
-        <div className="card"><div className="v" style={{ color: 'var(--wm-mint)' }}>{tj.toLocaleString('en-AU')}</div><div className="k">Booked jobs{on ? ' (incl. distributor)' : ''}</div></div>
-        <div className="card"><div className="v" style={{ color: 'var(--wm-amber)' }}>{tq ? (100 * tj / tq).toFixed(1) : '0'}%</div><div className="k">Overall conversion</div></div>
+        <div className="card">
+          <div className="v" style={{ color: 'var(--wm-mint)' }}>{tj.toLocaleString('en-AU')}</div>
+          <div className="k">{src === 'dist' ? 'Distributor jobs' : `Booked jobs${on ? ' (incl. distributor)' : ''}`}</div>
+          {src === 'both' && (
+            <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }}>
+              {tjJa.toLocaleString('en-AU')} Just Autos + {distTotalInCats.toLocaleString('en-AU')} distributor
+            </div>
+          )}
+        </div>
+        <div className="card">
+          <div className="v" style={{ color: 'var(--wm-amber)' }}>{src === 'dist' ? '—' : `${tq ? (100 * tj / tq).toFixed(1) : '0'}%`}</div>
+          <div className="k">{src === 'dist' ? 'No quotes to convert' : 'Overall conversion'}</div>
+        </div>
         <div className="card"><div className="v">{fmtK(tv)}</div><div className="k">Total quoted</div></div>
       </div>
 
       {/* Controls: distributor toggle + table/chart switch */}
       <div className="convCtl">
         {dist && dist.total > 0 && (
-          <label className={'distTog' + (distUsable ? '' : ' off')} title={distUsable
-            ? 'Count each distributor tune (one per VIN per month) as a booked job'
+          <div className={'segbtns' + (distUsable ? '' : ' off')} title={distUsable
+            ? 'Whose jobs to count. Distributors have no quotes, so their own conversion cannot be worked out — see them alone for the job counts by model.'
             : 'Distributor jobs are national — clear the state filter to include them'}>
-            <input type="checkbox" checked={on} disabled={!distUsable} onChange={e => setDistOn(e.target.checked)} />
-            <span>Include distributor jobs</span>
-            <b>+{distTotalInCats.toLocaleString('en-AU')}</b>
-          </label>
+            {([['ja', 'Just Autos'], ['both', 'Both'], ['dist', 'Distributors']] as [ConvSrc, string][]).map(([k, label]) => (
+              <button key={k} className={src === k ? 'on' : ''} disabled={!distUsable && k !== 'ja'}
+                onClick={() => setSrc(k)}>{label}{k !== 'ja' ? ` +${distTotalInCats.toLocaleString('en-AU')}` : ''}</button>
+            ))}
+          </div>
         )}
         <div className="segbtns">
           <button className={chart ? '' : 'on'} onClick={() => setChart(false)}>Table</button>
@@ -972,9 +1012,12 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons
 
       {on && (
         <p className="distNote">
-          Distributor tunes are counted as booked jobs — one per VIN per month, from the Distributor report&apos;s invoices
-          (the PO number is the VIN). They never had a workshop quote, so conversion % reads higher than the workshop&apos;s
-          own performance.{dist && dist.unknown > 0 && <> {dist.unknown} VIN{dist.unknown > 1 ? 's' : ''} couldn&apos;t be matched to a model and {dist.unknown > 1 ? 'are' : 'is'} left out of the vehicle rows.</>}
+          Distributor jobs come from the Distributor report&apos;s invoices — the PO number is the car&apos;s VIN — and one car is
+          one job for the year, however many times it came back.{' '}
+          {src === 'dist'
+            ? <>Distributors never raise a workshop quote, so there is nothing to convert: the quote and % columns are blank on purpose. This is the job count by model.</>
+            : <>They never had a workshop quote, so a combined conversion % reads higher than the workshop&apos;s own performance — the &ldquo;Just Autos&rdquo; tab is the one to judge the workshop on.</>}
+          {dist && dist.unknown > 0 && <> {dist.unknown} VIN{dist.unknown > 1 ? 's' : ''} couldn&apos;t be matched to a model and {dist.unknown > 1 ? 'are' : 'is'} left out of the vehicle rows.</>}
         </p>
       )}
 
@@ -1034,7 +1077,11 @@ function ConversionView({ P, COL, NAME, st, dist, distOn, setDistOn, comparisons
             <thead><tr><th>Vehicle</th>{P.months.map(m => <th key={m.k}>{m.label.split(' ')[0]}</th>)}<th>FY</th></tr></thead>
             <tbody>
               {CK.map(c => {
-                const Q = sum(C.qcount[c] || []), J = sum(C.jcount[c] || [])
+                // FY column: workshop months sum fine (one customer per month),
+                // but distributor jobs must come from the distinct-car count or
+                // a car that returned is counted twice across the year.
+                const Q = jaOn ? sum(base.qcount[c] || []) : 0
+                const J = (jaOn ? sum(base.jcount[c] || []) : 0) + (on ? distYear(c) : 0)
                 return (
                   <tr key={c}>
                     <td className="veh"><span className="vd" style={{ background: COL[c] }} />{(NAME[c] || c).replace('LC ', '')}</td>
