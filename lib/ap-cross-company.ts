@@ -277,8 +277,33 @@ export async function findCrossCompanyDuplicate(args: {
         const numberHitHere = docs.some(d => supplierLooksSame(d?.Supplier?.Name, supplier)
           && number && sameNumberLoose(d?.SupplierInvoiceNumber, number))
         if (!numberHitHere && amount != null && amount >= AMOUNT_NET_MIN && !outOfTime()) {
-          let truncated = true
-          for (let skip = 0, page = 0; page < 8; page++, skip += 400) {
+          // ASK MYOB FOR THE AMOUNT, don't sift a date range for it.
+          //
+          // The scan below pages up to 3,200 documents and then throws almost
+          // all of them away — one VPS Bill/Service page took 17 seconds and
+          // tripped the time budget on a real run (2026-09-02), which reports
+          // "couldn't rule out a double-up" on an invoice that is fine. The
+          // amount is the thing being matched, so filter on it server-side:
+          // one small request instead of eight big ones.
+          //
+          // Bounded either side rather than `eq` because the stored decimal and
+          // our parsed float need not be bit-identical. Falls back to the scan
+          // if MYOB rejects the filter, so a syntax the file dislikes costs
+          // speed, never coverage.
+          let amountFiltered = false
+          try {
+            const lo = (amount - 0.005).toFixed(2), hi = (amount + 0.005).toFixed(2)
+            const ra = await myobFetch(conn.id, path, {
+              query: { '$filter': `${filter} and TotalAmount ge ${lo} and TotalAmount le ${hi}`, '$top': 400 },
+            })
+            if (ra.status === 200) {
+              docs.push(...(Array.isArray(ra.data?.Items) ? ra.data.Items : []))
+              amountFiltered = true
+            }
+          } catch { /* fall through to the scan */ }
+
+          let truncated = !amountFiltered
+          for (let skip = 0, page = 0; !amountFiltered && page < 8; page++, skip += 400) {
             let rd: any
             try {
               rd = await myobFetch(conn.id, path, {
