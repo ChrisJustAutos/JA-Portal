@@ -344,11 +344,9 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
   // Reports sub-tab allowlist (null = all): lets a user (e.g. marketing) see
   // ONLY specific reports, like the Workshop Map, within the Reports section.
   const REPORT_SUBTABS: Array<{ id: string; label: string }> = [
-    { id: 'reports', label: 'Reports home' },
     { id: 'sales-report', label: 'Sales Report' },
     { id: 'mgmt-dashboard', label: 'Management Dashboard' },
-    { id: 'workshop-map', label: 'Workshop Map' },
-    { id: 'distributor-map', label: 'Distributor Map' },
+    { id: 'workshop-map', label: 'Maps (workshop + distributor)' },
     { id: 'jaws-stock-eom', label: 'Stock EOM' },
   ]
   function ReportTabPicker({ value, onChange }: { value: string[] | null; onChange: (next: string[] | null) => void }) {

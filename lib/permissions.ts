@@ -161,7 +161,6 @@ export const REPORT_TAB_HREFS: Record<string, string> = {
   'mgmt-dashboard': '/reports/mgmt-dashboard',
   'forecast': '/reports/forecast',
   'workshop-map': '/reports/map',
-  'distributor-map': '/reports/distributor-map',
 }
 
 export function reportTabAllowed(list: string[] | null | undefined, tab: string): boolean {

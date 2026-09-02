@@ -96,7 +96,18 @@ export default function DistributorMapDashboard() {
     addDarkBasemap(L, map)
     layerRef.current = L.layerGroup().addTo(map)
     mapRef.current = map
-  }, [data])
+    // Tear the map down on unmount. This was safe to omit while the dashboard
+    // only ever unmounted with the whole page, but it is now a SWITCHABLE VIEW
+    // inside the Workshop Map, so it mounts and unmounts every time someone
+    // moves between tabs — without this, each visit leaves a live Leaflet map
+    // and its window listeners behind.
+    return () => { map.remove(); mapRef.current = null; layerRef.current = null }
+    // Depend on whether data EXISTS, not on its identity: keyed on `data` the
+    // cleanup would now destroy and rebuild the map on every refetch (changing
+    // year, radius or month), throwing away the pan and zoom the person had
+    // set. Same reasoning, and the same shape, as WorkshopMapDashboard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!data])
 
   // ── Redraw on any filter change ─────────────────────────────────────────
   useEffect(() => {
