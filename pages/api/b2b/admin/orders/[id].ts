@@ -59,23 +59,66 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   return res.status(405).json({ error: 'GET, PATCH or DELETE only' })
 }
 
+// Statuses that can be deleted AT ALL. Anything from 'paid' onwards is a
+// transaction and is out by definition; the per-order checks below still have
+// to pass on top of this.
+const DELETABLE_STATUSES = ['cancelled', 'pending_payment', 'awaiting_approval']
+
 async function deleteOrder(id: string, res: NextApiResponse) {
   const c = sb()
-  const { data: existing } = await c.from('b2b_orders').select('order_number, is_test, status, paid_at').eq('id', id).maybeSingle()
-  if (!existing) return res.status(404).json({ error: 'Order not found' })
-  // Purging cascades away the lines AND the b2b_order_events audit trail while
-  // the Stripe charge / MYOB documents live on — so real transacted orders can
-  // never be deleted, only cancelled/refunded. Test orders and never-paid
-  // checkouts are fair game.
-  const purgeable = existing.is_test === true || (existing.status === 'pending_payment' && !existing.paid_at)
-  if (!purgeable) {
-    return res.status(400).json({ error: 'Real orders can’t be deleted — cancel or refund instead so the audit trail survives.' })
+  const { data: o } = await c.from('b2b_orders').select('*').eq('id', id).maybeSingle()
+  if (!o) return res.status(404).json({ error: 'Order not found' })
+
+  // Deleting cascades the lines AND the b2b_order_events audit trail, so the
+  // bar is: did this order ever become anything? An abandoned checkout is a
+  // cart someone walked away from, not history.
+  //
+  // The old rule was `is_test || (pending_payment && !paid_at)`, which was
+  // wrong at both ends. It refused a CANCELLED order that never reached MYOB
+  // (Chris 2026-09-02 — the case that prompted this), and it allowed deleting
+  // a pending_payment order that HAD a MYOB sale order against it, which
+  // approve.ts writes before any money arrives. So the checks are now about
+  // what the order actually touched, not which status it happens to sit in.
+  const blockers: string[] = []
+  if (!DELETABLE_STATUSES.includes(String(o.status))) {
+    blockers.push(`it is ${o.status} — only a cancelled or never-paid order can be deleted`)
   }
-  // FK cascades remove order_lines, order_events and label_print_jobs. Any MYOB
-  // invoice already written is NOT affected — void it in MYOB separately.
-  const { error } = await c.from('b2b_orders').delete().eq('id', id)
+  if (o.myob_invoice_uid || o.myob_sale_invoice_uid || o.myob_invoice_number || o.myob_sale_invoice_number) {
+    blockers.push('it exists in MYOB (void it there first)')
+  }
+  if (o.paid_at || o.myob_payment_uid || o.myob_payment_at) blockers.push('a payment is recorded against it')
+  if (o.stripe_payment_intent_id || o.stripe_charge_id) blockers.push('it has a Stripe payment on it')
+  if (o.refunded_at || Number(o.refunded_total || 0) > 0) blockers.push('it has been refunded')
+  if (o.shipped_at || o.machship_consignment_id || o.machship_manifest_id) blockers.push('freight is booked or it has shipped')
+  if (o.dropship_po_raised_at || o.dropship_po_billed_at || (Array.isArray(o.dropship_pos) && o.dropship_pos.length)) {
+    blockers.push('drop-ship purchase orders were raised with a supplier')
+  }
+
+  // A test order is exempt from the status rule but NOT from the rest: a test
+  // order that somehow reached MYOB is a document like any other.
+  const testOnly = o.is_test === true && blockers.length === 1 && blockers[0].startsWith('it is ')
+
+  if (blockers.length && !testOnly) {
+    const list = blockers.length === 1 ? blockers[0]
+      : `${blockers.slice(0, -1).join('; ')}; and ${blockers[blockers.length - 1]}`
+    return res.status(400).json({
+      error: `${o.order_number} can't be deleted because ${list}. Cancel it instead — it stays on the record and out of the way.`,
+    })
+  }
+
+  // FK cascades remove order_lines, order_events and label_print_jobs; the
+  // drop-ship confirmation log keeps its rows with a null order, since what a
+  // supplier told us stands on its own.
+  //
+  // The status is re-asserted in the DELETE itself so an order that gets paid
+  // between the check above and this line cannot be removed by the race.
+  const q = c.from('b2b_orders').delete().eq('id', id)
+  const { error } = o.is_test === true ? await q : await q.in('status', DELETABLE_STATUSES)
   if (error) return res.status(500).json({ error: error.message })
-  return res.status(200).json({ ok: true, order_number: existing.order_number })
+  console.log(`[b2b] deleted order ${o.order_number} (${o.status}, $${o.total_inc})`)
+  // The number is NOT reclaimed: for real orders it is the MYOB Number
+  // (migration 214) and abandoned ones already leave gaps by design.
+  return res.status(200).json({ ok: true, order_number: o.order_number })
 }
 
 async function getDetail(id: string, res: NextApiResponse) {

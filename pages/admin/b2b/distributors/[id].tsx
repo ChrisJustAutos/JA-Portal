@@ -302,7 +302,7 @@ function DetailsSection({
             style={inputStyle()}/>
         </FormRow>
       </FormGrid>
-      <FormRow label="Tier" hint="Pricing / access tier — manage tier list under B2B Settings">
+      <FormRow label="Tier" hint="Pricing / access tier. The tier LIST is no longer editable in Settings — existing tiers still apply.">
         <select
           value={dist.tier_id || ''}
           onChange={e => commit('tier_id', e.target.value || null, 'Tier')}

@@ -125,7 +125,7 @@ async function handleDelete(id: string, res: NextApiResponse) {
   const found: string[] = []
   for (const b of DELETE_BLOCKERS) {
     const { count, error } = await c.from(b.table)
-      .select('id', { count: 'exact', head: true }).eq('distributor_id', id)
+      .select('*', { count: 'exact', head: true }).eq('distributor_id', id)
     // A failed count must not read as "nothing there" — that is how a delete
     // gets through and takes history with it.
     if (error) return res.status(500).json({ error: `Couldn't check ${b.table} before deleting: ${error.message}` })
