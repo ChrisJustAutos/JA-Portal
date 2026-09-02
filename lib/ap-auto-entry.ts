@@ -1395,8 +1395,17 @@ async function processInvoice(
       // Unknown supplier → offer the "Create supplier" thread flow: the click
       // reads the vendor's details off the invoice for review, and approving
       // in-thread creates the MYOB card and posts the bill in one go.
+      // HARD NO (Chris 2026-09-02, after Jarred's MPI test: "should have been a
+      // hard no - not even the option to approve and post to MYOB"). Every
+      // other flag is a judgement a human can make from the card in front of
+      // them. A possible cross-company double-up is not: the evidence sits in
+      // the OTHER company file, which is not on the card, so an Approve button
+      // here is an invitation to pay something twice on a glance. It covers the
+      // case where the check could not COMPLETE too - "we didn't find one" and
+      // "we couldn't look" must not lead to the same button.
+      const crossCompanyDoubt = failReasons.some(r => r.includes('cross-company') || r.includes('double-up-across-companies'))
       const offerCreateSupplier = failReasons.some(r => r.includes('supplier-not-mapped'))
-      const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: rowId, createSupplierValue: offerCreateSupplier ? rowId : null, checkManualValue: rowId })
+      const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: crossCompanyDoubt ? null : rowId, createSupplierValue: offerCreateSupplier ? rowId : null, checkManualValue: rowId })
       const ts = await sendSlack(withUrl, companyFile)
       await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
     }
@@ -1595,6 +1604,15 @@ export async function approveAndPost(rowId: string, approvedBy: string): Promise
   const { data: row } = await c.from('ap_auto_entry_log').select('*').eq('id', rowId).maybeSingle()
   if (!row) return '⚠️ Approval failed — this flag no longer exists.'
   if (row.outcome === 'posted' || row.myob_bill_uid) return `Already in MYOB (${row.invoice_number || 'invoice'}) — nothing to do.`
+  // The hard no, enforced HERE and not only by hiding the button. Cards already
+  // sitting in Slack from before that change still carry a working button, and
+  // a Slack action is just an HTTP call - a guard that only removes the button
+  // is one that can be clicked round. Refuse at the point it would post.
+  const xcDoubt = (row.fail_reasons || []).some((r: string) =>
+    r.includes('cross-company') || r.includes('double-up-across-companies'))
+  if (xcDoubt) {
+    return `\u{1F6D1} Not posting ${row.invoice_number || 'this invoice'} from here - a double-up across JAWS and VPS could not be ruled out, and this is exactly how an invoice gets paid in both companies. Check both files; if it is genuinely new, enter it by hand and mark it with "Entered manually?".`
+  }
   await c.from('ap_auto_entry_log')
     .update({ approved_by: approvedBy, approved_at: new Date().toISOString() })
     .eq('id', rowId)

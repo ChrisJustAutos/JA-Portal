@@ -126,7 +126,12 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
     const reasons = Array.from(new Set(i.failReasons.map(prettyReason))).slice(0, 8)
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: `*Why it wasn't auto-posted:*\n• ${reasons.join('\n• ')}\n_Left in the inbox for manual entry._` },
+      text: { type: 'mrkdwn', text: `*Why it wasn't auto-posted:*\n• ${reasons.join('\n• ')}\n`
+        // A missing button with no explanation reads as a broken card, so say
+        // that its absence is deliberate and why.
+        + (i.outcome === 'flagged' && !i.approveValue
+          ? '*There is no approve button on this one.* A double-up across the two company files could not be ruled out, and approving is how something gets paid twice. Check both files, then enter it by hand.'
+          : '_Left in the inbox for manual entry._') },
     })
   }
 

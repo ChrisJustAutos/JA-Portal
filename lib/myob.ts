@@ -197,7 +197,16 @@ export async function listConnections(): Promise<MyobConnection[]> {
   return (data || []) as MyobConnection[]
 }
 
-export async function getValidAccessToken(connId: string): Promise<string> {
+/**
+ * `force` refreshes even when the stored token still looks current. Needed
+ * because "unexpired" and "valid" are not the same thing: MYOB rotates the
+ * refresh token on every refresh, so when two of our processes refresh the
+ * same connection at once, the loser's ACCESS token is invalidated while its
+ * stored expiry still reads minutes into the future. Everything using that
+ * connection then 401s until the clock catches up. See the 401 retry in
+ * myobFetch.
+ */
+export async function getValidAccessToken(connId: string, force = false): Promise<string> {
   const { data, error } = await sb()
     .from('myob_connections')
     .select('*')
@@ -208,7 +217,7 @@ export async function getValidAccessToken(connId: string): Promise<string> {
 
   const expiresMs = new Date(conn.access_expires_at).getTime()
   const now = Date.now()
-  if (expiresMs - now > 60_000) return conn.access_token
+  if (!force && expiresMs - now > 60_000) return conn.access_token
 
   const fresh = await refreshTokens(conn.refresh_token)
   const expiresAt = new Date(Date.now() + fresh.expires_in * 1000).toISOString()
@@ -283,6 +292,8 @@ export async function myobFetch(
     query?: Record<string, string | number | boolean | undefined>
     performedBy?: string | null
     requiresCfAuth?: boolean
+    /** Internal: set on the one automatic retry after a 401. Do not pass. */
+    _retriedAfter401?: boolean
   } = {},
 ): Promise<{ status: number; data: any; raw: string; headers: Record<string, string> }> {
   const method = opts.method || 'GET'
@@ -307,7 +318,7 @@ export async function myobFetch(
   if (connErr || !connData) throw new Error('MYOB connection not found for fetch')
   const conn = connData as MyobConnection
 
-  const accessToken = await getValidAccessToken(connId)
+  const accessToken = await getValidAccessToken(connId, opts._retriedAfter401 === true)
 
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${accessToken}`,
@@ -372,6 +383,17 @@ export async function myobFetch(
     // last_used_at is fire-and-forget — non-critical bookkeeping.
     sb().from('myob_connections').update({ last_used_at: new Date().toISOString() }).eq('id', connId)
       .then(() => {}, () => {})
+  }
+
+  // A 401 is recoverable and used to be fatal to whatever was mid-run. Force a
+  // token refresh and go again, exactly once — with no retry, a token
+  // invalidated by a concurrent refresh turned into a silent wrong answer:
+  // during the AP run on 2026-09-02 four cross-company duplicate searches
+  // 401'd in a row and the invoice was reported as "couldn't rule out a
+  // double-up" when the real answer was simply never fetched.
+  if (status === 401 && !opts._retriedAfter401) {
+    console.warn(`[myob] 401 on ${method} ${path} — forcing a token refresh and retrying once`)
+    return myobFetch(connId, path, { ...opts, _retriedAfter401: true })
   }
 
   return { status, data, raw, headers: responseHeaders }

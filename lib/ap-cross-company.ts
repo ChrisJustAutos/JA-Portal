@@ -265,6 +265,26 @@ export async function findCrossCompanyDuplicate(args: {
               rd = await myobFetch(conn.id, path, {
                 query: { '$filter': filter, '$orderby': 'Number', '$top': 400, '$skip': skip },
               })
+              // MYOB 500s on $orderby=Number for some endpoints — JAWS
+              // Purchase/Order/Item returns a Runtime Error page while the very
+              // same URL without the sort returns 200 (seen 2026-09-02). Retry
+              // unsorted rather than reporting the whole check as incomplete.
+              // Unsorted means $skip cannot be trusted across pages, so this
+              // fallback takes ONE page and is honest about it: a short page is
+              // the complete answer, a full one is truncated.
+              if (rd.status >= 500 && skip === 0) {
+                const un = await myobFetch(conn.id, path, { query: { '$filter': filter, '$top': 400 } })
+                if (un.status === 200) {
+                  const batch: any[] = Array.isArray(un.data?.Items) ? un.data.Items : []
+                  docs.push(...batch)
+                  if (batch.length >= 400) {
+                    incomplete = true
+                    notes.push(`${entity} ${docType}/${layout}: unsorted fallback filled its page, search truncated`)
+                  }
+                  truncated = false
+                  break
+                }
+              }
             } catch (e: any) {
               incomplete = true
               notes.push(`${entity} ${docType}/${layout} by-date: ${String(e?.message || e).slice(0, 60)}`)
