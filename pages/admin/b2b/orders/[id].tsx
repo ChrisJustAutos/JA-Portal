@@ -389,8 +389,18 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 <h1 style={{fontSize:24,fontWeight:700,margin:0,letterSpacing:'-0.02em',fontFamily:'monospace'}}>{data.order_number}</h1>
                 <StatusPill status={data.status}/>
                 <span style={{color:T.text2,fontSize:13}}>· {data.distributor?.display_name || '—'}</span>
-                <span style={{marginLeft:'auto',fontSize:13,color:T.text2,fontVariantNumeric:'tabular-nums'}}>
-                  ${money(data.total_inc)} {data.currency}
+                {/* THE big figure sits up here (Chris 2026-09-03). It was 13px
+                    in the header and 40px halfway down the page, which put the
+                    money below the fold on a phone; the header is where you
+                    land, so it reads first and the Totals card just itemises
+                    it. Sized under the 24px order number's weight class on
+                    purpose — same baseline row, so 32 not 40. */}
+                <span style={{marginLeft:'auto',display:'flex',alignItems:'baseline',gap:6,minWidth:0}}>
+                  <span style={{
+                    fontSize: isMobile ? 26 : 32, lineHeight:1, fontWeight:750,
+                    letterSpacing:'-0.03em', color:T.text, fontVariantNumeric:'tabular-nums',
+                  }}>${money(data.total_inc)}</span>
+                  <span style={{fontSize:12,color:T.text3}}>{data.currency}</span>
                 </span>
               </div>
             )}
@@ -571,30 +581,17 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     )
                   })()}
                   <Row label="Card surcharge"     value={`$${money(data.card_fee_inc)}`} muted/>
-                  {/* HERO TOTAL, mobile and desktop alike (Chris 2026-09-02).
-                      This is the figure the page exists to tell you, and it was
-                      one bold 13px row among five. The itemisation above stays
-                      quiet so the hierarchy does the reading. */}
-                  <div style={{
-                    marginTop:12, paddingTop:14, borderTop:`1px solid ${T.border2}`,
-                    display:'flex', alignItems:'flex-end', gap:12, flexWrap:'wrap',
-                  }}>
-                    <div style={{minWidth:0}}>
-                      <div style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',textTransform:'uppercase',color:T.text3}}>
-                        {data.paid_at ? 'Total paid' : 'Order total'}
-                      </div>
-                      <div style={{fontSize:12,color:T.text3,marginTop:3}}>
-                        includes ${money(data.gst)} GST
-                        {data.currency && data.currency !== 'AUD' ? ` · ${data.currency}` : ''}
-                      </div>
-                    </div>
-                    <div style={{
-                      marginLeft:'auto', fontSize: isMobile ? 34 : 40, lineHeight:1,
-                      fontWeight:750, letterSpacing:'-0.03em', color:T.text,
-                      fontVariantNumeric:'tabular-nums',
-                    }}>
-                      ${money(data.total_inc)}
-                    </div>
+                  {/* Total, compact (Chris 2026-09-03). It was the 40px hero
+                      here; the big figure now leads the page header instead,
+                      and two competing hero totals on one screen is one too
+                      many. This card itemises, so the total is its bold last
+                      row — the GST note keeps its own line so the row stays a
+                      clean label/figure pair like the ones above it. */}
+                  <Row label={data.paid_at ? 'Total paid' : 'Order total'}
+                       value={`$${money(data.total_inc)}`} bold/>
+                  <div style={{fontSize:11,color:T.text3,textAlign:'right'}}>
+                    includes ${money(data.gst)} GST
+                    {data.currency && data.currency !== 'AUD' ? ` · ${data.currency}` : ''}
                   </div>
                   {Number(data.refunded_total || 0) > 0 && (
                     <Row label={`Refunded${Number(data.refunded_total) >= data.total_inc - 0.005 ? ' (full)' : ' (partial)'}`}
