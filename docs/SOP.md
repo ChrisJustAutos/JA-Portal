@@ -2,7 +2,7 @@
 
 How to use the portal, task by task.
 
-Compiled 20 August 2026. Companion to `HANDOVER.md`, which covers how the system is *built*; this document covers how it is *used*. Where the two disagree, the code wins — tell Chris so both get fixed.
+Compiled 20 August 2026; **last updated 2 September 2026**. Companion to `HANDOVER.md`, which covers how the system is *built*; this document covers how it is *used*. Where the two disagree, the code wins — tell Chris so both get fixed.
 
 **Production:** `https://justautos.app`
 
@@ -120,6 +120,8 @@ The 368 that had built up since June were **already printed** — the portal sim
 
 A thank-you letter and envelope are queued automatically for every newly finalised MYOB invoice and printed on the Apeos in the comms room. Deposit-only invoices are skipped deliberately.
 
+**Every row has Retry and Remove.** Retry re-queues it for printing; Remove takes it off the worklist without printing. Use Remove for anything too old to matter — nobody wants a thank-you letter for a job from June.
+
 - Reprint one, compose one by hand, or edit the templates: **Workshop → Letters**.
 - Nothing to do day to day — it runs hourly. If letters stop appearing, see §10.
 
@@ -127,15 +129,15 @@ A thank-you letter and envelope are queued automatically for every newly finalis
 
 **Workshop → Pre Pick** shows the next 14 days of booked work against stock on hand, so you can order ahead instead of discovering a shortage on the day. It is refreshed from MechanicDesk several times each weekday.
 
-### 3.3 Purchase orders
+### 3.3 Purchase orders and Stocktake (Portal) have been switched off
 
-**Workshop → Purchase Orders** — draft → sent → received, then push the bill to MYOB.
+Both were removed from the Workshop menu on **1 September 2026** — neither was being used. Purchase orders are raised in MechanicDesk and MYOB as before.
+
+**⚠ Stocktake (MD) is a different thing and is still here.** It counts against Mechanics Desk, is report-only, and lives at **Stocktake** in the main menu — not under Workshop. If someone says "stocktake is gone", that is the portal one they are looking at.
 
 ### 3.4 Counting stock
 
-- **Stocktake (Portal)** — create a session, scan barcodes to count, review **Variance**, then **Apply**.
-  **⚠ Counted rows are sacred.** If a count looks wrong, investigate before applying — applying writes the variance away.
-- **Stocktake (MD)** counts against Mechanics Desk instead, and is report-only.
+- **Stocktake (MD)** counts against Mechanics Desk and is report-only.
 
 #### “On cars” — why the shelf is short, before you re-count it
 
@@ -250,6 +252,25 @@ Pressing it repeatedly is safe.
 **The same button also reads "Receipt payment in MYOB".** When an order's money has cleared but no customer payment was ever recorded in MYOB, the button changes to that and applying it is all it does - it doesn't re-ask Stripe, because the money is not in question. This is the repair for a payment that slipped past the automatic path. It is bounded by what the MYOB document actually still owes, so it can never pay twice or overpay; if someone already receipted it by hand it says so and posts nothing. It never appears on a **cancelled or refunded** order - a refund is a separate credit note in MYOB, so the original invoice can still look unpaid, and receipting it would hand over money we have already given back.
 
 You should rarely see it: the portal now applies a cleared payment on its own, and a six-hourly check sweeps up anything the live notification missed and tells you it did. If you *do* see it on an order that cleared days ago, press it - that money is not in MYOB.
+
+### 4.1ba Orders of $30,000 or more come to us first
+
+From **2 September 2026**, any order reaching **$30,000 or more** — goods, GST and freight together — cannot be paid at checkout. It comes through unpaid and waits for us.
+
+**What the distributor sees.** Once their cart reaches the limit a notice appears in the order summary: the order will be processed by hand, we will confirm freight and invoice them for **bank transfer**, and there is **no card surcharge**. *Check Out* becomes **Submit order for approval**. They are never asked for payment and nothing is charged; their cart empties and the order appears in their history straight away.
+
+**What you do**, in order — the money arrives between steps 3 and 4:
+
+1. **Spot it on the orders list.** It shows as **Needs approval** in the Payment column. That is not the same as *Not paid*: nobody abandoned a checkout, this one is waiting on us.
+2. **Check it, then press Approve order.** Items, delivery address and freight. Approving releases it to the warehouse and writes the sale order into MYOB.
+3. **Pick and pack as normal.** Book Shipment, pick slip, labels. Freight can be quoted and the paperwork printed while the transfer is arranged.
+4. **Record the payment when the transfer lands** — **Mark paid**. That receipts it, raises any drop-ship purchase orders, and emails the distributor their confirmation.
+
+**⚠ Do not despatch before the money is in.** An approved order can technically be shipped while unpaid — the portal will not stop you. On an order this size, wait for the transfer to clear and record it first.
+
+**⚠ Approving is not the same as being paid.** It releases the order to the warehouse only. It does not receipt money, and it deliberately does **not** send purchase orders to suppliers — those wait until the payment is recorded, so we never commit a supplier on an unpaid order.
+
+The $30,000 figure is a portal setting, not baked in. Chris can move it without a software update.
 
 ### 4.1c Orders that were never paid for
 
@@ -545,6 +566,14 @@ The portal now recovers from this by itself. When the id stops resolving it look
 | Bank payment cleared, but it isn't in MYOB | Open the order and press **Receipt payment in MYOB** (Summary, where "Check if payment cleared" normally sits). Safe to press twice. It should be rare — the six-hourly check applies these on its own and notifies you when it has. |
 | Rates look wrong | Admin → B2B → Settings → freight zones / carriers / packaging. Drop-ship rates have their own calibration panel. |
 
+### 4.3aa Freight prices are live carrier rates only
+
+From **2 September 2026** there is **no manual freight pricing**. The portal quotes live carrier rates or it says it cannot quote.
+
+It used to fall back to hand-typed postcode rates whenever the live quote failed — which is the worst moment to be guessing, and there was nothing on screen to say the price was months old rather than real. Now an unavailable quote reads as exactly that, and the office prices the job.
+
+**⚠ Settings → Drop-ship Zones is not a pricing screen.** Those zones exist to price **drop-ship** items, which ship direct from the supplier and can never be quoted live. The prices themselves live on each product: **Catalogue → the item → Drop-ship freight**. Deleting a zone removes a column from every drop-ship product's price grid — it is not the same as deleting a rate.
+
 ### 4.3a Pallet options (Admin → B2B → Settings → Freight packaging)
 
 You can configure **as many pallets as you actually ship on**, not just one. Each has a name, a deck size, the tallest stack you will build on it, and a max weight. Add a *Half pallet* alongside the standard one and the system will use whichever suits the order.
@@ -672,6 +701,29 @@ Admin → B2B → **Test Order** runs a real order end to end against a distribu
 
 **⚠ Locked-period invoices are never silently re-dated.** They flag, and you decide.
 
+**Accounts is Jarred (Financial Manager) with Danielle assisting**, from September 2026.
+
+### 5.1a The same bill in both companies
+
+**2 September 2026.** A JMACX invoice was paid **twice** — once in JAWS, where it was sitting as a purchase order, and again in Just Autos after JMACX sent a second copy to the wrong inbox. Nothing on our side could have caught it.
+
+Before an invoice is entered, the portal now searches **both company files** — bills *and* purchase orders — for the same invoice already being there. If it finds one:
+
+- The card says **"possible double-up across companies"** and names the document it found, in which company, with its date and amount.
+- **There is no Approve button.** This is the one flag you cannot vouch for from the card, because the evidence is in the other company's file, which is not in front of you. Check both files, and if the invoice is genuinely new, enter it by hand and mark the card with **Entered manually?**.
+- The same applies when the check **could not finish** (MYOB unreachable). "We didn't find one" and "we couldn't look" are not the same thing, and neither gets a button.
+
+### 5.1b An invoice billed to the other company
+
+If a bill is addressed to one company and arrives in the other's inbox, the portal reads who it is billed to off the document itself and acts on that, not on which mailbox it landed in.
+
+- The card carries a 🔀 line: *"Invoiced to Just Autos Wholesale but arrived in the accounts@justautosmechanical.com.au inbox"*, and says which signal decided it.
+- **The email is forwarded to the right company's accounts inbox**, once per email however many invoices are attached.
+- **For Just Autos Wholesale, nothing is entered.** Wholesale invoices are only ever entered from the **"Portal Invoices"** folder, because the wholesale inbox also carries invoices against open purchase orders and stock receival that must not be posted automatically. The forwarded email says so. If the invoice should be paid by Wholesale, **drag it into that folder** and the portal enters it from there with all the usual checks. If it belongs to a purchase order or a stock receival, handle it as you normally would and leave it out of the folder.
+- The inbox it came *from* gets a short Slack note saying where it went, so it does not simply vanish.
+
+**⚠ An invoice that just says "Just Autos" is not routed anywhere.** That is the trading name both companies answer to, so guessing would be a coin toss — it stays in the inbox it arrived in and the cross-company check above is what protects it.
+
 ### 5.2 The Slack flag card — what the buttons do
 
 Every invoice the automation won't post itself lands as an orange card in the AP Slack channel, with the reason and a link to the PDF. The buttons:
@@ -691,7 +743,7 @@ If nothing exact turns up but MYOB holds a bill for the **same supplier at the s
 
 ### 5.3 Duplicates
 
-Suspected double-ups are marked with ♻ and posted to Slack rather than entered twice. Check the original before dismissing.
+Suspected double-ups are marked with ♻ and posted to Slack rather than entered twice. Check the original before dismissing. Double-ups **across the two companies** are §5.1a — those get no Approve button at all.
 
 ### 5.4 Supplier statements
 
@@ -739,7 +791,11 @@ Two faults were found and fixed on 20 August 2026. If you see either shape again
 
 ## 7. Phone calls and coaching
 
-**Phone Calls** lists every call with audio and transcript, plus coaching analysis scored against a rubric for that call type. Tabs cover sentiment, coaching, word usage and conversion. A team coaching summary posts to Slack on Monday mornings.
+**Phone Calls** lists every call with audio and transcript, plus coaching analysis scored against a rubric for that call type. A team coaching summary posts to Slack on Monday mornings, and the day's coaching is folded into the 5:15pm sales update (§4.1e-h).
+
+**Changed 1 September 2026.** The Sentiment, Coaching, Words & Objections and Conversion tabs were removed. **Selecting an advisor on the left now filters the panel** — total calls, inbound, outbound, talk time — which it had never actually done before, so if you tried it in the past and nothing happened, that was a fault rather than you.
+
+**Missed-call notifications during a live ring-group call were fixed on 1 September 2026.** You could get a “missed call” alert for a call somebody was in the middle of answering. If you still see one, note the time and tell Chris — the bell corrects itself when the call ends, but it should not appear at all.
 
 Supervisors with permission can **Listen**, **Whisper** (only the rep hears you) or **Barge** (join the call) live.
 
@@ -748,6 +804,15 @@ Click-to-dial is available where enabled.
 ---
 
 ## 8. Reports
+
+### 8.0 The tabs changed on 2 September 2026
+
+Reports went from nine tabs to seven.
+
+- **The first tab, "Reports", is gone.** It was the auto-generated AI report builder. The old address still works — it takes you to the Sales Report.
+- **Workshop Map and Distributor Map are now one tab called "Maps".** Everything the Distributor Map showed you is on the **Quotes Map** inside it — see §8.6. An old Distributor Map link will land you in the right place.
+
+Nothing else moved, and nobody lost access to anything they had.
 
 ### 8.1 Weekly Sales Recap
 
@@ -957,6 +1022,14 @@ The **Units** column in Top movers and Margin earners is now labelled **Sold uni
 
 **⚠ Old reports keep their old figures until rebuilt.** The screen, the PDF and the email all serve the stored snapshot, so July's report still shows 1.17 for that SKU. Press **Rebuild from MYOB** on any month you want recalculated the new way.
 
+### 8.10 Weekly Marketing Report
+
+Emailed to Murph at 07:00 Monday from **2 September 2026**. Four sections: enquiries by channel (last week against the week before), demand with no distributor nearby, what people are asking for by vehicle, and where the enquiries come from.
+
+**⚠ Only the enquiry table is weekly.** Everything else is financial-year-to-date, and the email says so on itself. The underlying quote data carries a month, not a day, so a genuinely weekly figure for those sections is not available — do not read them as "last week".
+
+---
+
 ## 9. Tasks, projects and messages
 
 - **Tasks** — board and list views, with automations you draw as a flow diagram.
@@ -1009,6 +1082,12 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | An AP email produced TWO Slack cards that disagree | Fixed 1 September 2026 — an "own document"/quote card used to be followed by a "nothing entered" card calling the same document unreadable | If you see it again, send the pair to Chris; the second card is the wrong one |
 | A supplier STATEMENT was treated as an invoice | Fixed 1 September 2026 — the guard only looked for the word "statement", so a file named `Stmt_...` slipped through and was flagged as a bill | Statements are now recognised by name *or* by reading the document. If one still gets flagged, don't approve it — send it to Chris |
 | MYOB B2B invoice numbers skip one or more values | An order was abandoned at checkout or cancelled — it reserved the number and never produced a document | Nothing to fix. Search the number in Admin → B2B → Orders to confirm which order it was |
+| An AP card has **no Approve & post button** | Deliberate, from 2 September 2026 — the invoice may already be entered in the *other* company, or the check could not finish | Check both company files. If it is genuinely new, enter it by hand and press **Entered manually?**. Do not look for a way around the missing button |
+| A wholesale invoice was forwarded but nothing was entered | Deliberate — Just Autos Wholesale invoices are only entered from the **"Portal Invoices"** folder | If it should be paid by Wholesale, drag the email into that folder. If it belongs to a purchase order or stock receival, handle it as normal and leave it out |
+| The cart says freight cannot be quoted | From 2 September 2026 there is no hand-typed fallback — the carrier did not return a rate | Quote it from the office. Check MachShip on Admin → Connections if it keeps happening |
+| A distributor will not delete | They still have orders, tune jobs, training attempts or tune aliases — deleting would take that history with it | The message names what is holding it. Switch **Active** off instead: they keep their records and disappear from the ordering side |
+| A cancelled order will not delete | It touched something real — a MYOB document, a payment, a refund, booked freight, or a supplier PO | The message says which. Only an order that never became anything can be deleted; the rest stay cancelled |
+| The date picker will not open a calendar | Fixed 2 September 2026 — on the dark theme the calendar icon was being drawn almost invisibly | Click anywhere in the date field now, not just the icon |
 | Order page shows a MYOB write error mentioning a duplicate number | The document was already created in MYOB on an earlier attempt; the retry reused the same number | Find the document in MYOB by that number, confirm it is right, and have it linked to the order rather than posting a second one |
 | A drop-ship supplier PO arrived numbered `00001382` instead of ours | MYOB rejected our number (usually a duplicate) and fell back to its own sequence | Quote the MYOB PO number to the supplier for that one PO, and check whether two POs on the order ended up with the same number |
 | 5:15pm post has sales figures but no coaching section | Nothing scored in the 4:30→4:30 window, or the coaching build failed | `coaching.reason` on `/api/admin/sales-update-preview`. The figures are unaffected by design |
@@ -1040,6 +1119,14 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | **Ship now** fails with "CompanyId is required" | The portal could not work out which MachShip account owns the consignment | Fixed 2026-08-27 — it now reads that from the order itself. If it ever returns, the message will name what to do: set the fallback in Admin → B2B → Settings, or re-book the freight. **Do not keep pressing Ship now** — each attempt is a fresh manifest attempt |
 | Someone can't see a tab | Permissions, working as designed | Ask Chris |
 
+**Never work around a missing Approve button on an AP card.** It is missing because the same invoice may already be entered in the other company. That is how a bill gets paid twice, and it has happened.
+
+**An order of $30,000 or more is not paid when you approve it.** Approving releases it to the warehouse. Wait for the bank transfer and record it before anything leaves.
+
+**Deactivate, don't delete.** A distributor who has ever traded cannot be deleted, and should not be — switching Active off keeps their history and takes them off the ordering side.
+
+**A quoted freight price is now always a real carrier rate.** If the portal says it cannot quote, quote it from the office — do not go looking for the old zone rates, they no longer price anything.
+
 **Where to look first, always:** Admin → Connections. It shows every integration and when it last succeeded.
 
 ---
@@ -1057,8 +1144,34 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Per-person reply-to address on outgoing mail | Settings → Users |
 | Leave approval emails — switch, HR address, staff directory, who was emailed | Settings → Leave Notifications (§9a) |
 | Who gets the month-end stock email | Settings → Integrations → `JAWS_EOM_EMAIL_TO` (comma-separated) |
+| Who gets the Monday marketing report | Settings → Integrations → `marketing_report_recipients` (comma-separated) |
+
+**Settings tiles removed on 2 September 2026**: Workshop, Imports, Backfill, Audit Log and Data Imports — none were being used. The **default date range** setting went too: it saved your choice and nothing in the portal ever read it, so it was a control that did nothing rather than one that was broken.
 
 ---
+
+### Distributors on the Maps (2 September 2026)
+
+**Quotes Map → Show areas.** Puts every distributor on the map with a circle around them, and tells you how much of our quoting falls inside somebody's patch. Pick the radius — 50, 100, 150 or 200 km — and you get two lines:
+
+- the totals: how many quotes (and how much) fall **inside** an area versus **outside** one;
+- then one pill per distributor with their own count. Click a pill to fly to them; click **Outside every area** to see the quotes in nobody's territory, which are usually the interesting ones.
+
+Where two circles overlap, the **nearer** distributor takes the quote, so nothing is counted twice. Our own workshop is on the map too and competes the same way — otherwise every Sunshine Coast quote would look like it belonged to whichever distributor happened to be closest.
+
+The counts follow whatever month, vehicle and state filters you have set, so the numbers always describe the dots on screen.
+
+**Jobs Map → Show tunes.** Puts each distributor on the map with the tunes they carried out, broken down by model. Those pins are **square and outlined**, not round like the customer dots — a distributor pin is work counted against their premises, not demand at that address, and one pin can carry 130 jobs.
+
+**⚠ One car is one job.** A car tuned twice in the year counts once. The card shows the job count with a quiet line underneath saying how many were return visits.
+
+**Conversion → Just Autos / Distributors / Both.** Three tabs where there used to be a tick box:
+
+- **Just Autos** — the workshop on its own. This is the tab to judge the workshop on.
+- **Both** — combined, broken out underneath so you can see which half is which.
+- **Distributors** — their jobs by model, converted against the Just Autos quotes within the radius you choose.
+
+**⚠ A combined conversion % flatters the workshop**, because distributor tunes never had a workshop quote behind them. And a distributor's own conversion is measured against *our* quotes near them, which is the only denominator that exists — read it as how busy their territory is, not as how well they close. Over 100% is real: it means they tuned more cars than we quoted near them, off their own customers.
 
 ### What a quote figure on the Workshop Map means
 
