@@ -1,5 +1,5 @@
 // components/b2b/FreightZonesManager.tsx
-// Admin UI for B2B freight zones + their rates. Mounted on
+// Admin UI for the B2B freight ZONES. Mounted on
 // /admin/b2b/settings under a "Freight" section. Each zone holds 1+
 // rates (e.g. Standard, Express). Postcode ranges are entered as a
 // comma-separated string ("4000-4179, 4500-4999, 4600") and parsed by
@@ -73,7 +73,9 @@ export default function FreightZonesManager() {
   }
 
   async function deleteZone(z: FreightZone) {
-    if (!(await confirmDialog({ title: `Delete freight zone "${z.name}" and its ${z.rates.length} rate${z.rates.length === 1 ? '' : 's'}?`, danger: true }))) return
+    // Deleting a zone removes a COLUMN from every drop-ship product's freight
+    // grid, which is a bigger deal than losing a rate row and should say so.
+    if (!(await confirmDialog({ title: `Delete freight zone "${z.name}"?`, message: 'Any drop-ship product priced for this zone loses that price, and orders shipping to these postcodes will have no drop-ship freight.', danger: true }))) return
     setBusy(z.id); setError('')
     try {
       const r = await fetch(`/api/b2b/admin/freight-zones?id=${z.id}`, { method: 'DELETE' })
@@ -92,8 +94,10 @@ export default function FreightZonesManager() {
         </Btn>
       </div>
       <div style={{fontSize:12.5, color:T.text3, marginBottom:14, lineHeight:1.5}}>
-        Distributors at checkout see the rates from the first matching zone (by sort order). Postcode ranges:
-        e.g. <code style={{color:T.text2, fontSize:12}}>4000-4179, 4500-4999, 4600</code>.
+        These zones are the COLUMNS of each drop-ship product&apos;s freight grid — set the actual prices on the
+        product itself, under Catalogue → the item → Drop-ship freight. Nothing is priced here.
+        Warehouse freight is live carrier rates only and ignores these zones entirely.
+        Postcode ranges: e.g. <code style={{color:T.text2, fontSize:12}}>4000-4179, 4500-4999, 4600</code>.
       </div>
 
       {error && (
@@ -188,110 +192,12 @@ function ZoneRow({ zone, busy, onPatch, onDelete, onChange }: {
       </div>
       {err && <div style={{marginTop:6, fontSize:12, color:A.bad}}>{err}</div>}
 
-      <RatesEditor zoneId={zone.id} rates={zone.rates} onChange={onChange}/>
     </div>
   )
 }
 
 // ── Rates within a zone ────────────────────────────────────────────────
 
-function RatesEditor({ zoneId, rates, onChange }: { zoneId: string; rates: FreightRate[]; onChange: () => void }) {
-  const confirmDialog = useConfirm()
-  const [adding, setAdding] = useState(false)
-  const [newLabel, setNewLabel] = useState('')
-  const [newPrice, setNewPrice] = useState('')
-  const [newDays, setNewDays] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-
-  async function addRate() {
-    if (!newLabel.trim() || !newPrice) { setErr('Label + price required'); return }
-    setBusy(true); setErr('')
-    try {
-      const r = await fetch('/api/b2b/admin/freight-rates', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({
-          zone_id: zoneId,
-          label: newLabel.trim(),
-          price_ex_gst: Number(newPrice),
-          transit_days: newDays ? Number(newDays) : null,
-          sort_order: rates.length,
-        }),
-      })
-      if (!r.ok) throw new Error((await r.json()).error || 'Add failed')
-      setNewLabel(''); setNewPrice(''); setNewDays(''); setAdding(false)
-      onChange()
-    } catch (e: any) { setErr(e.message) }
-    finally { setBusy(false) }
-  }
-
-  async function patchRate(id: string, body: Record<string, any>) {
-    setBusy(true); setErr('')
-    try {
-      const r = await fetch(`/api/b2b/admin/freight-rates?id=${id}`, {
-        method: 'PATCH', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(body),
-      })
-      if (!r.ok) throw new Error((await r.json()).error || 'Update failed')
-      onChange()
-    } catch (e: any) { setErr(e.message) }
-    finally { setBusy(false) }
-  }
-
-  async function deleteRate(rate: FreightRate) {
-    if (!(await confirmDialog({ title: `Delete rate "${rate.label}"?`, danger: true }))) return
-    setBusy(true); setErr('')
-    try {
-      const r = await fetch(`/api/b2b/admin/freight-rates?id=${rate.id}`, { method: 'DELETE' })
-      if (!r.ok) throw new Error((await r.json()).error || 'Delete failed')
-      onChange()
-    } catch (e: any) { setErr(e.message) }
-    finally { setBusy(false) }
-  }
-
-  return (
-    <div style={{marginTop:10, paddingLeft:8, borderLeft:`2px solid ${T.border}`}}>
-      <div style={{fontSize:12, color:T.text2, fontWeight:650, marginBottom:6}}>Rates</div>
-
-      {rates.length === 0 && (
-        <div style={{fontSize:12, color:T.text3, padding:'4px 0', fontStyle:'italic'}}>No rates yet — add at least one.</div>
-      )}
-
-      {rates.map(r => (
-        <div key={r.id} style={{display:'flex', alignItems:'center', gap:8, padding:'4px 0', fontSize:12.5}}>
-          <span style={{color:T.text, minWidth:120}}>{r.label}</span>
-          <span style={{fontFamily:'monospace', fontSize:12, color:T.text2, minWidth:80}}>${r.price_ex_gst.toFixed(2)} ex</span>
-          <span style={{color:T.text3, minWidth:90}}>
-            {r.transit_days != null ? `${r.transit_days}d transit` : '—'}
-          </span>
-          <label style={{fontSize:12, color:T.text2, display:'flex', alignItems:'center', gap:4, cursor:'pointer'}}>
-            <input type="checkbox" checked={r.is_active} disabled={busy}
-              onChange={e => patchRate(r.id, { is_active: e.target.checked })}/>
-            Active
-          </label>
-          <span style={{flex:1}}/>
-          <button onClick={() => deleteRate(r)} disabled={busy} className="al-press al-focus al-ghost" style={dangerBtn}>Delete</button>
-        </div>
-      ))}
-
-      {adding ? (
-        <div style={{display:'flex', alignItems:'center', gap:8, padding:'6px 0', flexWrap:'wrap'}}>
-          <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="e.g. Standard" style={inp(140)} autoFocus/>
-          <input value={newPrice} onChange={e => setNewPrice(e.target.value)} placeholder="Price ex GST" type="number" step="0.01" style={inp(110)}/>
-          <input value={newDays} onChange={e => setNewDays(e.target.value)} placeholder="Days" type="number" style={inp(70)}/>
-          <Btn size="sm" onClick={addRate} disabled={busy}>{busy ? 'Adding…' : 'Add'}</Btn>
-          <Btn variant="ghost" size="sm" onClick={() => { setAdding(false); setNewLabel(''); setNewPrice(''); setNewDays('') }} disabled={busy}>Cancel</Btn>
-        </div>
-      ) : (
-        <div style={{marginTop:4}}>
-          <Btn variant="ghost" size="sm" onClick={() => setAdding(true)}>+ Add rate</Btn>
-        </div>
-      )}
-
-      {err && <div style={{fontSize:12, color:A.bad, marginTop:4}}>{err}</div>}
-    </div>
-  )
-}
 
 // ── Add new zone form ──────────────────────────────────────────────────
 
