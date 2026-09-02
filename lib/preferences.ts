@@ -25,13 +25,6 @@ export type GstDisplay = 'inc' | 'ex'
 export type Theme = 'dark' | 'light' | 'auto'
 export type AccentColor = 'blue' | 'green' | 'purple' | 'amber' | 'teal'
 export type ThemePreset = 'midnight' | 'ocean' | 'forest' | 'slate'
-export type DateRangeKey =
-  | 'this_month' | 'last_month'
-  | 'this_quarter'
-  | 'this_fy' | 'last_fy'
-  | 'ytd'
-  | 'custom'
-
 export interface NavGroup {
   id: string
   name: string
@@ -41,7 +34,6 @@ export interface NavGroup {
 
 export interface UserPreferences {
   gst_display: GstDisplay
-  default_date_range: DateRangeKey
   auto_refresh_seconds: 0 | 300 | 900 | 3600
   timezone: string
   decimal_precision: 0 | 2
@@ -73,7 +65,6 @@ export interface UserPreferences {
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   gst_display: 'ex',
-  default_date_range: 'this_month',
   auto_refresh_seconds: 0,
   timezone: 'Australia/Brisbane',
   decimal_precision: 0,
@@ -172,15 +163,6 @@ export const THEME_PRESETS: Record<ThemePreset, ThemePresetSpec> = {
 }
 
 // Human labels for UI (alphabetical locale list kept short; extend if needed)
-export const DATE_RANGE_LABELS: Record<DateRangeKey, string> = {
-  this_month:   'This month',
-  last_month:   'Last month',
-  this_quarter: 'This quarter',
-  this_fy:      'This financial year',
-  last_fy:      'Last financial year',
-  ytd:          'Year-to-date (calendar)',
-  custom:       'Custom (remember last used)',
-}
 
 export const REFRESH_LABELS: Record<number, string> = {
   0:    'Off',
@@ -284,56 +266,6 @@ export function formatDate(
   return new Intl.DateTimeFormat(prefs.locale, base).format(d)
 }
 
-// Compute the actual start/end dates for a DateRangeKey relative to `now`.
-// Assumes Australian financial year (July 1 – June 30). Returns ISO date strings
-// (YYYY-MM-DD) for use in SQL queries.
-export function computeDateRange(key: DateRangeKey, now: Date = new Date()): { startDate: string; endDate: string } {
-  const y = now.getFullYear()
-  const m = now.getMonth() // 0-indexed
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-
-  switch (key) {
-    case 'this_month': {
-      const start = new Date(y, m, 1)
-      const end = new Date(y, m + 1, 0) // last day of month
-      return { startDate: iso(start), endDate: iso(end) }
-    }
-    case 'last_month': {
-      const start = new Date(y, m - 1, 1)
-      const end = new Date(y, m, 0)
-      return { startDate: iso(start), endDate: iso(end) }
-    }
-    case 'this_quarter': {
-      const qStart = Math.floor(m / 3) * 3
-      const start = new Date(y, qStart, 1)
-      const end = new Date(y, qStart + 3, 0)
-      return { startDate: iso(start), endDate: iso(end) }
-    }
-    case 'this_fy': {
-      // AU FY: July 1 of (y if m>=6 else y-1) to June 30 of (y+1 if m>=6 else y)
-      const fyStartYear = m >= 6 ? y : y - 1
-      const start = new Date(fyStartYear, 6, 1)       // 1 July
-      const end = new Date(fyStartYear + 1, 5, 30)    // 30 June
-      return { startDate: iso(start), endDate: iso(end) }
-    }
-    case 'last_fy': {
-      const fyStartYear = m >= 6 ? y - 1 : y - 2
-      const start = new Date(fyStartYear, 6, 1)
-      const end = new Date(fyStartYear + 1, 5, 30)
-      return { startDate: iso(start), endDate: iso(end) }
-    }
-    case 'ytd': {
-      // Calendar YTD: 1 Jan of current year to today
-      const start = new Date(y, 0, 1)
-      return { startDate: iso(start), endDate: iso(now) }
-    }
-    case 'custom':
-    default:
-      // Fallback to this_month so callers never get undefined
-      return computeDateRange('this_month', now)
-  }
-}
 
 // ── React hook + provider ────────────────────────────────────────────────
 

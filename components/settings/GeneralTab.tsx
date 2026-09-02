@@ -5,14 +5,12 @@
 import { useState } from 'react'
 import {
   usePreferences,
-  DATE_RANGE_LABELS,
   REFRESH_LABELS,
   TIMEZONE_OPTIONS,
   LOCALE_OPTIONS,
   ACCENT_HEX,
   ACCENT_LABELS,
   THEME_PRESETS,
-  type DateRangeKey,
   type Theme,
   type AccentColor,
   type ThemePreset,
@@ -210,19 +208,6 @@ export default function GeneralTab() {
 
       {/* ── BEHAVIOUR ─────────────────────────────────────────────────── */}
       <SettingsCard title="Dashboard behaviour" description="Defaults applied when you open pages.">
-
-        <Field
-          label="Default date range"
-          help="Applied when you open a dashboard or report without selecting a custom range."
-          saving={saving === 'default_date_range'}
-          saved={savedFlash === 'default_date_range'}
-        >
-          <Select
-            value={prefs.default_date_range}
-            options={Object.entries(DATE_RANGE_LABELS).map(([k, v]) => ({ value: k, label: v }))}
-            onChange={v => save({ default_date_range: v as DateRangeKey }, 'default_date_range')}
-          />
-        </Field>
 
         <Field
           label="Auto-refresh"

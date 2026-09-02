@@ -20,7 +20,6 @@ function getAdmin() {
 // Prevents users from setting arbitrary columns (e.g. user_id, created_at).
 const PATCHABLE_KEYS = new Set([
   'gst_display',
-  'default_date_range',
   'auto_refresh_seconds',
   'timezone',
   'decimal_precision',

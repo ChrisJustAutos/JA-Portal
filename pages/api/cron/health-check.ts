@@ -30,6 +30,7 @@ import { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch } from '../../../lib/myob'
 import { listActiveSubscriptions, StoredSubscription } from '../../../lib/microsoft-graph'
+import { getIntegrations } from '../../../lib/integration-config'
 
 // ── Types ───────────────────────────────────────────────────────────────
 type Status = 'green' | 'yellow' | 'red'
@@ -517,6 +518,147 @@ async function checkVercel(): Promise<CheckResult> {
 }
 
 
+// ── Stripe (live API) ───────────────────────────────────────────────────
+// /v1/balance is read-only, cheap, and proves the key is valid for THIS
+// account rather than merely present in the environment.
+async function checkStripe(): Promise<CheckResult> {
+  const key = process.env.STRIPE_SECRET_KEY
+  if (!key) return { status: 'red', error: 'STRIPE_SECRET_KEY not set in environment' }
+  try {
+    const start = Date.now()
+    const res = await fetch('https://api.stripe.com/v1/balance', { headers: { Authorization: `Bearer ${key}` } })
+    const latencyMs = Date.now() - start
+    if (!res.ok) {
+      const t = await res.text().catch(() => '')
+      return { status: 'red', error: `HTTP ${res.status} ${t.slice(0, 120)}`, metadata: { latencyMs } }
+    }
+    // Which MODE the key is in belongs on the page: a test key in production
+    // takes payments that never arrive. That happened in August.
+    return { status: 'green', metadata: { latencyMs, mode: key.startsWith('sk_live') ? 'live' : 'TEST' } }
+  } catch (e: any) {
+    return { status: 'red', error: (e?.message || String(e)).slice(0, 200) }
+  }
+}
+
+// ── Resend (live API) ───────────────────────────────────────────────────
+// Everything the portal emails goes through this. /domains validates the key
+// and shows whether the sending domain is still verified.
+async function checkResend(): Promise<CheckResult> {
+  try {
+    const cfg = await getIntegrations(['RESEND_API_KEY'])
+    const key = cfg.RESEND_API_KEY
+    if (!key) return { status: 'yellow', error: 'No Resend key - email falls back to MS Graph' }
+    const start = Date.now()
+    const res = await fetch('https://api.resend.com/domains', { headers: { Authorization: `Bearer ${key}` } })
+    const latencyMs = Date.now() - start
+    if (!res.ok) return { status: 'red', error: `HTTP ${res.status}`, metadata: { latencyMs } }
+    const json: any = await res.json().catch(() => null)
+    const domains: any[] = Array.isArray(json?.data) ? json.data : []
+    const verified = domains.filter(d => d?.status === 'verified').map(d => d.name)
+    if (domains.length && !verified.length) {
+      return {
+        status: 'yellow',
+        error: 'No verified sending domain - mail will bounce',
+        metadata: { latencyMs, domains: domains.map(d => `${d.name}:${d.status}`) },
+      }
+    }
+    return { status: 'green', metadata: { latencyMs, verified } }
+  } catch (e: any) {
+    return { status: 'red', error: (e?.message || String(e)).slice(0, 200) }
+  }
+}
+
+// ── Anthropic (live API) ────────────────────────────────────────────────
+// The AP invoice reader, the call coaching and the recap flags all depend on
+// this. /v1/models is a GET and costs nothing.
+async function checkAnthropic(): Promise<CheckResult> {
+  const key = process.env.ANTHROPIC_API_KEY
+  if (!key) return { status: 'red', error: 'ANTHROPIC_API_KEY not set in environment' }
+  try {
+    const start = Date.now()
+    const res = await fetch('https://api.anthropic.com/v1/models?limit=1', {
+      headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    })
+    const latencyMs = Date.now() - start
+    if (res.status === 401) return { status: 'red', error: 'Key rejected (401)', metadata: { latencyMs } }
+    if (!res.ok) return { status: 'red', error: `HTTP ${res.status}`, metadata: { latencyMs } }
+    return { status: 'green', metadata: { latencyMs } }
+  } catch (e: any) {
+    return { status: 'red', error: (e?.message || String(e)).slice(0, 200) }
+  }
+}
+
+// ── Xero (token freshness) ──────────────────────────────────────────────
+// Derived rather than called, deliberately. Xero ROTATES the refresh token on
+// every use, so a health check that refreshed one could invalidate the token
+// the next real request was about to use. It reads the stored connection
+// instead, which is the thing that actually breaks.
+async function checkXero(): Promise<CheckResult> {
+  try {
+    const { data, error } = await sb()
+      .from('xero_connections')
+      .select('tenant_name, access_expires_at, last_refreshed_at, updated_at')
+      .order('updated_at', { ascending: false })
+    if (error) return { status: 'red', error: error.message.slice(0, 200) }
+    const rows = (data || []) as any[]
+    if (!rows.length) return { status: 'yellow', error: 'Not connected - the MYOB to Xero move has not been authorised yet' }
+    // A refresh token lasts ~60 days from last use. Nothing calling Xero means
+    // nothing refreshing it, which is how the connection dies quietly.
+    const newest = rows[0]
+    const stamp = newest.last_refreshed_at || newest.updated_at
+    const ageDays = stamp ? Math.floor((Date.now() - new Date(stamp).getTime()) / 86400000) : null
+    const tenants = rows.map(r => r.tenant_name).filter(Boolean)
+    if (ageDays != null && ageDays > 45) {
+      return {
+        status: 'yellow',
+        error: `Token last refreshed ${ageDays} days ago - Xero expires an unused refresh token at 60`,
+        metadata: { tenants, ageDays },
+      }
+    }
+    return { status: 'green', metadata: { tenants, ageDays } }
+  } catch (e: any) {
+    return { status: 'red', error: (e?.message || String(e)).slice(0, 200) }
+  }
+}
+
+// ── MachShip (config + recent use) ──────────────────────────────────────
+// NOT a live call. MachShip's read routes are unreliable - GET
+// /apiv2/consignments/{id} is a dead route - and its write routes book real
+// freight, so there is nothing safe to ping every five minutes. This checks
+// that the credentials exist and are enabled, and reports when freight was
+// last actually booked, which is what would go quiet if it broke.
+async function checkMachship(): Promise<CheckResult> {
+  try {
+    const { data: conn, error } = await sb()
+      .from('b2b_freight_carrier_connections')
+      .select('credentials, is_active')
+      .eq('provider', 'machship')
+      .maybeSingle()
+    if (error) return { status: 'red', error: error.message.slice(0, 200) }
+    if (!conn) return { status: 'red', error: 'No MachShip connection row - add credentials in B2B Settings' }
+    if (!conn.is_active) return { status: 'yellow', error: 'MachShip connection is disabled' }
+    if (!(conn.credentials as any)?.api_token) return { status: 'red', error: 'Connection row has no api_token' }
+
+    const { data: last } = await sb()
+      .from('b2b_orders')
+      .select('machship_consignment_id, shipped_at')
+      .not('machship_consignment_id', 'is', null)
+      .order('shipped_at', { ascending: false })
+      .limit(1)
+    const lastShip = ((last || []) as any[])[0]
+    return {
+      status: 'green',
+      metadata: {
+        mode: 'config-check',
+        note: 'Credentials present and enabled; MachShip has no safe read endpoint to ping',
+        lastConsignmentAt: lastShip?.shipped_at || null,
+      },
+    }
+  } catch (e: any) {
+    return { status: 'red', error: (e?.message || String(e)).slice(0, 200) }
+  }
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // CHECK REGISTRY
 // ════════════════════════════════════════════════════════════════════════
@@ -526,7 +668,12 @@ async function checkVercel(): Promise<CheckResult> {
 // which meant a check with no row ran every five minutes and had its result
 // thrown away in silence. slack_webhooks had been doing exactly that.
 const CHECK_META: Record<string, { category: string; display_name: string }> = {
-  slack_webhooks: { category: 'comms', display_name: 'Slack' },
+  slack_webhooks: { category: 'comms',      display_name: 'Slack' },
+  stripe:         { category: 'payments',   display_name: 'Stripe (B2B payments)' },
+  machship:       { category: 'freight',    display_name: 'MachShip' },
+  xero:           { category: 'accounting', display_name: 'Xero' },
+  resend:         { category: 'comms',      display_name: 'Resend (outbound email)' },
+  anthropic:      { category: 'ai',         display_name: 'Anthropic (invoice reading, coaching)' },
 }
 
 const CHECKS: Record<string, () => Promise<CheckResult>> = {
@@ -549,6 +696,13 @@ const CHECKS: Record<string, () => Promise<CheckResult>> = {
   // CRM
   monday:                checkMonday,
   activecampaign:        checkActiveCampaign,
+  // Payments / freight / AI - all live in the portal, none of them monitored
+  // until now (Chris 2026-09-02: "update the connections area").
+  stripe:                checkStripe,
+  machship:              checkMachship,
+  xero:                  checkXero,
+  resend:                checkResend,
+  anthropic:             checkAnthropic,
   // Phone
   deepgram:              checkDeepgram,
   freepbx_cdr_sync:      checkFreepbxCdrSync,
