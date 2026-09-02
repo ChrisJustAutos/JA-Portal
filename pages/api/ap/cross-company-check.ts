@@ -22,7 +22,10 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../lib/authServer'
 import { findCrossCompanyDuplicate, describeCrossCompanyHit, type CompanyFileLabel } from '../../../lib/ap-cross-company'
 
-export const config = { maxDuration: 120 }
+// The full search is up to two company files x bill/order/quote x two layouts.
+// Omitting `amount` runs only the invoice-number net, which is both the
+// definitive one and far quicker.
+export const config = { maxDuration: 300 }
 
 export default withAuth('view:supplier_invoices', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'GET only' }) }
@@ -43,6 +46,7 @@ export default withAuth('view:supplier_invoices', async (req: NextApiRequest, re
   const entity: CompanyFileLabel = String(q.entity || 'VPS').toUpperCase() === 'JAWS' ? 'JAWS' : 'VPS'
   const dayWindow = q.days ? Number(q.days) : undefined
 
+  const startedAt = Date.now()
   try {
     const r = await findCrossCompanyDuplicate({
       postingTo: entity,
@@ -66,6 +70,7 @@ export default withAuth('view:supplier_invoices', async (req: NextApiRequest, re
           ? 'FLAGGED — the search could not complete, so a double-up cannot be ruled out.'
           : 'No match. This invoice would proceed on the cross-company check.',
       hits: r.hits.map(h => ({ ...h, summary: describeCrossCompanyHit(h) })),
+      tookMs: Date.now() - startedAt,
       searchIncomplete: r.incomplete,
       notes: r.notes,
     })

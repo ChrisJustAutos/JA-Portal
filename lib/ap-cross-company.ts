@@ -229,7 +229,13 @@ export async function findCrossCompanyDuplicate(args: {
         //     boundaries, which on a duplicate check means silently failing to
         //     find the duplicate. A wide window makes that a real risk rather
         //     than a theoretical one.
-        if (amount != null && amount >= AMOUNT_NET_MIN) {
+        // Once the strong net has found something in this file, the weak one can
+        // only add noise to a card that is already flagged RED - and the date
+        // scan is the expensive half. Skipping it keeps the common bad case
+        // (a real double-up) to one MYOB request per path instead of nine.
+        const numberHitHere = docs.some(d => supplierLooksSame(d?.Supplier?.Name, supplier)
+          && number && sameNumberLoose(d?.SupplierInvoiceNumber, number))
+        if (!numberHitHere && amount != null && amount >= AMOUNT_NET_MIN) {
           let truncated = true
           for (let skip = 0, page = 0; page < 8; page++, skip += 400) {
             let rd: any
