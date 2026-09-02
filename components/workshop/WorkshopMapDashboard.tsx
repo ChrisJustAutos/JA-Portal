@@ -885,6 +885,9 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
   comparisons: CompareYear[]
 }) {
   const [chart, setChart] = useState(false)
+  // Radius for the per-distributor conversion below — the same choices as the
+  // Quotes Map overlay, because it is the same question asked two ways.
+  const [radiusKm, setRadiusKm] = useState(100)
 
   // 'all' uses the authoritative precomputed conv (covers unmapped quotes/jobs too);
   // a state selection rebuilds the same structure from geocoded points only.
@@ -929,6 +932,44 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
     const qval = jaOn ? base.qval : {}
     return { qcount, qval, jcount }
   }, [base, dist, on, jaOn])
+
+  /**
+   * CONVERSION FOR A DISTRIBUTOR (Chris 2026-09-02): their tunes against the
+   * Just Autos quotes falling within a chosen radius of them.
+   *
+   * It is the only denominator there is. A distributor never raises a quote in
+   * our system, so without this their conversion is unanswerable - which is
+   * exactly what the Distributors tab said until now. Quotes near them are the
+   * closest stand-in for demand they had a chance at.
+   *
+   * Nearest distributor wins where radii overlap, so no quote is counted for
+   * two of them, and the figures reconcile with the Quotes Map overlay because
+   * it is the same rule applied to the same points.
+   */
+  const distConv = useMemo(() => {
+    const pins = dist?.byDistributor || []
+    if (!pins.length || st !== 'all') return null
+    const per = new Map<string, { quotes: number; value: number }>()
+    let inQuotes = 0, inValue = 0
+    for (const q of P.quotes.points) {
+      if (q.la == null || q.ln == null) continue
+      let best: DistributorTunePin | null = null, bestKm = Infinity
+      for (const d of pins) {
+        const km = haversineKm(q.la, q.ln, d.lat, d.lng)
+        if (km <= radiusKm && km < bestKm) { bestKm = km; best = d }
+      }
+      if (!best) continue
+      const e = per.get(best.name) || { quotes: 0, value: 0 }
+      e.quotes++; e.value += q.a; per.set(best.name, e)
+      inQuotes++; inValue += q.a
+    }
+    const rows = pins.map(d => {
+      const e = per.get(d.name) || { quotes: 0, value: 0 }
+      return { ...d, quotes: e.quotes, value: e.value, pct: e.quotes ? (100 * d.jobs) / e.quotes : null }
+    }).sort((a, b) => b.jobs - a.jobs)
+    const placedJobs = rows.reduce((a, r) => a + r.jobs, 0)
+    return { rows, inQuotes, inValue, placedJobs, pct: inQuotes ? (100 * placedJobs) / inQuotes : null }
+  }, [dist, P.quotes.points, radiusKm, st])
 
   const sum = (a: number[]) => a.reduce((x, y) => x + y, 0)
   const distTotalInCats = CK.reduce((s2, c) => s2 + distYear(c), 0)
@@ -986,8 +1027,17 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
           )}
         </div>
         <div className="card">
-          <div className="v" style={{ color: 'var(--wm-amber)' }}>{src === 'dist' ? '—' : `${tq ? (100 * tj / tq).toFixed(1) : '0'}%`}</div>
-          <div className="k">{src === 'dist' ? 'No quotes to convert' : 'Overall conversion'}</div>
+          <div className="v" style={{ color: 'var(--wm-amber)' }}>
+            {src === 'dist'
+              ? (distConv?.pct != null ? `${distConv.pct.toFixed(1)}%` : '—')
+              : `${tq ? (100 * tj / tq).toFixed(1) : '0'}%`}
+          </div>
+          <div className="k">{src === 'dist' ? `Conversion · quotes within ${radiusKm}km` : 'Overall conversion'}</div>
+          {src === 'dist' && distConv && (
+            <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }}>
+              {distConv.placedJobs.toLocaleString('en-AU')} tunes / {distConv.inQuotes.toLocaleString('en-AU')} quotes in range
+            </div>
+          )}
         </div>
         <div className="card"><div className="v">{fmtK(tv)}</div><div className="k">Total quoted</div></div>
       </div>
@@ -1066,6 +1116,52 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
             </tr>
           </tbody>
         </table>
+      )}
+
+      {on && distConv && (
+        <>
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            By distributor — full year
+            <span className="segbtns" style={{ marginLeft: 4 }}>
+              {[50, 100, 150, 200].map(r => (
+                <button key={r} className={radiusKm === r ? 'on' : ''} onClick={() => setRadiusKm(r)}>{r} km</button>
+              ))}
+            </span>
+          </h2>
+          <p className="distNote">
+            A distributor raises no quotes of their own, so their conversion is measured against the Just Autos quotes that
+            fall within {radiusKm} km of them — the closest stand-in for the demand they had a chance at. Where two areas
+            overlap the nearer distributor takes the quote, so nothing is counted twice, and the same rule drives the
+            Quotes Map overlay.
+            {(dist?.unlocated?.tunes || 0) > 0 && <> {dist!.unlocated!.tunes} tune{dist!.unlocated!.tunes === 1 ? '' : 's'} sit with distributors we have no location for, so they have no radius and are left out of this table.</>}
+          </p>
+          <table>
+            <thead><tr><th>Distributor</th><th>Quotes in {radiusKm}km</th><th>Quoted $</th><th>Tunes</th><th>Conv %</th></tr></thead>
+            <tbody>
+              {distConv.rows.map(r => (
+                <tr key={r.name}>
+                  <td className="veh">{r.name}{r.suburb ? <span style={{ color: 'var(--wm-muted2)' }}> · {r.suburb}</span> : null}</td>
+                  <td className="num">{r.quotes.toLocaleString('en-AU')}</td>
+                  <td className="num">{fmtK(r.value)}</td>
+                  <td className="num">{r.jobs.toLocaleString('en-AU')}</td>
+                  {/* Over 100% is real and worth seeing, not an error: they tuned
+                      more cars than we quoted near them — their own customers. */}
+                  <td className="num" style={{ color: r.pct == null ? 'var(--wm-muted)' : convColor(Math.min(r.pct, 100)) }}
+                    title={r.pct == null ? 'No Just Autos quotes within this radius — nothing to measure against' : `${r.jobs} tunes against ${r.quotes} quotes within ${radiusKm}km`}>
+                    {r.pct == null ? '—' : `${r.pct.toFixed(0)}%`}
+                  </td>
+                </tr>
+              ))}
+              <tr className="tot">
+                <td>Total</td>
+                <td className="num">{distConv.inQuotes.toLocaleString('en-AU')}</td>
+                <td className="num">{fmtK(distConv.inValue)}</td>
+                <td className="num">{distConv.placedJobs.toLocaleString('en-AU')}</td>
+                <td className="num">{distConv.pct == null ? '—' : `${distConv.pct.toFixed(0)}%`}</td>
+              </tr>
+            </tbody>
+          </table>
+        </>
       )}
 
       <h2>Conversion % by month <span style={{ color: 'var(--wm-muted2)', fontSize: 11, letterSpacing: 0, textTransform: 'none' }}>(cell = jobs / quotes)</span></h2>
