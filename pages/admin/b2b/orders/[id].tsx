@@ -875,10 +875,10 @@ function Timeline({ events }: { events: OrderEvent[] }) {
                 {' · '}{ev.actor_name}
               </div>
               {ev.notes && (
-                <div style={{color:T.text2,fontSize:12,marginTop:3,fontStyle:'italic',lineHeight:1.4}}>{ev.notes}</div>
+                <div style={{color:T.text2,fontSize:12,marginTop:3,fontStyle:'italic',lineHeight:1.4,overflowWrap:'anywhere',wordBreak:'break-word'}}>{ev.notes}</div>
               )}
               {ev.event_type === 'status_changed' && ev.metadata?.tracking_number && (
-                <div style={{color:T.text3,fontSize:12,marginTop:3,fontFamily:'monospace'}}>
+                <div style={{color:T.text3,fontSize:12,marginTop:3,fontFamily:'monospace',overflowWrap:'anywhere'}}>
                   {ev.metadata.carrier && `${ev.metadata.carrier} · `}{ev.metadata.tracking_number}
                 </div>
               )}
