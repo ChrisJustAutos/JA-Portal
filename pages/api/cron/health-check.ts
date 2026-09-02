@@ -24,7 +24,7 @@
 //   Heartbeat from data:  freepbx_cdr_sync, freepbx_transcribe, deepgram,
 //                         mechanics_desk
 //   Config-only:          slack_webhooks
-//   Self-evident:         vercel, cdata_mcp (deprecated)
+//   Self-evident:         vercel
 
 import { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
@@ -516,25 +516,23 @@ async function checkVercel(): Promise<CheckResult> {
   }
 }
 
-// ── CData MCP (deprecated) ──────────────────────────────────────────────
-async function checkCdataMcp(): Promise<CheckResult> {
-  return {
-    status: 'green',
-    metadata: {
-      mode: 'deprecated',
-      note: 'Replaced by direct MYOB OAuth (5 May 2026) — see myob_jaws / myob_vps',
-    },
-  }
-}
 
 // ════════════════════════════════════════════════════════════════════════
 // CHECK REGISTRY
 // ════════════════════════════════════════════════════════════════════════
+// Category and label for a check that has no integration_health row yet. The
+// write below UPSERTS, so a check added to the registry appears on the
+// Connections page by itself — it used to be a plain UPDATE keyed on name,
+// which meant a check with no row ran every five minutes and had its result
+// thrown away in silence. slack_webhooks had been doing exactly that.
+const CHECK_META: Record<string, { category: string; display_name: string }> = {
+  slack_webhooks: { category: 'comms', display_name: 'Slack' },
+}
+
 const CHECKS: Record<string, () => Promise<CheckResult>> = {
   // Accounting
   myob_jaws:             () => checkMyob('JAWS'),
   myob_vps:              () => checkMyob('VPS'),
-  cdata_mcp:             checkCdataMcp,
   // Workshop
   gh_actions_md_pull:    () => checkGhWorkflow('mechanicdesk-pull.yml'),
   gh_actions_stocktake:  () => checkGhWorkflow('mechanicdesk-stocktake.yml'),
@@ -635,8 +633,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       updated_at: r.ranAt,
     }
     if (r.status === 'green') update.last_success_at = r.ranAt
-    const { error } = await sb().from('integration_health').update(update).eq('name', r.name)
-    if (error) console.error(`health-check: failed to update ${r.name}:`, error.message)
+    // UPSERT, not update. A registered check with no row is a thing we believe
+    // we are monitoring and are not — the failure mode this whole page exists
+    // to prevent.
+    const meta = CHECK_META[r.name]
+    const { error } = await sb().from('integration_health').upsert({
+      name: r.name,
+      category: meta?.category || 'other',
+      display_name: meta?.display_name || r.name.replace(/_/g, ' '),
+      ...update,
+    }, { onConflict: 'name' })
+    if (error) console.error(`health-check: failed to write ${r.name}:`, error.message)
   }))
 
   const summary = { total: results.length, green: 0, yellow: 0, red: 0 }
