@@ -203,6 +203,33 @@ export interface GraphAttachmentMeta {
  * Returns false on 403/404 (the app may not be able to read every staff
  * mailbox) — callers treat that as "no signal", not proof of no contact.
  */
+/**
+ * Forward a message, attachments and all, to another mailbox.
+ *
+ * Graph cannot MOVE a message between mailboxes - moveMessageToFolder only
+ * works inside one - so a bill that landed in the wrong company's inbox is
+ * forwarded to the right one, which is what the accounts team actually needs:
+ * the document, in the mailbox that owns it (Chris 2026-09-02).
+ */
+export async function forwardMessage(
+  mailbox: string,
+  messageId: string,
+  to: string[],
+  comment: string,
+): Promise<void> {
+  const r = await graphFetch(`/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(messageId)}/forward`, {
+    method: 'POST',
+    body: JSON.stringify({
+      comment,
+      toRecipients: to.map(a => ({ emailAddress: { address: a } })),
+    }),
+  })
+  if (!r.ok) {
+    const t = await r.text().catch(() => '')
+    throw new Error(`Graph forward ${r.status}: ${t.slice(0, 300)}`)
+  }
+}
+
 export async function sentMailToSince(mailbox: string, toAddress: string, sinceIso: string): Promise<boolean> {
   const filter = encodeURIComponent(`sentDateTime ge ${sinceIso}`)
   const r = await graphFetch(

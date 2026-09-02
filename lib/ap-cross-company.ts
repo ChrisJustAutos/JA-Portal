@@ -63,7 +63,14 @@ export type CompanyFileLabel = 'JAWS' | 'VPS'
 const ENTITIES: CompanyFileLabel[] = ['JAWS', 'VPS']
 // Bill AND Order AND Quote: the JMACX copy sat at the order stage, which is
 // precisely what the old bill-only check could not see.
-const DOC_TYPES = ['Bill', 'Order', 'Quote'] as const
+// Bill AND Order. NOT Quote: /Purchase/Quote/{Service,Item} answers 401 "The
+// supplied OAuth token (Bearer) is not valid" on every single call - 12 for 12,
+// never once a 200 - while Bill and Order on the SAME connection and the SAME
+// token succeed milliseconds either side of it. That is not an auth failure, it
+// is MYOB's misleading answer for a resource that isn't there. Including it
+// bought nothing and cost every invoice a "couldn't rule out a double-up" flag
+// (Jarred's MPI test, 2026-09-02).
+const DOC_TYPES = ['Bill', 'Order'] as const
 // The two layouts these files actually use. A file without one just 400/404s
 // and is skipped.
 const LAYOUTS = ['Service', 'Item'] as const
@@ -217,6 +224,12 @@ export async function findCrossCompanyDuplicate(args: {
       continue
     }
 
+    // Whether this connection has answered ANYTHING this run. It is what
+    // separates "we are locked out of this file" from "this one endpoint is not
+    // there" — the second must not condemn the whole check as incomplete, which
+    // is what the Purchase/Quote 401s above were doing.
+    let connAnswered = false
+
     for (const docType of DOC_TYPES) {
       if (outOfTime()) { incomplete = true; notes.push(`${entity}: search stopped at the time limit`); break }
       // The same file's BILLS are already covered by findExistingMyobBill; only
@@ -235,7 +248,13 @@ export async function findCrossCompanyDuplicate(args: {
             const rn = await myobFetch(conn.id, path, {
               query: { '$filter': `SupplierInvoiceNumber eq '${esc}'`, '$top': NUMBER_QUERY_TOP },
             })
-            if (rn.status === 200) docs.push(...(Array.isArray(rn.data?.Items) ? rn.data.Items : []))
+            if (rn.status === 200) { connAnswered = true; docs.push(...(Array.isArray(rn.data?.Items) ? rn.data.Items : [])) }
+            else if (rn.status === 401 && connAnswered) {
+              // myobFetch already forced a refresh and retried. A 401 that
+              // survives that, on a connection answering everything else, is
+              // the endpoint, not the credentials.
+              notes.push(`${entity} ${docType}/${layout}: endpoint unavailable in this file — skipped`)
+            }
             else if (rn.status !== 404 && rn.status !== 400) {
               incomplete = true
               notes.push(`${entity} ${docType}/${layout} by-number: HTTP ${rn.status}`)

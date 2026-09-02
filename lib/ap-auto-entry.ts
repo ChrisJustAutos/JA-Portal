@@ -32,6 +32,7 @@ import {
   markMessageAsRead,
   findFolderByDisplayNameLoose,
   moveMessageToFolder,
+  forwardMessage,
   GraphAttachmentMeta,
   GraphMessageSummary,
 } from './microsoft-graph'
@@ -144,6 +145,9 @@ export interface AutoEntryItem {
   bankCheck: BankCheck
   failReasons: string[]
   billUid?: string | null
+  /** Set when the DOCUMENT overrode the inbox — the email belongs elsewhere. */
+  routedTo?: CompanyFileLabel | null
+  routedNote?: string | null
   adopted?: boolean
   error?: string
   /**
@@ -508,6 +512,40 @@ async function runMailbox(
           : `Email marked read and filed to "${folderName}".`,
       ].join('\n')
       try { await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile) } catch (e: any) { console.error('double-up notice failed:', e?.message) }
+    }
+
+    // ── Wrong inbox: send the email where it belongs ──────────────────────
+    //
+    // Chris 2026-09-02: an invoice billed to one company that lands in the
+    // other's inbox "should have moved the invoice to accounts@justautos
+    // wholesale", and the inbox it came from should be told where it went.
+    //
+    // Graph cannot move a message BETWEEN mailboxes, so it is forwarded. Done
+    // once per EMAIL rather than per attachment — a batch of five rerouted
+    // invoices is still one email and must not arrive five times.
+    const rerouted = msgAllItems.find(it => it.routedTo && it.routedTo !== companyFile)
+    if (rerouted && !dryRun) {
+      const target = autoEntryInboxes(false).find(b => b.companyFile === rerouted.routedTo)
+      if (!target) {
+        console.warn(`[ap-auto-entry] ${msg.id}: rerouted to ${rerouted.routedTo} but no inbox is configured for it`)
+      } else if (target.mailbox.toLowerCase() !== mailbox.toLowerCase()) {
+        try {
+          await forwardMessage(mailbox, msg.id, [target.mailbox],
+            `Forwarded automatically by the JA Portal.<br><br>${rerouted.routedNote || ''}<br><br>`
+            + `It has already been read and ${rerouted.outcome === 'posted' ? 'posted' : 'flagged'} against ${rerouted.routedTo}, so this copy is for the ${rerouted.routedTo} accounts records — no action is needed here unless the card in Slack asks for it.`)
+          console.log(`[ap-auto-entry] ${msg.id}: forwarded to ${target.mailbox} (billed to ${rerouted.routedTo})`)
+        } catch (e: any) {
+          console.error(`[ap-auto-entry] ${msg.id}: forward to ${target.mailbox} failed:`, e?.message || e)
+        }
+      }
+
+      // And tell THIS inbox's own channel where the invoice went, so it does
+      // not simply vanish from the company whose inbox received it.
+      try {
+        const where = rerouted.routedTo === 'JAWS' ? 'Just Autos Wholesale' : 'Vehicle Performance Solutions'
+        const text = `:twisted_rightwards_arrows: *${rerouted.supplierName || 'An invoice'}* ${rerouted.invoiceNumber ? rerouted.invoiceNumber + ' ' : ''}arrived in this inbox but is billed to *${where}* — it has been handled under ${rerouted.routedTo}${target ? `, and the email forwarded to ${target.mailbox}` : ''}. Nothing to do here.`
+        await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile)
+      } catch (e: any) { console.error('reroute notice failed:', e?.message) }
     }
 
     // Fully-handled emails get filed away (read + moved out of the Inbox):
@@ -914,7 +952,8 @@ async function processInvoice(
   // rather than silently showing a company file nobody expected.
   let routedNote: string | null = null
   const { bytes, b64, kind, attId, attName } = inv
-  const base = { messageId: msg.id, attachmentId: attId, attachmentName: attName }
+  const base: { messageId: string; attachmentId: string; attachmentName: string; routedTo?: CompanyFileLabel | null; routedNote?: string | null } =
+    { messageId: msg.id, attachmentId: attId, attachmentName: attName }
 
   // Extract. A parse failure or a non-invoice (no number AND no total) is not
   // flagged — just logged as skipped so we don't spam Slack with random PDFs.
@@ -1093,6 +1132,8 @@ async function processInvoice(
   })
   if (billedEntity && billedEntity.entity !== companyFile) {
     routedNote = `Invoiced to ${billedEntity.entity === 'JAWS' ? 'Just Autos Wholesale' : 'Vehicle Performance Solutions'} but arrived in the ${mailbox} inbox — posting to ${billedEntity.entity}, per ${billedEntity.why}.`
+    base.routedTo = billedEntity.entity
+    base.routedNote = routedNote
     console.log(`[ap-auto-entry] billed-to reroute ${companyFile} → ${billedEntity.entity} (${billedEntity.why}): "${msg.subject}" / ${attName}`)
     companyFile = billedEntity.entity
   }
