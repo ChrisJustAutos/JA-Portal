@@ -36,6 +36,13 @@ const nextConfig = {
   },
   // OAuth 2.1 endpoints for the Claude MCP connector live at the domain root
   // (Claude expects /authorize, /token, and the well-known discovery docs).
+  // The AI-narrative report builder that used to live at /reports was removed
+  // (Chris, 2026-09-02). Redirect rather than 404: the sidebar, saved links and
+  // anything still pointing at the module root all land on the first real tab.
+  // Temporary, so it costs nothing to put a page back here later.
+  async redirects() {
+    return [{ source: '/reports', destination: '/reports/sales-report', permanent: false }]
+  },
   async rewrites() {
     // beforeFiles so the parked-Workshop rewrites win over the real page files
     // (an array return, or afterFiles, is checked AFTER the filesystem and the

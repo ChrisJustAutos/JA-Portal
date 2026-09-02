@@ -156,7 +156,6 @@ export function roleHasPermission(role: UserRole, permission: Permission): boole
 // null/empty = every tab the role can see (default). A restricted user (e.g.
 // marketing → workshop-map only) gets redirected to their first allowed tab.
 export const REPORT_TAB_HREFS: Record<string, string> = {
-  'reports': '/reports',
   'sales-report': '/reports/sales-report',
   'sales-dashboard': '/reports/sales-dashboard',
   'mgmt-dashboard': '/reports/mgmt-dashboard',
@@ -170,7 +169,7 @@ export function reportTabAllowed(list: string[] | null | undefined, tab: string)
 }
 
 export function firstAllowedReportHref(list: string[] | null | undefined): string {
-  if (!list || list.length === 0) return '/reports'
+  if (!list || list.length === 0) return '/reports/sales-report'
   for (const id of Object.keys(REPORT_TAB_HREFS)) {
     if (list.includes(id)) return REPORT_TAB_HREFS[id]
   }

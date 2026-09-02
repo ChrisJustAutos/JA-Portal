@@ -1,5 +1,7 @@
 // components/ReportsTabs.tsx
-// Sub-tab strip for the Reports module: Reports · Workshop Map · Distributors.
+// Sub-tab strip for the Reports module: Sales Report · dashboards · maps.
+// The old first tab (/reports - the AI-narrative report builder) was removed
+// 2026-09-02 at Chris's request; /reports now redirects to the first real tab.
 // Sits directly under the global top bar; each tab is gated by its own
 // permission. Mirrors InventoryTabs / the CRM sub-tab strip.
 
@@ -8,7 +10,6 @@ import { UserRole, roleHasPermission, Permission } from '../lib/permissions'
 import { T } from '../lib/ui/theme'
 
 const TABS: Array<{ id: string; label: string; href: string; perm: Permission; roles?: UserRole[] }> = [
-  { id: 'reports',      label: 'Reports',      href: '/reports',      perm: 'view:reports' },
   { id: 'sales-report', label: 'Sales Report', href: '/reports/sales-report', perm: 'view:reports' },
   { id: 'sales-dashboard', label: 'Sales Dashboard', href: '/reports/sales-dashboard', perm: 'view:reports' },
   { id: 'mgmt-dashboard', label: 'Management Dashboard', href: '/reports/mgmt-dashboard', perm: 'view:reports', roles: ['admin', 'manager'] },
@@ -19,7 +20,7 @@ const TABS: Array<{ id: string; label: string; href: string; perm: Permission; r
   { id: 'distributors', label: 'Distributors', href: '/distributors', perm: 'view:distributors' },
 ]
 
-export default function ReportsTabs({ active, role, reportTabs }: { active: 'reports' | 'sales-report' | 'sales-dashboard' | 'mgmt-dashboard' | 'forecast' | 'workshop-map' | 'distributor-map' | 'distributors' | 'jaws-stock-eom'; role: UserRole; reportTabs?: string[] | null }) {
+export default function ReportsTabs({ active, role, reportTabs }: { active: 'sales-report' | 'sales-dashboard' | 'mgmt-dashboard' | 'forecast' | 'workshop-map' | 'distributor-map' | 'distributors' | 'jaws-stock-eom'; role: UserRole; reportTabs?: string[] | null }) {
   const router = useRouter()
   const tabs = TABS.filter(t =>
     roleHasPermission(role, t.perm) &&
