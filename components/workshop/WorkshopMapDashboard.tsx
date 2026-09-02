@@ -879,6 +879,24 @@ export default function WorkshopMapDashboard() {
 
 interface ConvCounts { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }
 
+/**
+ * An "i" that opens a note. The caveats on this page matter — a combined
+ * conversion % flatters the workshop, distributor quotes are a radius
+ * stand-in — but standing them in amber body text made every screen look like
+ * it was warning you about something (Chris 2026-09-02). Available on ask,
+ * quiet until then.
+ */
+function InfoNoteBlock({ children, title }: { children: React.ReactNode; title?: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" className={'infoBtn' + (open ? ' on' : '')} aria-expanded={open}
+        title={title || 'How these figures are worked out'} onClick={() => setOpen(o => !o)}>i</button>
+      {open && <p className="infoPop">{children}</p>}
+    </>
+  )
+}
+
 function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
   P: Payload; COL: Record<string, string>; NAME: Record<string, string>; st: string
   dist: DistributorJobs | null; src: ConvSrc; setSrc: (v: ConvSrc) => void
@@ -1082,14 +1100,14 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
       </div>
 
       {on && (
-        <p className="distNote">
+        <InfoNoteBlock>
           Distributor jobs come from the Distributor report&apos;s invoices — the PO number is the car&apos;s VIN — and one car is
           one job for the year, however many times it came back.{' '}
           {src === 'dist'
             ? <>Distributors raise no quotes of their own, so the quote columns here are the <b>Just Autos quotes within {radiusKm} km of a distributor</b> — the closest stand-in for demand they had a chance at. Change the radius above and every figure on this tab follows it.</>
             : <>They never had a workshop quote, so a combined conversion % reads higher than the workshop&apos;s own performance — the &ldquo;Just Autos&rdquo; tab is the one to judge the workshop on.</>}
           {dist && dist.unknown > 0 && <> {dist.unknown} VIN{dist.unknown > 1 ? 's' : ''} couldn&apos;t be matched to a model and {dist.unknown > 1 ? 'are' : 'is'} left out of the vehicle rows.</>}
-        </p>
+        </InfoNoteBlock>
       )}
 
       <h2>By vehicle — full year</h2>
@@ -1142,13 +1160,13 @@ function ConversionView({ P, COL, NAME, st, dist, src, setSrc, comparisons }: {
       {on && distConv && (
         <>
           <h2>By distributor — full year</h2>
-          <p className="distNote">
+          <InfoNoteBlock>
             A distributor raises no quotes of their own, so their conversion is measured against the Just Autos quotes that
             fall within {radiusKm} km of them — the closest stand-in for the demand they had a chance at. Where two areas
             overlap the nearer distributor takes the quote, so nothing is counted twice, and the same rule drives the
             Quotes Map overlay.
             {(dist?.unlocated?.tunes || 0) > 0 && <> {dist!.unlocated!.tunes} tune{dist!.unlocated!.tunes === 1 ? '' : 's'} sit with distributors we have no location for, so they have no radius and are left out of this table.</>}
-          </p>
+          </InfoNoteBlock>
           <table>
             <thead><tr><th>Distributor</th><th>Quotes in {radiusKm}km</th><th>Quoted $</th><th>Tunes</th><th>Conv %</th></tr></thead>
             <tbody>
@@ -1923,7 +1941,10 @@ const CSS = `
 .wm-dash .segbtns{display:inline-flex;border:1px solid var(--wm-line);border-radius:8px;overflow:hidden;margin-left:auto}
 .wm-dash .segbtns button{background:var(--wm-panel);border:0;color:var(--wm-muted);font-family:inherit;font-size:12px;padding:7px 14px;cursor:pointer}
 .wm-dash .segbtns button.on{background:var(--wm-panel2);color:var(--wm-txt);font-weight:600}
-.wm-dash .distNote{color:var(--wm-amber);font-size:11px;line-height:1.6;margin:8px 0 0;max-width:900px}
+.wm-dash .infoBtn{width:16px;height:16px;flex:0 0 16px;border-radius:50%;border:1px solid var(--wm-border,#2b3a4d);background:transparent;color:var(--wm-muted2);font:600 10px/1 'Barlow',sans-serif;cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle}
+.wm-dash .infoBtn:hover{color:var(--wm-text,#e8edf4);border-color:var(--wm-muted)}
+.wm-dash .infoBtn.on{background:var(--wm-panel);color:var(--wm-text,#e8edf4)}
+.wm-dash .infoPop{color:var(--wm-muted2);font-size:11px;line-height:1.6;margin:8px 0 0;max-width:900px;border-left:2px solid var(--wm-border,#2b3a4d);padding-left:10px}
 /* Horizontal conversion bars */
 .wm-dash .cbars{display:flex;flex-direction:column;gap:8px;margin-top:6px}
 .wm-dash .cbar{display:grid;grid-template-columns:150px 1fr 92px;align-items:center;gap:12px}
