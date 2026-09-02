@@ -75,6 +75,10 @@ const AMOUNT_NET_DAYS = 180
 // rather than scanned by date, so an unbounded search is also the CHEAPER one.
 const NUMBER_QUERY_TOP = 50
 
+// Worst case this check is allowed to cost one invoice. Comfortably enough for
+// the normal case (a couple of dozen requests); a stop, not a target.
+const DEFAULT_BUDGET_MS = 45_000
+
 export interface CrossCompanyHit {
   entity: CompanyFileLabel
   docType: string              // Bill | Order | Quote
@@ -164,6 +168,8 @@ export async function findCrossCompanyDuplicate(args: {
    * net is unbounded. Defaults to AMOUNT_NET_DAYS.
    */
   dayWindow?: number
+  /** Wall-clock cap on the whole search. Defaults to DEFAULT_BUDGET_MS. */
+  budgetMs?: number
 }): Promise<CrossCompanyResult> {
   const notes: string[] = []
   const hits: CrossCompanyHit[] = []
@@ -179,6 +185,15 @@ export async function findCrossCompanyDuplicate(args: {
   if (!supplier || (!number && amount == null)) {
     return { hits, incomplete: false, notes: ['not enough to match on — skipped'] }
   }
+
+  // A WALL-CLOCK BUDGET, because this runs on every invoice through the AP
+  // inbox and the cron that drives it has no deadline of its own. Twelve paths
+  // x two nets against a slow API is a long tail, and a run killed by Vercel
+  // half way through is far worse than a check that stops early and says so:
+  // `incomplete` already renders as a YELLOW "couldn't rule out a double-up",
+  // which is the honest degradation. Same reasoning as FAILS OPEN above.
+  const deadline = Date.now() + (args.budgetMs ?? DEFAULT_BUDGET_MS)
+  const outOfTime = () => Date.now() > deadline
 
   const base = args.invoiceDate ? new Date(args.invoiceDate) : new Date()
   if (isNaN(+base)) base.setTime(Date.now())
@@ -197,6 +212,7 @@ export async function findCrossCompanyDuplicate(args: {
     }
 
     for (const docType of DOC_TYPES) {
+      if (outOfTime()) { incomplete = true; notes.push(`${entity}: search stopped at the time limit`); break }
       // The same file's BILLS are already covered by findExistingMyobBill; only
       // its orders and quotes are new ground.
       if (entity === args.postingTo && docType === 'Bill') continue
@@ -235,7 +251,7 @@ export async function findCrossCompanyDuplicate(args: {
         // (a real double-up) to one MYOB request per path instead of nine.
         const numberHitHere = docs.some(d => supplierLooksSame(d?.Supplier?.Name, supplier)
           && number && sameNumberLoose(d?.SupplierInvoiceNumber, number))
-        if (!numberHitHere && amount != null && amount >= AMOUNT_NET_MIN) {
+        if (!numberHitHere && amount != null && amount >= AMOUNT_NET_MIN && !outOfTime()) {
           let truncated = true
           for (let skip = 0, page = 0; page < 8; page++, skip += 400) {
             let rd: any
@@ -259,6 +275,7 @@ export async function findCrossCompanyDuplicate(args: {
             const batch: any[] = Array.isArray(rd.data?.Items) ? rd.data.Items : []
             docs.push(...batch)
             if (batch.length < 400) { truncated = false; break }
+            if (outOfTime()) { incomplete = true; notes.push(`${entity} ${docType}/${layout}: paging stopped at the time limit`); truncated = false; break }
           }
           // Ran out of pages with a full batch still coming — say so rather
           // than quietly reporting "no duplicate found".
@@ -279,7 +296,7 @@ export async function findCrossCompanyDuplicate(args: {
           } else if (
             amount != null && amount >= AMOUNT_NET_MIN &&
             theirTotal != null && Math.abs(theirTotal - amount) < 0.005 &&
-            withinDays(d.Date, base, AMOUNT_NET_DAYS)
+            withinDays(d.Date, base, win)
           ) {
             matchedOn = 'amount'
           }

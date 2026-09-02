@@ -12,6 +12,8 @@
 //        &number=JM-88213          (optional, but it is the strong signal)
 //        &amount=47937.90          (optional; the amount net needs >= $1,000)
 //        &date=2026-08-14          (optional, defaults to today)
+//        &days=365                 (optional; widens the AMOUNT net only —
+//                                   the number net is already unbounded)
 //        &entity=VPS               (optional: the file you'd be posting INTO,
 //                                   default VPS. Only affects which file has
 //                                   its BILLS skipped as already-covered.)
@@ -55,6 +57,10 @@ export default withAuth('view:supplier_invoices', async (req: NextApiRequest, re
       totalAmount: amount,
       invoiceDate: date,
       dayWindow: Number.isFinite(dayWindow as number) ? dayWindow : undefined,
+      // The live check keeps a tight budget so it can't stall the AP cron. A
+      // dry run is a person waiting on an answer, so give it room to finish
+      // rather than reporting a time-limit stop they'd have to interpret.
+      budgetMs: 240_000,
     })
 
     // Mirror exactly what the AP pipeline would do with this result, so the dry
