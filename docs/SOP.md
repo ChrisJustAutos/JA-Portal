@@ -532,9 +532,11 @@ Before this (31 August 2026) two separate numbers ran and drifted apart — orde
 
 On an order where the distributor did not enter their own PO, MYOB's "Purchase Order No." box now repeats the document number. It has always fallen back to the portal order number — which is now the same thing. Harmless.
 
-Until the invoice is written it reads **"Not written to MYOB yet"** in amber. The MYOB card further down the right-hand rail still carries the diagnostics — company file, write attempts, and the error if a write failed.
+Until the invoice is written it reads **"Not written to MYOB yet"** in amber. The MYOB card lower down the page — beside Stripe, under the items — still carries the diagnostics: company file, write attempts, and the error if a write failed.
 
 The **Timeline** card shows the **three most recent events** with "N earlier events hidden" above them; **Show all N events** opens the lot. A busy order — drop-ship POs, freight polls, a refund — used to run to a wall of entries, and what you almost always want is what happened last.
+
+**The order page was condensed on 3 September 2026.** Summary and Ship to now sit side by side, the totals moved into the bottom of the Items card, and the Timeline moved from the top of the right-hand rail to the foot of it — so **Actions and Shipping are what you land on** rather than a list of what has already happened. Nothing was removed; the same figures are on the same page, higher up.
 
 ### 4.2b "Consignment Missing" on a shipped order
 

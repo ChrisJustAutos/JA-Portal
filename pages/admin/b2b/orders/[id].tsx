@@ -438,6 +438,14 @@ export default function AdminOrderDetailPage({ user }: Props) {
               {/* ── LEFT COLUMN ── */}
               <div style={{display:'flex',flexDirection:'column',gap:14,minWidth:0}}>
 
+                {/* Summary and Ship to sit SIDE BY SIDE on a desktop (Chris
+                    2026-09-03: "re jig the order page so that it can be seen
+                    easily without scrolling"). Both are short and narrow, and
+                    stacking them full-width down a 1500px column is what pushed
+                    everything else below the fold - while leaving a hand's width
+                    of nothing between every label and its figure. */}
+                <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',gap:14,alignItems:'start',minWidth:0}}>
+
                 {/* Order summary header */}
                 <Card title="Summary">
                   {/* The MYOB invoice number is what accounts, the distributor
@@ -515,6 +523,8 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   )}
                 </Card>
 
+                </div>
+
                 {/* Lines */}
                 <Card title={`Items (${data.lines.length})`}>
                   {/* PHONE: a card per line. The table below is five columns wide
@@ -569,40 +579,47 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       </tbody>
                     </table>
                   </div>
-                </Card>
 
-                {/* Totals — the stored subtotal_ex_gst includes freight, so break
-                    freight out as its own line and show items-only above it. */}
-                <Card title="Totals">
-                  {(() => {
-                    const itemsInc = data.lines.reduce((s, l) => s + (Number(l.line_total_inc) || 0), 0)
-                    const freightInc = data.freight_cost_ex_gst != null ? round2x(data.freight_cost_ex_gst * 1.10) : 0
-                    return (
-                      <>
-                        <Row label="Items (inc GST)" value={`$${money(itemsInc)}`}/>
-                        {freightInc > 0 && (
-                          <Row label={`Freight (inc GST)${data.freight_service_label || data.freight_method_label ? ` — ${data.freight_service_label || data.freight_method_label}` : ''}`} value={`$${money(freightInc)}`}/>
-                        )}
-                      </>
-                    )
-                  })()}
-                  <Row label="Card surcharge"     value={`$${money(data.card_fee_inc)}`} muted/>
-                  {/* Total, compact (Chris 2026-09-03). It was the 40px hero
-                      here; the big figure now leads the page header instead,
-                      and two competing hero totals on one screen is one too
-                      many. This card itemises, so the total is its bold last
-                      row — the GST note keeps its own line so the row stays a
-                      clean label/figure pair like the ones above it. */}
-                  <Row label={data.paid_at ? 'Total paid' : 'Order total'}
-                       value={`$${money(data.total_inc)}`} bold/>
-                  <div style={{fontSize:11,color:T.text3,textAlign:'right'}}>
-                    includes ${money(data.gst)} GST
-                    {data.currency && data.currency !== 'AUD' ? ` · ${data.currency}` : ''}
+                  {/* TOTALS LIVE IN THE ITEMS CARD (Chris 2026-09-03). They were
+                      a full-width card of their own, so "Items (inc GST)" sat at
+                      the far left with its figure at the far right and a 1200px
+                      gap between them — and it cost another card's height on a
+                      page that already scrolled. Capped at 360 and pushed right,
+                      the block sits under the Line (inc GST) column it sums,
+                      which is how an invoice reads.
+
+                      The stored subtotal_ex_gst includes freight, so freight is
+                      broken out as its own line and items-only shown above it.
+                      The total is the bold last row — the big figure moved to
+                      the page header, and two hero totals on one screen was one
+                      too many. */}
+                  <div style={{display:'flex', justifyContent:'flex-end', marginTop:14, paddingTop:14, borderTop:`1px solid ${T.border2}`}}>
+                    <div style={{width:'100%', maxWidth:360, minWidth:0}}>
+                      {(() => {
+                        const itemsInc = data.lines.reduce((s, l) => s + (Number(l.line_total_inc) || 0), 0)
+                        const freightInc = data.freight_cost_ex_gst != null ? round2x(data.freight_cost_ex_gst * 1.10) : 0
+                        return (
+                          <>
+                            <Row label="Items (inc GST)" value={`$${money(itemsInc)}`}/>
+                            {freightInc > 0 && (
+                              <Row label={`Freight${data.freight_service_label || data.freight_method_label ? ` — ${data.freight_service_label || data.freight_method_label}` : ' (inc GST)'}`} value={`$${money(freightInc)}`}/>
+                            )}
+                          </>
+                        )
+                      })()}
+                      <Row label="Card surcharge" value={`$${money(data.card_fee_inc)}`} muted/>
+                      <Row label={data.paid_at ? 'Total paid' : 'Order total'}
+                           value={`$${money(data.total_inc)}`} bold/>
+                      <div style={{fontSize:11,color:T.text3,textAlign:'right'}}>
+                        includes ${money(data.gst)} GST
+                        {data.currency && data.currency !== 'AUD' ? ` · ${data.currency}` : ''}
+                      </div>
+                      {Number(data.refunded_total || 0) > 0 && (
+                        <Row label={`Refunded${Number(data.refunded_total) >= data.total_inc - 0.005 ? ' (full)' : ' (partial)'}`}
+                             value={`-$${money(Number(data.refunded_total))}`} valueColor={A.bad}/>
+                      )}
+                    </div>
                   </div>
-                  {Number(data.refunded_total || 0) > 0 && (
-                    <Row label={`Refunded${Number(data.refunded_total) >= data.total_inc - 0.005 ? ' (full)' : ' (partial)'}`}
-                         value={`-$${money(Number(data.refunded_total))}`} valueColor={A.bad}/>
-                  )}
                 </Card>
 
                 {/* Stripe + MYOB info */}
@@ -685,11 +702,6 @@ export default function AdminOrderDetailPage({ user }: Props) {
               {/* ── RIGHT COLUMN ── */}
               <div style={{display:'flex',flexDirection:'column',gap:14,position: isMobile ? 'static' : 'sticky',top:18,minWidth:0}}>
 
-                {/* Status timeline */}
-                <Card title="Timeline">
-                  <Timeline events={data.events}/>
-                </Card>
-
                 {/* Action buttons */}
                 {canEdit && (
                   <Card title="Actions">
@@ -760,6 +772,15 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 {canEdit && data.has_drop_ship && (
                   <DropShipCard order={data} onReloaded={() => { void load() }} onFlash={flashMsg}/>
                 )}
+
+                {/* Timeline LAST (Chris 2026-09-03). It was the top of the rail,
+                    so the most valuable space on the page went to history while
+                    Actions and Shipping - the buttons you came to press - sat
+                    below the fold. What happened is a reference; what to do next
+                    is the job. */}
+                <Card title="Timeline">
+                  <Timeline events={data.events}/>
+                </Card>
 
 
               </div>
