@@ -1006,7 +1006,9 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
         </StatusPill>
 
         {/* Actions menu */}
-        {status === 'invited' && (
+        {/* Deactivated user: no invite. Sending one would email a sign-up
+            link for an account that cannot sign in. */}
+        {status === 'invited' && user.is_active && (
           <button onClick={resendInvite} disabled={busy}
             title="Email a fresh single-use sign-up link (the original gets consumed by mail scanners sometimes)"
             className="al-press al-focus"

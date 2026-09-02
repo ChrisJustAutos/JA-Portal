@@ -69,6 +69,15 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
 // has never signed in (used from the distributors list "Resend" button).
 async function handleResendInvites(id: string, res: NextApiResponse) {
   const c = sb()
+  // The USER-level is_active filter below has always been right. The ACCOUNT
+  // level was not checked at all, so an inactive distributor with active users
+  // would still be emailed a sign-up link for an account that cannot order.
+  // Hiding the button is not enough — this is a POST anyone can repeat.
+  const { data: dist } = await c.from('b2b_distributors').select('is_active, display_name').eq('id', id).maybeSingle()
+  if (!dist) return res.status(404).json({ error: 'Distributor not found' })
+  if (!dist.is_active) {
+    return res.status(409).json({ error: `${dist.display_name || 'This distributor'} is inactive — reactivate the account before inviting anyone to it.` })
+  }
   const { data: pending, error } = await c
     .from('b2b_distributor_users')
     .select('id, email')
@@ -92,17 +101,57 @@ async function handleResendInvites(id: string, res: NextApiResponse) {
   return res.status(failed.length && !sent.length ? 502 : 200).json({ ok: failed.length === 0, sent, failed })
 }
 
+// Everything that REFUSES to let a distributor go, because the records are
+// history worth keeping. There are four, and only b2b_orders was being checked
+// — so deleting a distributor who had tune jobs but no orders got the raw
+// Postgres constraint text thrown at the screen (Chris 2026-09-02:
+// 'violates foreign key constraint "b2b_tune_jobs_distributor_id_fkey"').
+//
+// The other five references cascade on purpose: carts, addresses, shipping
+// addresses, logins and training assignments are all things that only exist to
+// serve a live distributor.
+const DELETE_BLOCKERS: { table: string; label: (n: number) => string }[] = [
+  { table: 'b2b_orders',              label: n => `${n} order${n === 1 ? '' : 's'}` },
+  { table: 'b2b_tune_jobs',           label: n => `${n} tune job${n === 1 ? '' : 's'}` },
+  { table: 'b2b_training_attempts',   label: n => `${n} training attempt${n === 1 ? '' : 's'}` },
+  { table: 'b2b_tune_company_aliases',label: n => `${n} tune company alias${n === 1 ? '' : 'es'}` },
+]
+
 async function handleDelete(id: string, res: NextApiResponse) {
   const c = sb()
-  // b2b_orders → distributor is NO ACTION, so refuse if any orders exist
-  // (deleting would orphan order history). Deactivate instead.
-  const { count } = await c.from('b2b_orders').select('id', { count: 'exact', head: true }).eq('distributor_id', id)
-  if ((count || 0) > 0) {
-    return res.status(409).json({ error: `Can't delete — this distributor has ${count} order(s). Set them inactive instead (toggle Active off).` })
+
+  // Counted in one pass so the message names EVERYTHING holding the delete,
+  // rather than making someone clear one blocker and meet the next.
+  const found: string[] = []
+  for (const b of DELETE_BLOCKERS) {
+    const { count, error } = await c.from(b.table)
+      .select('id', { count: 'exact', head: true }).eq('distributor_id', id)
+    // A failed count must not read as "nothing there" — that is how a delete
+    // gets through and takes history with it.
+    if (error) return res.status(500).json({ error: `Couldn't check ${b.table} before deleting: ${error.message}` })
+    if ((count || 0) > 0) found.push(b.label(count || 0))
   }
-  // Cascades remove users, carts and shipping addresses.
+
+  if (found.length) {
+    const list = found.length === 1 ? found[0]
+      : `${found.slice(0, -1).join(', ')} and ${found[found.length - 1]}`
+    return res.status(409).json({
+      error: `Can't delete this distributor — they still have ${list}, and deleting them would take that history with it. Switch Active off instead: they keep their records and disappear from the ordering side.`,
+    })
+  }
+
+  // Cascades remove logins, carts, addresses and training assignments.
   const { error } = await c.from('b2b_distributors').delete().eq('id', id)
-  if (error) return res.status(500).json({ error: error.message })
+  if (error) {
+    // A constraint we do not know about yet. Say something useful rather than
+    // handing the raw Postgres text to whoever pressed the button.
+    const fk = /foreign key constraint "([^"]+)"/.exec(error.message)
+    return res.status(409).json({
+      error: fk
+        ? `Can't delete this distributor — records elsewhere still point at them (${fk[1]}). Switch Active off instead.`
+        : `Couldn't delete this distributor: ${error.message}`,
+    })
+  }
   return res.status(200).json({ ok: true })
 }
 

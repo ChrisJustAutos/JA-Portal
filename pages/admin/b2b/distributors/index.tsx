@@ -529,7 +529,9 @@ function ResendCell({ dist }: { dist: Distributor }) {
   return (
     <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4}}>
       <StatusPill color={T.text3}>Never</StatusPill>
-      {dist.pending_invites > 0 && state !== 'sent' && (
+      {/* Inactive accounts do not get an invite offered: the link would take
+          them to a login they can no longer use (Chris 2026-09-02). */}
+      {dist.pending_invites > 0 && dist.is_active && state !== 'sent' && (
         <button onClick={resend} disabled={state === 'sending'} title={msg || 'Email a fresh invite link to everyone on this account who hasn\'t signed in yet'}
           className="al-press al-focus"
           style={{
