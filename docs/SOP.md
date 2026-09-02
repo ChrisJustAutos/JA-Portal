@@ -540,9 +540,9 @@ The **Timeline** card shows the **three most recent events** with "N earlier eve
 
 - **Summary and Ship to sit side by side**, and the totals moved into the bottom of the Items card, under the money column they add up.
 - **The Stripe and MYOB cards are gone.** Both repeated what the Summary and the Timeline already say. What they uniquely held was kept: **Open in Stripe →** is now a link under the Payment row, and a failed MYOB write shows its reason under the MYOB invoice row.
-- **Actions is one button and one dropdown.** The action you would normally take next — *Mark as picking*, *Mark as packed*, *Mark as shipped* — stays a button. The undo, **Refund…**, **Cancel order…** and **Delete order** are under *More actions…*. Each still asks for confirmation, so choosing one from the list does not do anything on its own.
-- **The Timeline is at the foot of the rail**, so Actions and Shipping are what you land on rather than a list of what has already happened.
-- **Boxes and consignments** stays folded up until you open it, and **Method** is only shown separately from **Carrier** when the two actually differ.
+- **The actions live at the top of the Shipping panel**, not in a card of their own. The step you would normally take next — *Mark as picking*, *Mark as packed*, *Mark as shipped* — is the button; the undo, **Refund…**, **Cancel order…** and **Delete order** are under *More actions…*. Each still asks for confirmation, so choosing one from the list does not do anything on its own. Moving the order along and booking its freight are the same job, done in the same place.
+- **The Timeline is at the foot of the rail**, and should now be on screen when the page opens.
+- **Boxes and consignments** stays folded until you open it, the consignment number, freight status and last poll time sit behind **Consignment details** (the ETA stays out where you can see it), and **Method** only appears separately from **Carrier** when the two actually differ.
 
 Nothing was removed but duplication; every figure is still on the page.
 

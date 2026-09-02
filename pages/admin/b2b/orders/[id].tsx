@@ -368,6 +368,92 @@ export default function AdminOrderDetailPage({ user }: Props) {
   const canCancel  = data && canEdit && ['pending_payment','paid','picking','packed'].includes(data.status)
   const canDoRefund = data && canRefund && data.paid_at && (Number(data.refunded_total || 0) < Number(data.total_inc || 0) - 0.005)
 
+  // THE ACTIONS BLOCK NOW LIVES IN THE SHIPPING PANEL (Chris 2026-09-03:
+  // "lets fold the actions tab into the Shipping area"). It was its own card
+  // at the top of the rail - a title, its own padding and a 14px gap - to
+  // hold one button and a dropdown, which pushed the Timeline off the first
+  // screen. Shipping is where the same person is already looking: the order
+  // moves picking -> packed -> shipped right beside the freight it moves on.
+  // Built here rather than inside ShippingCard because every handler and
+  // modal it drives belongs to this component.
+  const actionsNode = !canEdit ? null : (
+    <>
+      {/* ONE BUTTON AND ONE DROPDOWN (Chris 2026-09-03:
+          "Actions should be a drop down selection to save
+          space"). Up to five full-width buttons stacked down the
+          rail cost about 230px at the very top of the page and
+          pushed Shipping — the panel with the job in it — and the
+          Timeline off the screen.
+
+          The PRIMARY transition keeps its button: it is the one
+          that actually gets pressed, and burying "Mark as
+          shipped" a click deeper to save a row is a bad trade.
+          The undo, refund, cancel and delete go in the dropdown.
+
+          A native select on purpose — it is what "Pack as" in the
+          Shipping panel already uses, it cannot be clipped by the
+          sticky rail the way an absolutely-positioned menu can,
+          and every option behind it opens its own confirmation,
+          so a stray selection still cannot refund or delete
+          anything by itself. */}
+      {(() => {
+        const primary = allowedTransitions.find(t => t.primary)
+        const runTransition = (t: { to: string; needsModal?: 'shipped' }) => {
+          if (t.needsModal === 'shipped') setShipModal(true)
+          else doTransition(t.to)
+        }
+        const others: { key: string; label: string; run: () => void }[] = [
+          ...allowedTransitions.filter(t => !t.primary).map(t => ({
+            key: `to:${t.to}`, label: t.label, run: () => runTransition(t),
+          })),
+          ...(canDoRefund ? [{ key: 'refund', label: 'Refund…',       run: () => setRefundModal(true) }] : []),
+          ...(canCancel   ? [{ key: 'cancel', label: 'Cancel order…', run: () => setCancelModal(true) }] : []),
+          ...(canRefund   ? [{ key: 'delete', label: 'Delete order',  run: () => { void doDelete() } }] : []),
+        ]
+
+        if (!primary && others.length === 0) {
+          return <div style={{fontSize:12,color:T.text3}}>No actions available for this status.</div>
+        }
+        return (
+          <>
+            {primary && (
+              <button
+                disabled={actionBusy}
+                onClick={() => runTransition(primary)}
+                className="al-press al-focus al-primary"
+                style={actionBtn(true, actionBusy)}>
+                {primary.label}
+              </button>
+            )}
+            {others.length > 0 && (
+              <select
+                value=""
+                disabled={actionBusy}
+                aria-label="More actions"
+                onChange={e => {
+                  const pick = others.find(o => o.key === e.target.value)
+                  if (pick) pick.run()
+                }}
+                className="al-focus"
+                style={{
+                  width:'100%', background:T.bg3, border:'1px solid transparent',
+                  color:T.text2, borderRadius:RADIUS.pill,
+                  padding: isMobile ? '11px 13px' : '9px 13px',
+                  fontSize: isMobile ? 16 : 13, fontWeight:600,
+                  minHeight: isMobile ? 44 : 38, outline:'none',
+                  fontFamily:'inherit', cursor: actionBusy ? 'wait' : 'pointer',
+                }}>
+                <option value="">More actions…</option>
+                {others.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+              </select>
+            )}
+          </>
+        )
+      })()}
+    
+    </>
+  )
+
   return (
     <>
       <Head><title>{data ? `${data.order_number} · Orders` : 'Order · JA Portal'}</title></Head>
@@ -444,7 +530,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     stacking them full-width down a 1500px column is what pushed
                     everything else below the fold - while leaving a hand's width
                     of nothing between every label and its figure. */}
-                <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',gap:14,alignItems:'start',minWidth:0}}>
+                <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',gap:14,alignItems:'stretch',minWidth:0}}>
 
                 {/* Order summary header */}
                 <Card title="Summary">
@@ -703,90 +789,13 @@ export default function AdminOrderDetailPage({ user }: Props) {
               {/* ── RIGHT COLUMN ── */}
               <div style={{display:'flex',flexDirection:'column',gap:14,position: isMobile ? 'static' : 'sticky',top:18,minWidth:0}}>
 
-                {/* Action buttons */}
-                {canEdit && (
-                  <Card title="Actions">
-                    {/* ONE BUTTON AND ONE DROPDOWN (Chris 2026-09-03:
-                        "Actions should be a drop down selection to save
-                        space"). Up to five full-width buttons stacked down the
-                        rail cost about 230px at the very top of the page and
-                        pushed Shipping — the panel with the job in it — and the
-                        Timeline off the screen.
-
-                        The PRIMARY transition keeps its button: it is the one
-                        that actually gets pressed, and burying "Mark as
-                        shipped" a click deeper to save a row is a bad trade.
-                        The undo, refund, cancel and delete go in the dropdown.
-
-                        A native select on purpose — it is what "Pack as" in the
-                        Shipping panel already uses, it cannot be clipped by the
-                        sticky rail the way an absolutely-positioned menu can,
-                        and every option behind it opens its own confirmation,
-                        so a stray selection still cannot refund or delete
-                        anything by itself. */}
-                    {(() => {
-                      const primary = allowedTransitions.find(t => t.primary)
-                      const runTransition = (t: { to: string; needsModal?: 'shipped' }) => {
-                        if (t.needsModal === 'shipped') setShipModal(true)
-                        else doTransition(t.to)
-                      }
-                      const others: { key: string; label: string; run: () => void }[] = [
-                        ...allowedTransitions.filter(t => !t.primary).map(t => ({
-                          key: `to:${t.to}`, label: t.label, run: () => runTransition(t),
-                        })),
-                        ...(canDoRefund ? [{ key: 'refund', label: 'Refund…',       run: () => setRefundModal(true) }] : []),
-                        ...(canCancel   ? [{ key: 'cancel', label: 'Cancel order…', run: () => setCancelModal(true) }] : []),
-                        ...(canRefund   ? [{ key: 'delete', label: 'Delete order',  run: () => { void doDelete() } }] : []),
-                      ]
-
-                      if (!primary && others.length === 0) {
-                        return <div style={{fontSize:12,color:T.text3}}>No actions available for this status.</div>
-                      }
-                      return (
-                        <>
-                          {primary && (
-                            <button
-                              disabled={actionBusy}
-                              onClick={() => runTransition(primary)}
-                              className="al-press al-focus al-primary"
-                              style={actionBtn(true, actionBusy)}>
-                              {primary.label}
-                            </button>
-                          )}
-                          {others.length > 0 && (
-                            <select
-                              value=""
-                              disabled={actionBusy}
-                              aria-label="More actions"
-                              onChange={e => {
-                                const pick = others.find(o => o.key === e.target.value)
-                                if (pick) pick.run()
-                              }}
-                              className="al-focus"
-                              style={{
-                                width:'100%', background:T.bg3, border:'1px solid transparent',
-                                color:T.text2, borderRadius:RADIUS.pill,
-                                padding: isMobile ? '11px 13px' : '9px 13px',
-                                fontSize: isMobile ? 16 : 13, fontWeight:600,
-                                minHeight: isMobile ? 44 : 38, outline:'none',
-                                fontFamily:'inherit', cursor: actionBusy ? 'wait' : 'pointer',
-                              }}>
-                              <option value="">More actions…</option>
-                              {others.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-                            </select>
-                          )}
-                        </>
-                      )
-                    })()}
-                  </Card>
-                )}
-
                 {/* Shipping panel — always shown for staff so they can book / edit */}
                 {canEdit && (
                   <ShippingCard
                     order={data}
                     canShip={canShip}
                     canAdmin={!!canRefund}
+                    actions={actionsNode}
                     onEdit={() => setShipModal(true)}
                     onReloaded={() => { void load() }}
                     onFlash={flashMsg}
@@ -997,10 +1006,11 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
 //   - "Refresh from MachShip" — calls /refresh-freight to re-fetch the
 //     current status + ETA. The 30-min cron does this automatically;
 //     the button is for when admin wants it RIGHT NOW.
-function ShippingCard({ order, canShip, canAdmin, onEdit, onReloaded, onFlash }: {
+function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, onFlash }: {
   order: OrderDetail
   canShip: boolean          // ship:b2b_orders - book, despatch, label, refresh
   canAdmin: boolean         // admin:b2b - approve an order, bill a drop-ship PO
+  actions: React.ReactNode  // the status buttons, folded in from their own card
   onEdit: () => void
   onReloaded: () => void
   onFlash: (msg: string) => void
@@ -1164,6 +1174,7 @@ function ShippingCard({ order, canShip, canAdmin, onEdit, onReloaded, onFlash }:
   type PlanBox = { name: string; ownPackaging?: boolean; weight_g: number; length_mm: number; width_mm: number; height_mm: number; contents?: PlanContent[] }
   type PlanUnit = { itemType: string; name: string; ownPackaging?: boolean; quantity: number; weight_g: number; length_mm: number; width_mm: number; height_mm: number; contents?: PlanContent[]; boxes?: PlanBox[] }
   const [planOpen,       setPlanOpen]       = useState(false)
+  const [detailsOpen,    setDetailsOpen]    = useState(false)
   const [planBusy,       setPlanBusy]       = useState(false)
   const [planUnits,      setPlanUnits]      = useState<PlanUnit[] | null>(null)
   const [planOverridden, setPlanOverridden] = useState(false)
@@ -1318,6 +1329,11 @@ function ShippingCard({ order, canShip, canAdmin, onEdit, onReloaded, onFlash }:
 
   return (
     <Card title="Shipping">
+      {actions && (
+        <div style={{marginBottom:12, paddingBottom:12, borderBottom:`1px solid ${T.border2}`}}>
+          {actions}
+        </div>
+      )}
       {(() => {
         const mb = (extra: React.CSSProperties = {}): React.CSSProperties => ({
           borderRadius: RADIUS.pill, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
@@ -1597,12 +1613,26 @@ function ShippingCard({ order, canShip, canAdmin, onEdit, onReloaded, onFlash }:
         <KV label="  incl. drop-ship" value={`$${money(order.dropship_freight_ex_gst)}`} mono/>
       )}
 
+      {/* ETA is the one anybody asks about, so it stays out. The consignment
+          number, the freight status and the poll clock are diagnostics - useful
+          when something is wrong, three rows of nothing when it isn't - and
+          they were part of what kept the Timeline off the first screen
+          (Chris 2026-09-03). Folded, and closed by default. */}
       {hasConsignment && (
         <div style={{marginTop:10, paddingTop:10, borderTop:`1px dashed ${T.border}`}}>
-          <KV label="Consignment" value={order.machship_consignment_number || order.machship_consignment_id || '—'} mono/>
-          <KV label="Status"      value={prettyFreightStatus(order.freight_status)}/>
-          <KV label="ETA"         value={order.freight_eta_at ? fullDate(order.freight_eta_at) : '—'}/>
-          <KV label="Last poll"   value={order.last_freight_poll_at ? fullDate(order.last_freight_poll_at) : 'never'}/>
+          <KV label="ETA" value={order.freight_eta_at ? fullDate(order.freight_eta_at) : '—'}/>
+          <button onClick={() => setDetailsOpen(o => !o)}
+            className="al-press al-focus"
+            style={{background:'none', border:'none', padding:'2px 0 0', color:T.text3, fontSize:12, fontWeight:550, cursor:'pointer', fontFamily:'inherit'}}>
+            {detailsOpen ? '▾' : '▸'} Consignment details
+          </button>
+          {detailsOpen && (
+            <div style={{marginTop:4}}>
+              <KV label="Consignment" value={order.machship_consignment_number || order.machship_consignment_id || '—'} mono/>
+              <KV label="Status"      value={prettyFreightStatus(order.freight_status)}/>
+              <KV label="Last poll"   value={order.last_freight_poll_at ? fullDate(order.last_freight_poll_at) : 'never'}/>
+            </div>
+          )}
         </div>
       )}
 
