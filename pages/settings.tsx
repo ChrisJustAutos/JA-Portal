@@ -26,7 +26,11 @@ import type { PortalUserSSR } from '../lib/authServer'
 import { T } from '../lib/ui/theme'
 import { SkeletonRows } from '../components/ui'
 import { useToast, useConfirm } from '../components/ui/Feedback'
-type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'connections'|'data-imports'|'users'|'audit'|'profile'|'workshop'|'md-imports'|'coaching'|'leave'
+// Workshop, Imports, Backfill and Audit Log were removed 2026-09-02 (Chris:
+// "sections that could be deleted"). Workshop settings and the MD spreadsheet
+// imports belonged to the MechanicDesk migration, which is parked; Backfill was
+// a one-off orders/quotes repair; the audit log was never read.
+type SettingsTab = 'general'|'vin-codes'|'dist-report'|'connections'|'data-imports'|'users'|'profile'|'coaching'|'leave'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
@@ -39,14 +43,11 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const initialTab: SettingsTab =
     qTab === 'general' ? 'general' :
     qTab === 'vin-codes' ? 'vin-codes' :
-    qTab === 'backfill' ? 'backfill' :
     qTab === 'dist-report' ? 'dist-report' :
     qTab === 'connections' ? 'connections' :
     qTab === 'data-imports' ? 'data-imports' :
     qTab === 'users' ? 'users' :
-    qTab === 'audit' ? 'audit' :
     qTab === 'profile' ? 'profile' :
-    qTab === 'workshop' ? 'workshop' :
     qTab === 'coaching' ? 'coaching' :
     qTab === 'leave' ? 'leave' :
     qTab === 'groups' ? 'dist-report' :
@@ -75,21 +76,17 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     { id: 'dist-report', label: 'Distributor Report', adminOnly: true,  icon: 'reports',       accent: T.green,  desc: 'Customers, groups & revenue categories' },
     { id: 'connections', label: 'Connections',        adminOnly: true,  icon: 'stripe-myob',   accent: T.teal,   desc: 'Integration health & MYOB' },
     { id: 'data-imports',label: 'Data Imports',       adminOnly: true,  icon: 'stocktake',     accent: T.purple, desc: 'Bulk imports & uploads' },
-    { id: 'workshop',    label: 'Workshop',           adminOnly: true,  icon: 'diary',         accent: T.teal,   desc: 'Technicians, documents, invoicing & SMS' },
-    { id: 'md-imports',  label: 'Imports',            adminOnly: true,  icon: 'stocktake',     accent: T.amber,  desc: 'Upload customers, job types, vehicles, inventory, quotes & invoices from a spreadsheet' },
     { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true,  icon: 'vehicle-sales', accent: T.amber,  desc: 'VIN prefix → model code rules' },
-    { id: 'backfill',    label: 'Backfill',           adminOnly: true,  icon: 'jobs',          accent: T.teal,   desc: 'Orders ↔ quotes backfill' },
     { id: 'coaching',    label: 'Call Coaching',      adminOnly: true,  icon: 'call-coaching', accent: T.purple, desc: 'Scoring rubrics per call type + advisor roster' },
     { id: 'leave',       label: 'Leave Notifications',adminOnly: true,  icon: 'team',          accent: T.green,  desc: 'Approval / decline emails to staff + the name→email directory they resolve through' },
     { id: 'users',       label: 'Users & Staff',      adminOnly: true,  icon: 'team',          accent: T.blue,   desc: 'Logins, roles, tabs + workshop diary lanes' },
-    { id: 'audit',       label: 'Audit Log',          adminOnly: true,  icon: 'todos',         accent: T.text2,  desc: 'Recent user-management events' },
     { id: 'library',     label: 'Library',            adminOnly: true,  icon: 'reports',       accent: T.purple, desc: 'Portal documentation — SOP and full handover, readable here or downloadable as PDF', href: '/admin/library' },
     { id: 'profile',     label: 'My Profile',         adminOnly: false, icon: 'distributors',  accent: T.purple, desc: 'Your name & password' },
   ]
   const visibleSections = SECTIONS.filter(s => !s.adminOnly || isAdmin)
   const active = SECTIONS.find(s => s.id === openId) || null
   // Heavy sections (tables / iframes) get a wider window.
-  const WIDE: SettingsTab[] = ['dist-report','connections','data-imports','vin-codes','backfill','users','workshop','md-imports','coaching','leave']
+  const WIDE: SettingsTab[] = ['dist-report','connections','data-imports','vin-codes','users','coaching','leave']
 
   function openSection(t: SettingsTab) {
     setOpenId(t)
@@ -198,13 +195,9 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
                   {active.id === 'connections' && isAdmin && <ConnectionsHubTab initialSubTab={initialConnSub}/>}
                   {active.id === 'data-imports'&& isAdmin && <DataImportsTab/>}
                   {active.id === 'vin-codes'   && isAdmin && <VinCodesTab/>}
-                  {active.id === 'workshop'    && isAdmin && <WorkshopSettingsEmbed/>}
-                  {active.id === 'md-imports'  && isAdmin && <MdImportsEmbed/>}
-                  {active.id === 'backfill'    && isAdmin && <BackfillTab/>}
                   {active.id === 'coaching'    && isAdmin && <CoachingTab/>}
                   {active.id === 'leave'       && isAdmin && <LeaveNotificationsTab/>}
                   {active.id === 'users'       && isAdmin && <UsersTab currentUser={user}/>}
-                  {active.id === 'audit'       && isAdmin && <AuditTab/>}
                   {active.id === 'profile'                && <ProfileTab user={user}/>}
                 </div>
               </div>
@@ -837,56 +830,6 @@ function TwoFactorCard() {
 // ═══════════════════════════════════════════════════════════════════
 // AUDIT LOG TAB
 // ═══════════════════════════════════════════════════════════════════
-function AuditTab() {
-  const [rows, setRows] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState('')
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch('/api/users/audit')
-        if (!r.ok) throw new Error((await r.json()).error || 'Failed')
-        const d = await r.json()
-        setRows(d.rows || [])
-      } catch (e: any) { setErr(e.message) }
-      finally { setLoading(false) }
-    })()
-  }, [])
-
-  return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
-    <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.border2}`}}>
-      <div style={{fontSize:13,fontWeight:600}}>Audit Log</div>
-      <div style={{fontSize:11,color:T.text3,marginTop:2}}>Recent user-management events</div>
-    </div>
-    {loading && <SkeletonRows rows={8}/>}
-    {err && <div style={{padding:20,color:T.red,fontSize:12}}>{err}</div>}
-    {!loading && !err && (
-      <table style={{width:'100%',borderCollapse:'collapse'}}>
-        <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-          {['When','Actor','Action','Target','Details'].map(h =>
-            <th key={h} style={{fontSize:10,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500,textTransform:'uppercase',letterSpacing:'0.05em'}}>{h}</th>
-          )}
-        </tr></thead>
-        <tbody>{rows.map(r => (
-          <tr key={r.id} style={{borderTop:`1px solid ${T.border}`}}>
-            <td style={{fontSize:11,color:T.text3,padding:'8px 12px',fontFamily:'monospace',whiteSpace:'nowrap'}}>
-              {new Date(r.created_at).toLocaleString('en-AU',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}
-            </td>
-            <td style={{fontSize:12,color:T.text2,padding:'8px 12px',fontFamily:'monospace'}}>{r.actor_email || '—'}</td>
-            <td style={{fontSize:12,color:T.blue,padding:'8px 12px'}}>{r.action}</td>
-            <td style={{fontSize:12,color:T.text2,padding:'8px 12px',fontFamily:'monospace'}}>{r.target_email || '—'}</td>
-            <td style={{fontSize:11,color:T.text3,padding:'8px 12px',fontFamily:'monospace',maxWidth:300,overflow:'hidden',textOverflow:'ellipsis'}}>
-              {r.details ? JSON.stringify(r.details).slice(0,100) : ''}
-            </td>
-          </tr>
-        ))}
-        {rows.length === 0 && <tr><td colSpan={5} style={{padding:24,textAlign:'center',color:T.text3,fontSize:12}}>No audit events yet.</td></tr>}
-        </tbody>
-      </table>
-    )}
-  </div>
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // VIN CODES & BACKFILL TABS — thin wrappers around the existing admin UIs
@@ -898,21 +841,6 @@ function AuditTab() {
 function VinCodesTab() {
   return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
     <iframe src="/admin/vin-codes?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="VIN codes admin"/>
-  </div>
-}
-function BackfillTab() {
-  return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
-    <iframe src="/admin/backfill?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="Orders ↔ Quotes backfill"/>
-  </div>
-}
-function WorkshopSettingsEmbed() {
-  return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
-    <iframe src="/workshop/settings?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="Workshop settings"/>
-  </div>
-}
-function MdImportsEmbed() {
-  return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
-    <iframe src="/imports?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="MD Imports"/>
   </div>
 }
 
