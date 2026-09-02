@@ -491,6 +491,12 @@ export default function WorkshopMapDashboard() {
   // ── Derived stats (each strip reflects the other active filters) ────────
   const baseMonth = useMemo(() => points.filter(p => (month < 0 || p.m === month) && (st === 'all' || pcState(p.pc) === st)), [points, month, st])
   const tot = selPoints.reduce((s, p) => s + p.a, 0)
+  // Distributor jobs joining the headline figures, but ONLY where they mean the
+  // same thing. They add to the job COUNT and the location count; they must
+  // never touch revenue or the average, because a tune is counted from the VIN
+  // on an invoice line and carries no per-car value — folding it in would
+  // invent money and drag the average down with jobs worth nothing.
+  const distJobs = view === 'jobs' && tunesOn && tunePins ? tunePins.total : 0
   // Booking deposits for the current month selection (deposits aren't points,
   // so the vehicle/state filters don't apply — month is the one that matters).
   const depSel = useMemo(() => {
@@ -631,16 +637,47 @@ export default function WorkshopMapDashboard() {
         <div className="stats">
           <div className="stat">
             <div className="v" style={{ color: view === 'jobs' ? '#11ADE6' : '#FFB454' }}>{fmtK(tot)}</div>
-            <div className="k">{view === 'jobs' ? 'Revenue (inc GST)' : 'Quoted (inc GST)'}</div>
+            <div className="k">{view === 'jobs' ? `Revenue (inc GST)${distJobs ? ' — workshop' : ''}` : 'Quoted (inc GST)'}</div>
+            {distJobs > 0 && (
+              <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }}
+                title="Distributor tunes are counted from the VIN on the invoice line, which gives a job count but no per-car value — so adding them here would invent revenue.">
+                distributor tunes carry no value here
+              </div>
+            )}
             {view === 'jobs' && depSel > 0 && (
               <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }} title="Booking deposits taken but the job isn't completed yet — not in the total above. Deposits for completed jobs are already folded into their customer's dot, along with every invoice for that customer in the month.">
                 + {fmtK(depSel)} deposits awaiting jobs
               </div>
             )}
           </div>
-          <div className="stat"><div className="v">{selPoints.length.toLocaleString('en-AU')}</div><div className="k">{view === 'jobs' ? 'Clear jobs' : 'Quotes'}</div></div>
-          <div className="stat"><div className="v">{locCount}</div><div className="k">Locations</div></div>
-          <div className="stat"><div className="v">{fmt(selPoints.length ? tot / selPoints.length : 0)}</div><div className="k">{view === 'jobs' ? 'Avg / job' : 'Avg / quote'}</div></div>
+          <div className="stat">
+            <div className="v">{(selPoints.length + distJobs).toLocaleString('en-AU')}</div>
+            <div className="k">{view === 'jobs' ? `Clear jobs${distJobs ? ' (incl. distributor)' : ''}` : 'Quotes'}</div>
+            {distJobs > 0 && (
+              <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }}
+                title="Workshop jobs are one customer per month; distributor jobs are one car per year, from the VIN on the tune invoice.">
+                {selPoints.length.toLocaleString('en-AU')} workshop + {distJobs.toLocaleString('en-AU')} distributor
+              </div>
+            )}
+          </div>
+          <div className="stat">
+            <div className="v">{locCount + (distJobs ? tunePins!.pins.length : 0)}</div>
+            <div className="k">Locations</div>
+            {distJobs > 0 && (
+              <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }}>
+                incl. {tunePins!.pins.length} distributor{tunePins!.pins.length === 1 ? '' : 's'}
+              </div>
+            )}
+          </div>
+          <div className="stat">
+            <div className="v">{fmt(selPoints.length ? tot / selPoints.length : 0)}</div>
+            <div className="k">{view === 'jobs' ? `Avg / job${distJobs ? ' (workshop)' : ''}` : 'Avg / quote'}</div>
+            {distJobs > 0 && (
+              <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }}>
+                distributor tunes excluded
+              </div>
+            )}
+          </div>
         </div>
       )}
 
