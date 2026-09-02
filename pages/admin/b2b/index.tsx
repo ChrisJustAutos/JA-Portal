@@ -15,6 +15,7 @@ import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import { SkeletonRows } from '../../../components/ui'
 import { T, alpha } from '../../../lib/ui/theme'
+import { useIsMobile } from '../../../lib/useIsMobile'
 import { A, RADIUS, cardStyle, Banner, PageTitle, SectionLabel, StatusPill, orderStatusColor, orderStatusLabel } from '../../../components/b2b/ui'
 
 interface Props {
@@ -67,6 +68,7 @@ interface OrdersSummary {
 }
 
 export default function B2BHubPage({ user }: Props) {
+  const isMobile = useIsMobile()
   const [settings, setSettings] = useState<SettingsSummary | null>(null)
   const [orders, setOrders] = useState<OrdersSummary | null>(null)
 
@@ -131,8 +133,12 @@ export default function B2BHubPage({ user }: Props) {
             const awaiting  = (sc.paid || 0) + (sc.picking || 0) + (sc.packed || 0)
             const inTransit = sc.shipped || 0
             const delivered = sc.delivered || 0
+            // Phone: the same swipe rail as the orders filters. Five 168px
+            // tiles stacked into five rows and pushed the recent orders off
+            // the screen entirely.
             return (
-              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(168px, 1fr))',gap:14,marginBottom:18}}>
+              <div className={isMobile ? 'b2b-swipe' : undefined}
+                style={isMobile ? {marginBottom:18} : {display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(168px, 1fr))',gap:14,marginBottom:18}}>
                 <StatTile icon="pending"      color={A.warn}   label="Pending payment"     value={pending}   href="/admin/b2b/orders?status=pending_payment"/>
                 <StatTile icon="orders"       color={A.accent} label="Awaiting fulfilment" value={awaiting}  href="/admin/b2b/orders?status=paid,picking,packed"/>
                 <StatTile icon="truck"        color={A.accent} label="In transit"          value={inTransit} href="/admin/b2b/orders?status=shipped"/>
@@ -157,27 +163,29 @@ export default function B2BHubPage({ user }: Props) {
             ) : (
               orders.orders.map((o, i) => (
                 <a key={o.id} href={`/admin/b2b/orders/${o.id}`}
-                  style={{display:'flex',alignItems:'center',gap:10,padding:'12px 16px',borderTop:i>0?`1px solid ${T.border}`:'none',textDecoration:'none',color:T.text}}>
-                  <span style={{fontFamily:'monospace',fontSize:12.5,minWidth:0,flexShrink:0}}>{o.order_number}</span>
-                  <span style={{flex:1,minWidth:40,fontSize:13,color:T.text2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{o.distributor?.display_name || '—'}</span>
-                  {o.myob_write_error && <span title={o.myob_write_error} style={{fontSize:12,color:A.bad,flexShrink:0}}>MYOB failed</span>}
-                  <StatusPill color={orderStatusColor(o.status)}>{orderStatusLabel(o.status)}</StatusPill>
-                  <span style={{fontFamily:'monospace',fontSize:12.5,textAlign:'right',flexShrink:0}}>${money(Number(o.total_inc))}</span>
-                  <span style={{fontSize:12,color:T.text3,textAlign:'right',flexShrink:0,whiteSpace:'nowrap'}}>{formatRel(o.created_at)}</span>
+                  style={{display:'block',padding: isMobile ? '11px 14px' : '12px 16px',borderTop:i>0?`1px solid ${T.border}`:'none',textDecoration:'none',color:T.text}}>
+                  {/* Two lines on a phone. Six items competing on one line meant
+                      the distributor was permanently truncated and the money was
+                      squeezed against the date (Chris 2026-09-02). Money and
+                      status lead; who and when sit underneath. */}
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <span style={{fontFamily:'monospace',fontSize:12.5,flexShrink:0}}>{o.order_number}</span>
+                    <StatusPill color={orderStatusColor(o.status)}>{orderStatusLabel(o.status)}</StatusPill>
+                    <span style={{flex:1}}/>
+                    <span style={{fontFamily:'monospace',fontSize:13.5,fontWeight:650,fontVariantNumeric:'tabular-nums',flexShrink:0}}>${money(Number(o.total_inc))}</span>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:10,marginTop:3}}>
+                    <span style={{flex:1,minWidth:0,fontSize:12.5,color:T.text2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                      {o.distributor?.display_name || '—'}
+                    </span>
+                    {o.myob_write_error && <span title={o.myob_write_error} style={{fontSize:12,color:A.bad,flexShrink:0}}>MYOB failed</span>}
+                    <span style={{fontSize:12,color:T.text3,flexShrink:0,whiteSpace:'nowrap'}}>{formatRel(o.created_at)}</span>
+                  </div>
                 </a>
               ))
             )}
           </section>
 
-          {/* Quick links */}
-          <section style={{...cardStyle(true),marginTop:48,padding:'22px 26px'}}>
-            <SectionLabel>Distributor portal links</SectionLabel>
-            <div style={{display:'flex',gap:14,flexWrap:'wrap'}}>
-              <ExternalLink href="/b2b/login"     label="Sign-in page"/>
-              <ExternalLink href="/b2b/catalogue" label="Catalogue (as a distributor)"/>
-              <ExternalLink href="/b2b/orders"    label="Orders (as a distributor)"/>
-            </div>
-          </section>
 
         </main>
       </div>
@@ -201,19 +209,6 @@ function StatTile({ icon, color, label, value, href }: {
   )
 }
 
-function ExternalLink({ href, label }: { href: string; label: string }) {
-  return (
-    <a href={href} target="_blank" rel="noopener noreferrer"
-      className="al-press al-focus"
-      style={{
-        fontSize:13,fontWeight:600,color:T.text2,textDecoration:'none',
-        padding:'8px 14px',borderRadius:RADIUS.pill,background:T.bg3,
-        display:'inline-flex',alignItems:'center',gap:6,
-      }}>
-      {label} ↗
-    </a>
-  )
-}
 
 function money(n: number): string {
   return n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })

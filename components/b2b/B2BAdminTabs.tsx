@@ -64,9 +64,12 @@ export default function B2BAdminTabs({ active }: { active: B2BAdminSection }) {
           display:flex; gap:8px; overflow-x:auto; overflow-y:hidden;
           -webkit-overflow-scrolling:touch; scroll-snap-type:x proximity;
           scrollbar-width:none; -ms-overflow-style:none;
-          /* Bleed to the screen edges so the rail reads as continuous, then
-             pad back in so the first and last pill are not clipped. */
-          margin:0 -14px; padding:2px 14px 2px;
+          /* NO negative-margin bleed. It made the rail wider than its
+             container, so the end pills sat outside the screen and the page
+             itself could be dragged sideways (Chris 2026-09-02). The rail now
+             begins and ends exactly where the rest of the content does.
+             scroll-padding keeps a snapped pill off the very edge. */
+          padding:2px 0; scroll-padding-inline:0;
         }
         .b2b-swipe::-webkit-scrollbar{ display:none; }
         .b2b-swipe > *{ scroll-snap-align:start; flex:0 0 auto; }
@@ -91,6 +94,12 @@ export default function B2BAdminTabs({ active }: { active: B2BAdminSection }) {
           table.b2b-cards td:not([data-label])::before, table.b2b-cards td[data-label=""]::before{ content:none; }
           table.b2b-cards td.b2b-card-title{ display:block !important; text-align:left !important; font-weight:600; font-size:14px; color:${T.text}; padding:0 0 8px !important; margin-bottom:4px; border-bottom:1px solid ${T.border} !important; }
           table.b2b-cards td.b2b-card-title::before{ content:none; }
+          /* td.b2b-card-inline = sits on a shared line with its neighbours
+             instead of taking a full labelled row. For values that speak for
+             themselves (a status pill, a total) it turns a six-row card into
+             two lines. */
+          table.b2b-cards td.b2b-card-inline{ display:inline-flex !important; width:auto !important; padding:4px 12px 4px 0 !important; text-align:left !important; }
+          table.b2b-cards td.b2b-card-inline::before{ content:none; }
           table.b2b-cards td.b2b-card-hide{ display:none !important; }
         }
       `}</style>

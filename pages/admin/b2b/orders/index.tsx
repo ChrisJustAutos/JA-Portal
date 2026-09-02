@@ -684,7 +684,7 @@ function OrderRowDisplay({ order, isFirst, selectable, checked, onToggle }: {
         <div style={{fontSize:12,color:T.text3,opacity:0.7}}>{placedTime}</div>
       </td>
 
-      <td data-label="Payment" style={td()}>
+      <td data-label="Payment" className="b2b-card-inline" style={td()}>
         {(() => { const p = paymentState(order); return <Pill color={p.color}>{p.label}</Pill> })()}
         {Number(order.refunded_total) > 0 && (
           <div style={{fontSize:12,color:A.bad,marginTop:3}}>
@@ -693,15 +693,15 @@ function OrderRowDisplay({ order, isFirst, selectable, checked, onToggle }: {
         )}
       </td>
 
-      <td data-label="Shipping" style={td()}>
+      <td data-label="Shipping" className="b2b-card-inline" style={td()}>
         {(() => { const sh = shippingState(order); return <Pill color={sh.color}>{sh.label}</Pill> })()}
       </td>
 
-      <td data-label="Total (inc)" style={{...td(),textAlign:'right',fontFamily:'monospace',fontVariantNumeric:'tabular-nums'}}>
+      <td data-label="Total (inc)" className="b2b-card-inline" style={{...td(),textAlign:'right',fontFamily:'monospace',fontVariantNumeric:'tabular-nums',fontWeight:650}}>
         ${money(Number(order.total_inc))}
       </td>
 
-      <td data-label="MYOB #" style={{...td(),fontSize:12.5}}>
+      <td data-label="MYOB #" className="b2b-card-hide" style={{...td(),fontSize:12.5}}>
         {order.myob_invoice_number ? (
           <span style={{fontFamily:'monospace',color:T.text2}}>{order.myob_invoice_number}</span>
         ) : order.myob_write_error ? (
