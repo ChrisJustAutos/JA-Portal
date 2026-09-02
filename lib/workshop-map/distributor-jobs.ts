@@ -54,12 +54,20 @@ export interface DistributorTunePin {
   lat: number
   lng: number
   suburb: string | null
-  /** tunes = VIN-months, matching `total`'s counting rule */
+  /**
+   * ONE JOB IS ONE CAR (Chris 2026-09-02: "you could have 2 tunes for 1 car
+   * which means it should only count unique VINs"). So `jobs` is DISTINCT VINs
+   * across the whole year, and `jobsByMonth[m]` is distinct VINs in that month.
+   * The two do not sum: a car tuned in March and again in July is one job but
+   * appears in both months, which is why the year figure is carried separately
+   * rather than added up on the client.
+   */
+  jobs: number
+  jobsByMonth: number[]
+  /** VIN-months. Only used to say how many were repeat visits. */
   tunes: number
-  /** distinct vehicles */
-  vehicles: number
-  /** series → 12 FY months (Jul=0) → tunes */
-  bySeries: Record<string, number[]>
+  /** series → same pair of measures, so a model breakdown dedupes identically */
+  bySeries: Record<string, { jobs: number; months: number[] }>
 }
 
 const EMPTY: DistributorJobs = {
@@ -152,7 +160,10 @@ export async function distributorJobsForFy(db: SupabaseClient, fy: number): Prom
     .filter(x => x.geo)
   const names = located.map(x => x.row.display_name as string)
 
-  const pins = new Map<string, DistributorTunePin>()
+  // Built from VIN SETS rather than running totals: two MYOB customer bases can
+  // merge into one pin (a branch billed separately), and the same car tuned at
+  // both must still be one job.
+  const pinAcc = new Map<string, { pin: DistributorTunePin; vins: Map<string, Set<number>> }>()
   let unlocatedTunes = 0
   const unlocatedNames: string[] = []
 
@@ -185,18 +196,37 @@ export async function distributorJobsForFy(db: SupabaseClient, fy: number): Prom
     }
     // Two MYOB customer bases can match one distributor (a branch billed
     // separately) — they share the pin rather than fighting over it.
-    let pin = pins.get(key)
-    if (!pin) {
-      pin = { name: key, lat, lng, suburb, tunes: 0, vehicles: 0, bySeries: {} }
-      pins.set(key, pin)
+    let acc = pinAcc.get(key)
+    if (!acc) {
+      acc = {
+        pin: { name: key, lat, lng, suburb, jobs: 0, jobsByMonth: Array(12).fill(0), tunes: 0, bySeries: {} },
+        vins: new Map(),
+      }
+      pinAcc.set(key, acc)
     }
-    pin.tunes += tunes
-    pin.vehicles += vins.size
+    acc.pin.tunes += tunes
     for (const [vin, monthSet] of Array.from(vins.entries())) {
-      const series = (seriesFromVin(vin) || 'OTH') as VehicleGroup
-      const row = (pin.bySeries[series] ||= Array(12).fill(0))
-      for (const mi of Array.from(monthSet)) row[mi]++
+      if (!acc.vins.has(vin)) acc.vins.set(vin, new Set())
+      const dest = acc.vins.get(vin)!
+      for (const mi of Array.from(monthSet)) dest.add(mi)
     }
+  }
+
+  // Collapse the sets into the two measures.
+  const pins = new Map<string, DistributorTunePin>()
+  for (const [key, acc] of Array.from(pinAcc.entries())) {
+    const pin = acc.pin
+    pin.jobs = acc.vins.size
+    for (const [vin, monthSet] of Array.from(acc.vins.entries())) {
+      const series = (seriesFromVin(vin) || 'OTH') as VehicleGroup
+      const row = (pin.bySeries[series] ||= { jobs: 0, months: Array(12).fill(0) })
+      row.jobs++                                   // one car, counted once
+      for (const mi of Array.from(monthSet)) {
+        row.months[mi]++
+        pin.jobsByMonth[mi]++
+      }
+    }
+    pins.set(key, pin)
   }
 
   return {
@@ -206,7 +236,7 @@ export async function distributorJobsForFy(db: SupabaseClient, fy: number): Prom
     unknown,
     rejected,
     sourceComputedAt: data.computed_at ?? null,
-    byDistributor: Array.from(pins.values()).sort((a, b) => b.tunes - a.tunes),
+    byDistributor: Array.from(pins.values()).sort((a, b) => b.jobs - a.jobs),
     unlocated: { tunes: unlocatedTunes, names: unlocatedNames.sort() },
   }
 }

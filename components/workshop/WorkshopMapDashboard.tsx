@@ -47,8 +47,11 @@ interface DistributorJobs {
 }
 interface DistributorTunePin {
   name: string; lat: number; lng: number; suburb: string | null
-  tunes: number; vehicles: number
-  bySeries: Record<string, number[]>
+  // One job = one CAR. `jobs` is distinct VINs for the year; jobsByMonth[m] is
+  // distinct VINs in that month. They do not sum — a car tuned twice in
+  // different months is one job in both.
+  jobs: number; jobsByMonth: number[]; tunes: number
+  bySeries: Record<string, { jobs: number; months: number[] }>
 }
 interface ConvBlock { qcount: Record<string, number[]>; qval: Record<string, number[]>; jcount: Record<string, number[]> }
 interface CompareYear {
@@ -410,15 +413,18 @@ export default function WorkshopMapDashboard() {
     if (!tunesOn || view !== 'jobs' || !pins) return null
     const out = pins.map(p => {
       const bySeries: Record<string, number> = {}
-      let tunes = 0
-      for (const [series, months] of Object.entries(p.bySeries)) {
+      let jobs = 0
+      for (const [series, m] of Object.entries(p.bySeries)) {
         if (cat !== 'all' && series !== cat) continue
-        const n = month < 0 ? months.reduce((a, b) => a + b, 0) : (months[month] || 0)
-        if (n > 0) { bySeries[series] = n; tunes += n }
+        // Whole year → the pre-deduped distinct-VIN count. One month → that
+        // month's. Never a sum across months: that is what made Penrith read
+        // 136 jobs when it had tuned 132 cars.
+        const n = month < 0 ? m.jobs : (m.months[month] || 0)
+        if (n > 0) { bySeries[series] = n; jobs += n }
       }
-      return { ...p, tunes, bySeries }
-    }).filter(p => p.tunes > 0)
-    return { pins: out, total: out.reduce((a, p) => a + p.tunes, 0) }
+      return { ...p, jobs, bySeries }
+    }).filter(p => p.jobs > 0)
+    return { pins: out, total: out.reduce((a, p) => a + p.jobs, 0) }
   }, [data?.distributor_jobs, tunesOn, view, cat, month])
 
   // Own layer, like the areas overlay: the jobs layer is cleared and rebuilt on
@@ -430,24 +436,28 @@ export default function WorkshopMapDashboard() {
     const layer = tuneLayerRef.current
     layer.clearLayers()
     if (!tunePins) return
-    const max = Math.max(1, ...tunePins.pins.map(p => p.tunes))
+    const max = Math.max(1, ...tunePins.pins.map(p => p.jobs))
     for (const p of tunePins.pins) {
       // Square markers, deliberately unlike the round customer dots: this pin
       // is a distributor's premises with work counted against it, not demand
       // at that address, and the two must never read as the same thing.
-      const size = Math.max(12, Math.min(30, 12 + Math.sqrt(p.tunes / max) * 18))
+      const size = Math.max(12, Math.min(30, 12 + Math.sqrt(p.jobs / max) * 18))
       const rows = Object.entries(p.bySeries).sort((a, b) => b[1] - a[1])
         .map(([g, n]) => `<div><span>${esc(NAME[g] || g)}</span><b>${n}</b></div>`).join('')
       L.marker([p.lat, p.lng], {
         icon: L.divIcon({
           className: '',
-          html: `<div class="tunepin" style="width:${size}px;height:${size}px;line-height:${size}px">${p.tunes}</div>`,
+          html: `<div class="tunepin" style="width:${size}px;height:${size}px;line-height:${size}px">${p.jobs}</div>`,
           iconSize: [size, size], iconAnchor: [size / 2, size / 2],
         }),
       }).bindPopup(
         `<div class="pop-h"><span>${esc(p.name)}${p.suburb ? `<span class="pc">${esc(p.suburb)}</span>` : ''}</span></div>`
-        + `<div class="pop-s"><div><b>${p.tunes}</b><span>Tune${p.tunes === 1 ? '' : 's'}</span></div>`
-        + `<div><b>${p.vehicles}</b><span>Vehicles</span></div></div>`
+        // One number, not two. A job IS a car, so a separate "vehicles" stat
+        // beside it was the same fact twice — and the pair disagreeing (136 vs
+        // 132) was the bug. Repeat visits get a quiet line of their own.
+        + `<div class="pop-s"><div><b>${p.jobs}</b><span>Job${p.jobs === 1 ? '' : 's'}</span></div></div>`
+        + (month < 0 && p.tunes > p.jobs
+          ? `<div class="pop-veh">${p.tunes} tunes — ${p.tunes - p.jobs} return visit${p.tunes - p.jobs === 1 ? '' : 's'}</div>` : '')
         + `<div class="pop-list">${rows}</div>`,
       ).addTo(layer)
     }
@@ -658,13 +668,13 @@ export default function WorkshopMapDashboard() {
           {tunesOn && tunePins && (
             <>
               <span style={{ fontSize: 11, color: 'var(--wm-muted2)', padding: '0 8px', whiteSpace: 'nowrap' }}>
-                <b style={{ color: '#6ea8fe' }}>{tunePins.total}</b> tune{tunePins.total === 1 ? '' : 's'} across {tunePins.pins.length} distributor{tunePins.pins.length === 1 ? '' : 's'}
+                <b style={{ color: '#6ea8fe' }}>{tunePins.total}</b> job{tunePins.total === 1 ? '' : 's'} across {tunePins.pins.length} distributor{tunePins.pins.length === 1 ? '' : 's'} · one car = one job
               </span>
               {tunePins.pins.slice(0, 14).map(p => (
                 <button key={p.name} className="mbtn"
-                  title={`${p.name}${p.suburb ? ` — ${p.suburb}` : ''} · ${p.tunes} tune${p.tunes === 1 ? '' : 's'}`}
+                  title={`${p.name}${p.suburb ? ` — ${p.suburb}` : ''} · ${p.jobs} job${p.jobs === 1 ? '' : 's'} (unique vehicles)`}
                   onClick={() => mapRef.current?.setView([p.lat, p.lng], 9)}>
-                  {p.name.length > 20 ? p.name.slice(0, 19) + '…' : p.name}<span className="mt">{p.tunes}</span>
+                  {p.name.length > 20 ? p.name.slice(0, 19) + '…' : p.name}<span className="mt">{p.jobs}</span>
                 </button>
               ))}
               {/* Never silently short: a quarter of FY2026's tunes are at names
