@@ -322,6 +322,27 @@ export interface ManifestOutcome {
  * are the truth, not the HTTP status.
  *   docs: https://developers.live.machship.com/api/supporting/manifesting-consignments
  */
+/**
+ * Is a pickup window MachShip suggested actually usable?
+ *
+ * Both sides are naive local (Brisbane wall clock) and `nowBris` is a Date
+ * whose UTC fields hold Brisbane wall clock, so parsing the naive strings AS
+ * UTC compares like with like - the offsets cancel.
+ *
+ * Usable means: it starts far enough ahead to be actioned, and it leaves at
+ * least half an hour before its own closing time. MachShip sometimes returns
+ * the location's closing time as the pickup time (17:00-17:00), which every
+ * carrier refuses.
+ */
+function isBookableWindow(startNaive: unknown, closeNaive: unknown, nowBris: Date): boolean {
+  const start = Date.parse(`${String(startNaive || '')}Z`)
+  if (!Number.isFinite(start)) return false
+  if (start < nowBris.getTime() + 15 * 60_000) return false
+  const close = Date.parse(`${String(closeNaive || '')}Z`)
+  if (Number.isFinite(close) && close - start < 30 * 60_000) return false
+  return true
+}
+
 export async function manifestConsignments(
   consignmentIds: number[],
   opts: {
@@ -381,10 +402,28 @@ export async function manifestConsignments(
     if (chosen) {
       out.pickupDateTime = chosen
       out.pickupClosingTime = chosenClose
-    } else {
-      // Only fill these in when MachShip didn't — never override what it chose.
-      if (!out.pickupDateTime) out.pickupDateTime = localNaive(pickup)
+    } else if (isBookableWindow(out.pickupDateTime, out.pickupClosingTime, nowBris)) {
+      // MachShip's own window is preferred - it knows the from-location's
+      // operating hours, which we don't - but only when it is actually
+      // bookable. Fill in a missing closing time and otherwise leave it be.
       if (!out.pickupClosingTime) out.pickupClosingTime = localNaive(close)
+    } else {
+      // UNBOOKABLE SUGGESTION (Chris 2026-09-03). MachShip grouped a TNT job
+      // at 8:49am and came back pickupDateTime 17:00 with pickupClosingTime
+      // 17:00 - a zero-length window at the location's CLOSING time. TNT
+      // refuses that outright: "The booking time has passed for all services
+      // on the specified collection date. (477)", and the order sat
+      // undespatched with a red error on the page. The collection DATE was
+      // right; the time was the location's close, not a window.
+      //
+      // A window that has already gone, or that leaves no time to collect in,
+      // is worse than our own guess (next hour today, or 9am on the next
+      // business day once the 2pm cut-off has passed), so use that instead.
+      if (out.pickupDateTime) {
+        console.warn(`[machship] ignoring unbookable suggested pickup ${out.pickupDateTime}-${out.pickupClosingTime || '?'} - sending ${localNaive(pickup)}-${localNaive(close)}`)
+      }
+      out.pickupDateTime = localNaive(pickup)
+      out.pickupClosingTime = localNaive(close)
     }
     if (out.pickupAlreadyBooked == null) out.pickupAlreadyBooked = false
     return out
@@ -420,7 +459,12 @@ export async function manifestConsignments(
   // it forward once and re-send. Nothing was booked by the refused attempt, so
   // this cannot double-book.
   // Never auto-move a pickup someone chose by hand.
-  const missedCutoff = !chosen && errs.some(e => /latest .* pickup time|before the locations? closing time/i.test(e))
+  // TNT's 477 wording ("The booking time has passed for all services on the
+  // specified collection date") is the same condition as "the latest pickup
+  // time for X is 2:00 pm" and has to roll the same way - it did not match
+  // before, so a genuinely-too-late despatch reported an error instead of
+  // moving to tomorrow (Chris 2026-09-03).
+  const missedCutoff = !chosen && errs.some(e => /latest .* pickup time|before the locations? closing time|booking time has passed|\(477\)/i.test(e))
   if (missedCutoff) {
     // Advance from the date we ACTUALLY SENT, not from `pickup`. When it is
     // already past the cut-off, `pickup` has itself rolled to tomorrow, so
