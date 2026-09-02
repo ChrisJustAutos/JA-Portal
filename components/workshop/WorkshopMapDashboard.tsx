@@ -448,8 +448,16 @@ export default function WorkshopMapDashboard() {
       // is a distributor's premises with work counted against it, not demand
       // at that address, and the two must never read as the same thing.
       const size = Math.max(12, Math.min(30, 12 + Math.sqrt(p.jobs / max) * 18))
+      // A table, not a run of divs. The old markup put the count straight after
+      // the name ("LC 70 Series54") because nothing aligned the two columns.
+      const top = Math.max(1, ...Object.values(p.bySeries))
       const rows = Object.entries(p.bySeries).sort((a, b) => b[1] - a[1])
-        .map(([g, n]) => `<div><span>${esc(NAME[g] || g)}</span><b>${n}</b></div>`).join('')
+        .map(([g, n]) => `<tr>`
+          + `<td class="vt-n"><i style="background:${COL[g] || 'var(--wm-muted)'}"></i>${esc(NAME[g] || g)}</td>`
+          // The bar is the same number again, read at a glance — which model
+          // this distributor actually does is the point of the breakdown.
+          + `<td class="vt-b"><span style="width:${Math.round((n / top) * 100)}%;background:${COL[g] || 'var(--wm-muted)'}"></span></td>`
+          + `<td class="vt-v">${n}</td></tr>`).join('')
       L.marker([p.lat, p.lng], {
         icon: L.divIcon({
           className: '',
@@ -464,10 +472,10 @@ export default function WorkshopMapDashboard() {
         + `<div class="pop-s"><div><b>${p.jobs}</b><span>Job${p.jobs === 1 ? '' : 's'}</span></div></div>`
         + (month < 0 && p.tunes > p.jobs
           ? `<div class="pop-veh">${p.tunes} tunes — ${p.tunes - p.jobs} return visit${p.tunes - p.jobs === 1 ? '' : 's'}</div>` : '')
-        + `<div class="pop-list">${rows}</div>`,
+        + `<table class="vt"><tbody>${rows}</tbody></table>`,
       ).addTo(layer)
     }
-  }, [tunePins, NAME])
+  }, [tunePins, NAME, COL, month])
 
   // Fix tile layout when switching back from a non-map view.
   useEffect(() => {
@@ -1921,6 +1929,14 @@ const CSS = `
 .wm-dash .pop-row .cn{color:var(--wm-txt);font-weight:500}.wm-dash .pop-row .jt{color:var(--wm-muted);font-size:10.5px}
 .wm-dash .pop-row .am{font-family:'Space Mono';font-weight:700;white-space:nowrap}
 .wm-dash .pop-row .vdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
+.wm-dash .vt{width:100%;border-collapse:collapse;font-size:12.5px}
+.wm-dash .vt td{padding:4px 0;border-bottom:1px solid rgba(36,48,64,.5);vertical-align:middle}
+.wm-dash .vt tr:last-child td{border-bottom:none}
+.wm-dash .vt .vt-n{color:var(--wm-txt);font-weight:500;white-space:nowrap;padding-right:10px}
+.wm-dash .vt .vt-n i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.wm-dash .vt .vt-b{width:100%;padding:0 8px}
+.wm-dash .vt .vt-b span{display:block;height:4px;border-radius:2px;opacity:.55;min-width:2px}
+.wm-dash .vt .vt-v{font-family:'Space Mono';font-weight:700;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--wm-txt)}
 .wm-dash .inf{color:var(--wm-muted2);font-size:11px;cursor:help}.wm-dash .won{color:var(--wm-mint);font-size:10px;font-weight:700}
 .wm-dash .pop-inv{font-family:'Space Mono';font-size:9px;color:var(--wm-muted2)}
 .wm-dash .note{position:absolute;top:12px;right:12px;z-index:500;background:rgba(18,24,33,.92);border:1px solid var(--wm-line);border-radius:7px;padding:8px 11px;max-width:230px;font-size:10.5px;color:var(--wm-muted);line-height:1.5}
