@@ -68,6 +68,11 @@ export interface ExtractedAPInvoice {
     reference: string | null         // e.g. "046766"
     memberNumber: string | null      // our customer/member number on the invoice
   }
+  // WHICH OF OUR COMPANIES the invoice is addressed to, as printed. Read by
+  // the LLM rather than scraped from the PDF text layer, so it survives scans
+  // and image-only invoices - which is exactly the case that broke the
+  // billed-to routing before (Chris 2026-09-02).
+  billedTo: string | null
   notes: string | null               // free-text annotations on the PDF
   // Invoice already settled on the invoice itself (balance due $0.00 with a
   // card/EFT/cash payment row or PAID stamp). totalIncGst still carries the
@@ -261,6 +266,7 @@ Output ONLY a JSON object with this exact shape:
     "reference":    "The Capricorn reference number if shown (e.g. '046766' from '** CAPRICORN 046766 **'). null otherwise.",
     "memberNumber": "Just Autos's customer/member number with this supplier (e.g. '5734438-0001'). Often labelled CUSTOMER NUMBER. null if not shown."
   },
+  "billedTo": "The CUSTOMER this invoice is addressed to - the name under 'Bill To', 'Invoice To', 'Charge To', 'Sold To', 'Customer' or in the address block that is NOT the supplier's own letterhead. Return it exactly as printed, including any Pty Ltd / P/L suffix (e.g. 'Just Autos Wholesale Pty Ltd', 'Vehicle Performance Solutions'). This is OUR name, not the supplier's. null if the document shows no customer name at all.",
   "notes": "Any free-text annotations relevant to the order — names of staff who placed it ('N: MATTHEW'), delivery instructions ('T: REPCO TO DELIVER'), special remarks. Concatenate multiple into one string with semicolons. null if nothing notable.",
   "currency": "ISO 4217 code of the currency the invoice amounts are in (AUD, USD, NZD, AED, EUR...). Determine from explicit currency labels, symbols with country hints (A$, US$), the supplier's country, or GST vs VAT/sales-tax wording. Plain '$' with Australian GST → AUD. null ONLY if genuinely undeterminable.",
   "isCreditNote": "true if this document is a credit note / supplier credit / adjustment note / return rather than a regular invoice. Strong signals: header text says 'CREDIT NOTE', 'TAX CREDIT NOTE', 'ADJUSTMENT NOTE', 'CR', or 'RETURN'; the document number prefixed with 'CR'; total amount is shown as negative or in parentheses; line totals are negative; line description says 'refund' or 'return'. When true, totals.totalIncGst and lineTotalExGst should still be returned as POSITIVE numbers (the credit-note flag is the sign indicator). false for normal invoices.",
@@ -351,6 +357,7 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
   })
 
   return {
+    billedTo: nullableString((raw as any).billedTo),
     vendor: {
       name:     nullableString(vendor.name),
       abn:      nullableAbn(vendor.abn),

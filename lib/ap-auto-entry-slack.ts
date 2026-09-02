@@ -20,6 +20,9 @@ export interface AutoEntrySlackInput {
   invoiceBank?: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
   cardBank?: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
   sourceMailbox?: string | null
+  // Set when the DOCUMENT decided the company file instead of the inbox. A
+  // silent reroute is how you end up not trusting the routing.
+  routedNote?: string | null
   supplierTrust?: string | null   // e.g. "✓ Verified — 14 posted · ABN match · known sender"
   paidOnInvoice?: string | null   // payment method when the invoice is already settled ('card', 'EFT'…)
   // ap_auto_entry_log row id — renders an "Approve & post to MYOB" button on
@@ -110,6 +113,10 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
   for (let i = 0; i < fields.length; i += 8) {
     blocks.push({ type: 'section', fields: fields.slice(i, i + 8).map(t => ({ type: 'mrkdwn', text: t.slice(0, 2000) })) })
   }
+
+  // Its own line rather than a field: it explains why the company file above
+  // is not the one the inbox would imply, and that needs reading.
+  if (i.routedNote) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `\u{1F500} ${i.routedNote}` }] })
 
   // Show BOTH sides of the bank comparison when it matters (mismatch /
   // unverified) so the reader can spot the differing digit — or a misread on

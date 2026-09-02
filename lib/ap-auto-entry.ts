@@ -834,6 +834,61 @@ function correctInvoiceNumberFromFilename(extracted: ExtractedAPInvoice, attName
   return { ...extracted, invoiceNumber: fix }
 }
 
+// ── Which of OUR companies is this invoice addressed to? ────────────────────
+//
+// Chris 2026-09-02: "if bills to either company end up in either inbox, they
+// need to be routed to the correct one."
+//
+// The old version read ONE signal - the PDF's text layer - and asked whether it
+// contained the words. That failed silently on Jarred's MPI test: the invoice
+// was billed to Just Autos Wholesale, arrived in the Just Autos inbox, and
+// posted against VPS anyway. A text layer is missing on every scan and photo,
+// and a null there simply meant "no opinion".
+//
+// So it now reads FOUR signals, strongest first, and the strongest is the LLM's
+// own read of the billed-to block - which works on scans and photographs
+// because it looks at the document rather than at its text layer.
+const ENTITY_PATTERNS: { label: CompanyFileLabel; strong: RegExp; loose: RegExp }[] = [
+  // `strong` is safe to run over a whole document. `loose` also accepts the
+  // abbreviations, and is only ever run against SHORT fields (the billed-to
+  // line, a filename) where "VPS" cannot be part of a part number or an
+  // address.
+  { label: 'JAWS', strong: /just\s*autos\s*wholesale/i, loose: /just\s*autos\s*wholesale|\bjaws\b/i },
+  { label: 'VPS',  strong: /vehicle\s*performance\s*solutions/i, loose: /vehicle\s*performance\s*solutions|\bvps\b/i },
+]
+
+/** The single entity a piece of text names, or null if it names none or both. */
+function entityIn(text: string | null | undefined, mode: 'strong' | 'loose'): CompanyFileLabel | null {
+  const t = String(text || '')
+  if (!t) return null
+  const hits = ENTITY_PATTERNS.filter(e => e[mode].test(t)).map(e => e.label)
+  return hits.length === 1 ? hits[0] : null
+}
+
+/**
+ * Decide the company file from the DOCUMENT, not from the inbox it arrived in.
+ * Returns the entity plus which signal decided it, for the audit line on the
+ * Slack card - a silent reroute is how you end up not trusting the routing.
+ */
+function detectBilledEntity(args: {
+  billedTo: string | null | undefined
+  rawText: string | null | undefined
+  attachmentName: string | null | undefined
+  subject: string | null | undefined
+}): { entity: CompanyFileLabel; why: string } | null {
+  // Strongest first. The billed-to block is what the invoice literally says
+  // about who owes the money; a filename is a human's label; the body text can
+  // mention the other entity in passing (a delivery address, a group footer).
+  const ordered: [CompanyFileLabel | null, string][] = [
+    [entityIn(args.billedTo, 'loose'), `billed to "${String(args.billedTo || '').trim().slice(0, 60)}"`],
+    [entityIn(args.attachmentName, 'loose'), `the attachment name`],
+    [entityIn(args.subject, 'loose'), `the email subject`],
+    [entityIn(args.rawText, 'strong'), `the invoice text`],
+  ]
+  for (const [entity, why] of ordered) if (entity) return { entity, why }
+  return null
+}
+
 function isSelfEntityVendor(vendorName: string | null | undefined): boolean {
   const raw = (process.env.AP_SELF_ENTITY_NAMES ?? 'just autos,vehicle performance solutions').trim()
   const patterns = raw.split(/[,;]+/).map(p => p.trim().toLowerCase().replace(/\s+/g, '')).filter(Boolean)
@@ -855,6 +910,9 @@ async function processInvoice(
   // let: the billed-to entity check below can REROUTE the posting target
   // (a Just Autos Wholesale invoice in the VPS inbox posts to JAWS).
   let companyFile = ctx.companyFile
+  // Set when the document overrides the inbox, so the Slack card can say so
+  // rather than silently showing a company file nobody expected.
+  let routedNote: string | null = null
   const { bytes, b64, kind, attId, attName } = inv
   const base = { messageId: msg.id, attachmentId: attId, attachmentName: attName }
 
@@ -1027,14 +1085,16 @@ async function processInvoice(
   // regardless of which inbox it arrived in. Ambiguous/absent → mailbox
   // default as before. Everything downstream (supplier match, coding, dup
   // guard, Slack channel, log row) follows the rerouted file.
-  if (rawText) {
-    const jaws = /JUST\s*AUTOS\s*WHOLESALE/i.test(rawText)
-    const vps = /VEHICLE\s*PERFORMANCE\s*SOLUTIONS/i.test(rawText)
-    const detected = jaws && !vps ? 'JAWS' : vps && !jaws ? 'VPS' : null
-    if (detected && detected !== companyFile) {
-      console.log(`[ap-auto-entry] billed-to reroute ${companyFile} → ${detected}: "${msg.subject}" / ${attName}`)
-      companyFile = detected
-    }
+  const billedEntity = detectBilledEntity({
+    billedTo: extracted.billedTo,
+    rawText,
+    attachmentName: attName,
+    subject: msg.subject,
+  })
+  if (billedEntity && billedEntity.entity !== companyFile) {
+    routedNote = `Invoiced to ${billedEntity.entity === 'JAWS' ? 'Just Autos Wholesale' : 'Vehicle Performance Solutions'} but arrived in the ${mailbox} inbox — posting to ${billedEntity.entity}, per ${billedEntity.why}.`
+    console.log(`[ap-auto-entry] billed-to reroute ${companyFile} → ${billedEntity.entity} (${billedEntity.why}): "${msg.subject}" / ${attName}`)
+    companyFile = billedEntity.entity
   }
 
   // A MISSING number is not a reason to vanish a real invoice (Jetstar
@@ -1379,7 +1439,7 @@ async function processInvoice(
     supplierName, companyFile, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate,
     totalIncGst: signedTotal, gstAmount: signed(extracted.totals.gstAmount), codingSummary, bankCheck: effectiveBank,
     isCreditNote: isCredit,
-    invoiceBank: extracted.bankDetails, cardBank, sourceMailbox: mailbox, supplierTrust: trust.summary,
+    invoiceBank: extracted.bankDetails, cardBank, sourceMailbox: mailbox, routedNote, supplierTrust: trust.summary,
     paidOnInvoice: extracted.paidInFull ? (extracted.paymentMethod || 'paid') : null,
     accountOptions,
   }

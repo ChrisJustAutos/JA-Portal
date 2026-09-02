@@ -515,6 +515,9 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
   )
 
   const extracted: ExtractedAPInvoice = {
+    // Not stored on ap_invoices, so null here means "unknown" and the billed-to
+    // routing falls through to its other signals rather than guessing.
+    billedTo: null,
     vendor: {
       name:     inv.vendor_name_parsed,
       abn:      inv.vendor_abn,
