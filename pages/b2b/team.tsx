@@ -15,6 +15,7 @@ import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 import { useConfirm, useToast } from '../../components/ui/Feedback'
 import { T } from '../../lib/ui/theme'
+import { useIsMobile } from '../../lib/useIsMobile'
 import { A, Banner, Btn, Card, EmptyState, Field, PageTitle, StatusPill, btnStyle, inputStyle } from '../../components/b2b/ui'
 
 interface Props {
@@ -40,6 +41,7 @@ interface TeamUser {
 }
 
 export default function B2BTeamPage({ b2bUser }: Props) {
+  const isMobile = useIsMobile()
   const toast = useToast()
   const confirmDialog = useConfirm()
   const [users, setUsers] = useState<TeamUser[]>([])
@@ -196,7 +198,68 @@ export default function B2BTeamPage({ b2bUser }: Props) {
           <EmptyState title="No users yet" />
         )}
 
-        {users.length > 0 && (
+        {/* Phone: a card per person. The table below is 560px wide and had to be
+            dragged sideways to reach the controls, which is the opposite of
+            what this should feel like on a phone. Same actions, stacked. */}
+        {users.length > 0 && isMobile && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {users.map(u => {
+              const isMe = u.id === b2bUser.id
+              const busy = busyUserId === u.id
+              return (
+                <Card key={u.id} style={{ opacity: busy ? 0.6 : 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 15, color: T.text, fontWeight: 650, letterSpacing: '-0.01em', overflowWrap: 'anywhere' }}>
+                        {u.full_name || <span style={{ color: T.text3, fontStyle: 'italic', fontWeight: 400 }}>no name</span>}
+                        {isMe && <span style={{ marginLeft: 6, fontSize: 12.5, color: A.accent, fontWeight: 500 }}>· you</span>}
+                      </div>
+                      <div style={{ fontSize: 12.5, color: T.text3, marginTop: 2, overflowWrap: 'anywhere' }}>{u.email}</div>
+                    </div>
+                    {isOwner && !isMe ? (
+                      <ToggleSwitch on={u.is_active} disabled={busy} onChange={v => patchUser(u.id, { is_active: v })} />
+                    ) : (
+                      <StatusPill color={u.is_active ? A.good : T.text3}>{u.is_active ? 'Active' : 'Inactive'}</StatusPill>
+                    )}
+                  </div>
+
+                  {u.last_login_at == null && u.invited_at && (
+                    <div style={{ fontSize: 12.5, color: A.warn, marginBottom: 8 }}>Invite sent — not yet accepted</div>
+                  )}
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    {isOwner ? (
+                      <select
+                        value={u.role}
+                        disabled={busy || isMe}
+                        onChange={e => patchUser(u.id, { role: e.target.value as 'owner' | 'member' })}
+                        style={{ ...inputStyle(), width: 'auto', minHeight: 44, opacity: isMe ? 0.6 : 1, cursor: isMe ? 'not-allowed' : 'pointer' }}>
+                        <option value="member">Member</option>
+                        <option value="owner">Owner</option>
+                      </select>
+                    ) : (
+                      <span style={{ fontSize: 13, color: u.role === 'owner' ? A.accent : T.text2 }}>
+                        {u.role === 'owner' ? 'Owner' : 'Member'}
+                      </span>
+                    )}
+                    <span style={{ fontSize: 12.5, color: T.text3, fontVariantNumeric: 'tabular-nums' }}>
+                      {u.last_login_at ? `Last in ${new Date(u.last_login_at).toLocaleDateString('en-AU')}` : 'Never signed in'}
+                    </span>
+                    <span style={{ flex: 1 }} />
+                    {isOwner && !isMe && (
+                      <button onClick={() => removeUser(u)} disabled={busy} className="al-press al-focus"
+                        style={{ ...btnStyle('ghost', 'sm', busy), color: A.bad, minHeight: 44 }}>
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </Card>
+              )
+            })}
+          </div>
+        )}
+
+        {users.length > 0 && !isMobile && (
           <Card pad={false}>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 560 }}>

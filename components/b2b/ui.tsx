@@ -307,8 +307,16 @@ export function Row({ label, value, muted, large, color }: {
       display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, padding: '4px 0',
       fontSize: large ? 17 : 13, color: muted ? T.text3 : T.text2, fontWeight: large ? 700 : 400,
     }}>
-      <span>{label}</span>
-      <span style={{ color: color || (large ? T.text : 'inherit'), fontVariantNumeric: 'tabular-nums', letterSpacing: large ? '-0.01em' : undefined }}>{value}</span>
+      {/* The label keeps its width; the VALUE is allowed to wrap and is
+          right-aligned. Without this a long value had nowhere to break and
+          widened the whole card past the screen on a phone. */}
+      <span style={{ flexShrink: 0 }}>{label}</span>
+      <span style={{
+        color: color || (large ? T.text : 'inherit'),
+        fontVariantNumeric: 'tabular-nums',
+        letterSpacing: large ? '-0.01em' : undefined,
+        minWidth: 0, textAlign: 'right', overflowWrap: 'anywhere',
+      }}>{value}</span>
     </div>
   )
 }

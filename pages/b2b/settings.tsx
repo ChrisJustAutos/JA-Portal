@@ -11,6 +11,7 @@ import { enableNotifications, ensurePushSubscription } from '../../lib/pushClien
 import { getSupabase } from '../../lib/supabaseClient'
 import { useConfirm } from '../../components/ui/Feedback'
 import { T } from '../../lib/ui/theme'
+import { useIsMobile } from '../../lib/useIsMobile'
 import { A, Banner, Btn, Card, DotLine, PageTitle, SectionLabel, StatusPill, btnStyle, inputStyle } from '../../components/b2b/ui'
 
 const B2B_SUBSCRIBE_URL = '/api/b2b/notifications/push-subscribe'
@@ -32,6 +33,7 @@ interface AccountData {
 }
 
 export default function B2BSettingsPage({ b2bUser }: Props) {
+  const isMobile = useIsMobile()
   const [data, setData] = useState<AccountData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -58,10 +60,12 @@ export default function B2BSettingsPage({ b2bUser }: Props) {
     return parts
   }
 
+  // Label above the value on a phone, side by side on a desktop — a fixed
+  // 130px label column on a 390px screen left the value unreadable.
   function Field({ label, value, mono }: { label: string; value: any; mono?: boolean }) {
     const v = value == null || String(value).trim() === '' ? '—' : String(value)
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: '4px 12px', alignItems: 'baseline', padding: '6px 0', borderBottom: `1px solid ${T.border}` }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '130px 1fr', gap: isMobile ? 2 : '4px 12px', alignItems: 'baseline', padding: '6px 0', borderBottom: `1px solid ${T.border}` }}>
         <span style={{ fontSize: 12.5, color: T.text3 }}>{label}</span>
         <span style={{ fontSize: 13, color: v === '—' ? T.text3 : T.text, fontFamily: mono ? 'ui-monospace, monospace' : 'inherit', fontVariantNumeric: mono ? 'tabular-nums' : undefined }}>{v}</span>
       </div>
