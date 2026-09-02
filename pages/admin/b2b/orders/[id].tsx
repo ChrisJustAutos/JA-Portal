@@ -159,6 +159,12 @@ export default function AdminOrderDetailPage({ user }: Props) {
   const orderId = String(router.query.id || '')
   const canEdit   = roleHasPermission(user.role, 'edit:b2b_orders')
   const canRefund = roleHasPermission(user.role, 'admin:b2b')
+  // Despatch (Chris 2026-09-03). Managers ship freight but do not approve
+  // orders, mark them paid or refund them - so the shipping panel is gated on
+  // this and its two money buttons on canRefund. The card itself renders on
+  // canEdit, and offering a button whose API then answers "Forbidden -
+  // insufficient permissions" is how Terry found this out.
+  const canShip   = roleHasPermission(user.role, 'ship:b2b_orders')
 
   const [data, setData]       = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -742,6 +748,8 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 {canEdit && (
                   <ShippingCard
                     order={data}
+                    canShip={canShip}
+                    canAdmin={!!canRefund}
                     onEdit={() => setShipModal(true)}
                     onReloaded={() => { void load() }}
                     onFlash={flashMsg}
@@ -943,8 +951,10 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
 //   - "Refresh from MachShip" — calls /refresh-freight to re-fetch the
 //     current status + ETA. The 30-min cron does this automatically;
 //     the button is for when admin wants it RIGHT NOW.
-function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
+function ShippingCard({ order, canShip, canAdmin, onEdit, onReloaded, onFlash }: {
   order: OrderDetail
+  canShip: boolean          // ship:b2b_orders - book, despatch, label, refresh
+  canAdmin: boolean         // admin:b2b - approve an order, bill a drop-ship PO
   onEdit: () => void
   onReloaded: () => void
   onFlash: (msg: string) => void
@@ -1284,14 +1294,14 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
               )}
             </div>
             {!isMobile && <span style={{ flex: 1 }}/>}
-            {hasLiveQuote && !hasConsignment && (
+            {hasLiveQuote && !hasConsignment && canShip && (
               <button onClick={() => bookViaMachShip(false)} disabled={bookingBusy}
                 className="al-press al-focus"
                 style={mb({ background: alpha(A.accent, '15'), color: A.accent, cursor: bookingBusy ? 'wait' : 'pointer' })}>
                 {bookingBusy ? 'Booking…' : 'Book Shipment'}
               </button>
             )}
-            {order.status === 'awaiting_approval' && (
+            {order.status === 'awaiting_approval' && canAdmin && (
               <button onClick={approveOrder} disabled={approveBusy}
                 title="Release this large order to the warehouse and write the MYOB sale order. Drop-ship POs wait for payment."
                 className="al-press al-focus"
@@ -1299,7 +1309,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                 {approveBusy ? 'Approving…' : 'Approve order'}
               </button>
             )}
-            {awaitingDespatch && (
+            {awaitingDespatch && canShip && (
               <button onClick={() => setPickupModal(true)} disabled={shipNowBusy}
                 title="Manifests the consignment with MachShip (books the carrier pickup), raises the MYOB tax invoice, prints it and emails the distributor"
                 className="al-press al-focus"
@@ -1307,17 +1317,19 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                 {shipNowBusy ? 'Shipping…' : 'Ship now'}
               </button>
             )}
-            {hasConsignment && (
+            {hasConsignment && canShip && (
               <button onClick={refreshFromMachShip} disabled={refreshBusy}
                 className="al-press al-focus al-ghost"
                 style={mb({ background: 'transparent', color: A.accent, cursor: refreshBusy ? 'wait' : 'pointer' })}>
                 {refreshBusy ? 'Refreshing…' : 'Refresh from MachShip'}
               </button>
             )}
-            <button onClick={onEdit} className="al-press al-focus al-ghost" style={mb({ background: 'transparent', color: A.accent })}>
-              {isShipped ? 'Edit shipping' : 'Manual book'}
-            </button>
-            {order.label_pdf_path && (
+            {canShip && (
+              <button onClick={onEdit} className="al-press al-focus al-ghost" style={mb({ background: 'transparent', color: A.accent })}>
+                {isShipped ? 'Edit shipping' : 'Manual book'}
+              </button>
+            )}
+            {order.label_pdf_path && canShip && (
               <button onClick={openLabel} className="al-press al-focus al-ghost" style={mb({ background: 'transparent', color: A.accent })}>
                 Print label
               </button>
@@ -1328,7 +1340,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
               style={mb({ background: 'transparent', color: pickDone ? A.good : A.accent, cursor: pickBusy ? 'wait' : 'pointer' })}>
               {pickDone ? 'Pick list queued' : pickBusy ? 'Queuing…' : 'Print pick list'}
             </button>
-            {unbilledDropship.length > 0 && (
+            {unbilledDropship.length > 0 && canAdmin && (
               <button onClick={receiveDropship} disabled={receiveBusy}
                 title="Supplier confirmed the drop-ship order — converts the PO to a bill in MYOB (receives the stock into the supplier's DS location), then converts this order to a tax invoice and receipts the payment"
                 className="al-press al-focus"
@@ -1355,7 +1367,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
       })()}
 
       {/* Pack mode — override the cartonizer for this order before booking. */}
-      {hasLiveQuote && !hasConsignment && (
+      {hasLiveQuote && !hasConsignment && canShip && (
         <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
           <span style={{fontSize:12, color:T.text3, whiteSpace:'nowrap'}}>Pack as</span>
           <select value={packMode} onChange={e => setPackMode(e.target.value)}

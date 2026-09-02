@@ -28,7 +28,7 @@ function sb(): SupabaseClient {
   return _sb
 }
 
-export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiResponse) => {
+export default withAuth('ship:b2b_orders', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST')
     return res.status(405).json({ error: 'POST only' })

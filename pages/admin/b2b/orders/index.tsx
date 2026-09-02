@@ -13,7 +13,7 @@ import { AppIcon } from '../../../../lib/AppIcons'
 import { usePreferences } from '../../../../lib/preferences'
 import { useIsMobile } from '../../../../lib/useIsMobile'
 import { requirePageAuth } from '../../../../lib/authServer'
-import type { UserRole } from '../../../../lib/permissions'
+import { roleHasPermission, type UserRole } from '../../../../lib/permissions'
 import { SkeletonRows } from '../../../../components/ui'
 import { useToast, useConfirm } from '../../../../components/ui/Feedback'
 import { T, alpha } from '../../../../lib/ui/theme'
@@ -149,6 +149,9 @@ function genGroupId(): string { return 'osg_' + Math.random().toString(36).slice
 interface StatusTile { id: string; label: string; statuses: string[]; color: string; icon: string; isGroup: boolean }
 
 export default function AdminOrdersListPage({ user }: Props) {
+  // The whole despatch bar hangs on this: the page is readable on view:b2b,
+  // but ship-now needs ship:b2b_orders (Chris 2026-09-03).
+  const canShip = roleHasPermission(user.role, 'ship:b2b_orders')
   const router = useRouter()
   const isMobile = useIsMobile()
 
@@ -532,7 +535,7 @@ export default function AdminOrdersListPage({ user }: Props) {
           )}
 
           {/* Bulk despatch bar — only when something is booked-but-not-manifested */}
-          {despatchable.length > 0 && (
+          {despatchable.length > 0 && canShip && (
             <div style={{
               ...cardStyle(false), padding:'10px 14px', marginBottom:10,
               display:'flex', alignItems:'center', gap:12, flexWrap:'wrap',

@@ -23,7 +23,7 @@ import { shipNowForOrders } from '../../../../../lib/b2b-ship-now'
 // mid-flight, and book-freight already needed 120 for the same chain.
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } }, maxDuration: 300 }
 
-export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiResponse, user) => {
+export default withAuth('ship:b2b_orders', async (req: NextApiRequest, res: NextApiResponse, user) => {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'POST only' }) }
 
   const body = (req.body && typeof req.body === 'object') ? req.body : {}

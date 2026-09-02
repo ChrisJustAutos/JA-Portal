@@ -41,7 +41,7 @@ export const config = {
   maxDuration: 30,
 }
 
-export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiResponse, user) => {
+export default withAuth('ship:b2b_orders', async (req: NextApiRequest, res: NextApiResponse, user) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST')
     return res.status(405).json({ error: 'POST only' })

@@ -23,7 +23,7 @@ function sb(): SupabaseClient {
 const LABELS_BUCKET = 'b2b-shipping-labels'
 const URL_TTL_SECONDS = 300  // 5 min — long enough to print/save, short enough not to leak
 
-export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiResponse) => {
+export default withAuth('ship:b2b_orders', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET')
     return res.status(405).json({ error: 'GET only' })

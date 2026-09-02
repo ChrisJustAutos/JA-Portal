@@ -61,6 +61,12 @@ export type Permission =
   | 'edit:b2b_catalogue'
   | 'edit:b2b_distributors'
   | 'edit:b2b_orders'
+  // Freight/despatch on a B2B order: Book Shipment, Ship Now, Print
+  // label, Refresh from MachShip. Split out of admin:b2b (Chris
+  // 2026-09-03 - "Manager should be able to ship freight as well"):
+  // despatch is warehouse work, while the rest of admin:b2b is money
+  // and configuration - refunds, approvals, mark-paid, freight rates.
+  | 'ship:b2b_orders'
   | 'edit:stripe_myob'
   | 'edit:bookings'
   | 'edit:crm'
@@ -81,7 +87,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:leads','view:distributors','view:calls','view:reports','view:todos','view:supplier_invoices',
     'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b','view:stripe_myob',
     'edit:any','edit:distributors_groups','edit:vin_codes','edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
-    'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders','edit:stripe_myob',
+    'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders','ship:b2b_orders','edit:stripe_myob',
     'monitor:calls','use:phone',
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
@@ -96,7 +102,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:leads','view:distributors','view:calls','view:reports','view:todos','view:supplier_invoices',
     'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b','view:stripe_myob',
     'edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
-    'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders',
+    'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders','ship:b2b_orders',
     'monitor:calls','use:phone',
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
