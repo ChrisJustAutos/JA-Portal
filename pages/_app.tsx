@@ -143,6 +143,23 @@ function ServiceWorkerRegister() {
 }
 
 export default function App({ Component, pageProps }: AppProps) {
+  // Open the native calendar when a date field is clicked anywhere, not just
+  // on its indicator icon. showPicker needs a user gesture, which a click is,
+  // and throws InvalidStateError if the picker is already open — which is
+  // exactly what happens when the click WAS on the indicator, so it is caught
+  // and ignored rather than logged.
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      const el = e.target as HTMLInputElement | null
+      if (!el || el.tagName !== 'INPUT') return
+      if (!['date', 'datetime-local', 'month', 'time'].includes(el.type)) return
+      if (el.readOnly || el.disabled) return
+      try { (el as any).showPicker?.() } catch { /* already open, or unsupported */ }
+    }
+    document.addEventListener('click', onClick)
+    return () => document.removeEventListener('click', onClick)
+  }, [])
+
   return (
     <PreferencesProvider>
       <ChatContextProvider>
@@ -246,6 +263,40 @@ export default function App({ Component, pageProps }: AppProps) {
               dialog, [role="dialog"] {
                 margin: 0;
               }
+            }
+            /* ── Date inputs: give the calendar back ──────────────────────
+               Chris 2026-09-02: "when selecting a date range it used to drop
+               down a calendar, I need that back."
+
+               Nothing was removed — these are native <input type="date">, and
+               the browser's calendar is opened by its own little indicator
+               icon. Most of the portal's date inputs are styled with a
+               transparent background on a dark surface, where Chrome draws
+               that icon in near-black on near-black: present, clickable and
+               effectively invisible. Inverting it on the dark theme brings it
+               back; the pointer cursor says it is a control.
+
+               Clicking the TEXT still doesn't open it — that's the browser's
+               behaviour, not ours — so App also opens it on click. */
+            input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"] {
+              cursor: pointer;
+            }
+            input[type="date"]::-webkit-calendar-picker-indicator,
+            input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+            input[type="month"]::-webkit-calendar-picker-indicator,
+            input[type="time"]::-webkit-calendar-picker-indicator {
+              cursor: pointer;
+              opacity: 0.75;
+              filter: invert(1) brightness(1.6);
+            }
+            input[type="date"]::-webkit-calendar-picker-indicator:hover {
+              opacity: 1;
+            }
+            html[data-theme="light"] input[type="date"]::-webkit-calendar-picker-indicator,
+            html[data-theme="light"] input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+            html[data-theme="light"] input[type="month"]::-webkit-calendar-picker-indicator,
+            html[data-theme="light"] input[type="time"]::-webkit-calendar-picker-indicator {
+              filter: none;
             }
             /* Smooth scroll behaviour for in-page anchors (used by some
                admin pages that link to sections) — feels less jarring */
