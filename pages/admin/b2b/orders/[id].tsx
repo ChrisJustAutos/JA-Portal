@@ -172,10 +172,10 @@ export default function AdminOrderDetailPage({ user }: Props) {
   const [refundModal, setRefundModal] = useState(false)
   const [cancelModal, setCancelModal] = useState(false)
 
-  // Internal notes draft (autosave on blur)
-  const [notesDraft, setNotesDraft] = useState('')
-  const [notesBusy, setNotesBusy]   = useState(false)
-  const [notesError, setNotesError] = useState<string | null>(null)
+  // Internal notes were removed from this page 2026-09-02 (Chris: "I don't
+  // think it's going to get used"). The b2b_orders.internal_notes COLUMN and
+  // the PATCH that writes it are untouched, so anything already typed is
+  // still there and this is a one-line revert if it turns out to be wanted.
 
   async function load() {
     if (!orderId) return
@@ -188,7 +188,6 @@ export default function AdminOrderDetailPage({ user }: Props) {
       }
       const j = await r.json()
       setData(j.order)
-      setNotesDraft(j.order.internal_notes || '')
     } catch (e: any) {
       setError(e?.message || String(e))
     } finally {
@@ -357,28 +356,6 @@ export default function AdminOrderDetailPage({ user }: Props) {
     }
   }, [orderId, data, router, confirmDialog])
 
-  // ── Internal notes save
-  const saveNotes = useCallback(async () => {
-    if (!data) return
-    if (notesDraft === (data.internal_notes || '')) return
-    setNotesBusy(true); setNotesError(null)
-    try {
-      const r = await fetch(`/api/b2b/admin/orders/${orderId}`, {
-        method: 'PATCH',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ internal_notes: notesDraft || null }),
-      })
-      const j = await r.json()
-      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-      // refresh just the events; cheap option is full reload
-      await load()
-    } catch (e: any) {
-      setNotesError(e?.message || String(e))
-    } finally {
-      setNotesBusy(false)
-    }
-  }, [orderId, data, notesDraft])
 
   const allowedTransitions = data ? (ALLOWED_TRANSITIONS[data.status] || []) : []
   // Shipped orders can't be cancelled (goods are gone) — refund instead.
@@ -524,7 +501,35 @@ export default function AdminOrderDetailPage({ user }: Props) {
 
                 {/* Lines */}
                 <Card title={`Items (${data.lines.length})`}>
-                  <div style={{overflowX:'auto',margin:'0 -22px',padding:'0 22px'}}>
+                  {/* PHONE: a card per line. The table below is five columns wide
+                      and had to be dragged sideways to reach the money, which is
+                      exactly what a phone should not ask (Chris 2026-09-02). Same
+                      figures, stacked, nothing hidden — the desktop table is
+                      still there for reading several lines at once. */}
+                  {isMobile && (
+                    <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                      {data.lines.map((ln, i) => (
+                        <div key={ln.id} style={{
+                          borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
+                          paddingTop: i > 0 ? 10 : 0,
+                        }}>
+                          <div style={{display:'flex',alignItems:'baseline',gap:10}}>
+                            <div style={{flex:1,minWidth:0,fontSize:13.5,color:T.text,fontWeight:550,lineHeight:1.35,overflowWrap:'anywhere'}}>
+                              {ln.name}
+                            </div>
+                            <div style={{fontSize:14,color:T.text,fontWeight:650,fontVariantNumeric:'tabular-nums',flexShrink:0}}>
+                              ${money(ln.line_total_inc)}
+                            </div>
+                          </div>
+                          <div style={{fontSize:12,color:T.text3,marginTop:3,fontVariantNumeric:'tabular-nums',overflowWrap:'anywhere'}}>
+                            <span style={{fontFamily:'monospace'}}>{ln.sku}</span>
+                            {' · '}{ln.qty} × ${money(incGstAmt(ln.unit_trade_price_ex_gst, ln.is_taxable))} inc GST
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{display: isMobile ? 'none' : 'block', overflowX:'auto',margin:'0 -22px',padding:'0 22px'}}>
                     <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                       <thead>
                         <tr style={{borderBottom:`1px solid ${T.border}`}}>
@@ -566,8 +571,31 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     )
                   })()}
                   <Row label="Card surcharge"     value={`$${money(data.card_fee_inc)}`} muted/>
-                  <Row label="Total (inc GST)"    value={`$${money(data.total_inc)}`} bold/>
-                  <Row label="(includes GST)"     value={`$${money(data.gst)}`} muted/>
+                  {/* HERO TOTAL, mobile and desktop alike (Chris 2026-09-02).
+                      This is the figure the page exists to tell you, and it was
+                      one bold 13px row among five. The itemisation above stays
+                      quiet so the hierarchy does the reading. */}
+                  <div style={{
+                    marginTop:12, paddingTop:14, borderTop:`1px solid ${T.border2}`,
+                    display:'flex', alignItems:'flex-end', gap:12, flexWrap:'wrap',
+                  }}>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',textTransform:'uppercase',color:T.text3}}>
+                        {data.paid_at ? 'Total paid' : 'Order total'}
+                      </div>
+                      <div style={{fontSize:12,color:T.text3,marginTop:3}}>
+                        includes ${money(data.gst)} GST
+                        {data.currency && data.currency !== 'AUD' ? ` · ${data.currency}` : ''}
+                      </div>
+                    </div>
+                    <div style={{
+                      marginLeft:'auto', fontSize: isMobile ? 34 : 40, lineHeight:1,
+                      fontWeight:750, letterSpacing:'-0.03em', color:T.text,
+                      fontVariantNumeric:'tabular-nums',
+                    }}>
+                      ${money(data.total_inc)}
+                    </div>
+                  </div>
                   {Number(data.refunded_total || 0) > 0 && (
                     <Row label={`Refunded${Number(data.refunded_total) >= data.total_inc - 0.005 ? ' (full)' : ' (partial)'}`}
                          value={`-$${money(Number(data.refunded_total))}`} valueColor={A.bad}/>
@@ -728,34 +756,6 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   <DropShipCard order={data} onReloaded={() => { void load() }} onFlash={flashMsg}/>
                 )}
 
-                {/* Internal notes */}
-                {canEdit && (
-                  <Card title="Internal notes">
-                    <textarea
-                      value={notesDraft}
-                      onChange={e => setNotesDraft(e.target.value)}
-                      onBlur={saveNotes}
-                      placeholder="Staff-only notes about this order. Saves on blur."
-                      rows={5}
-                      className="al-focus"
-                      style={{
-                        width:'100%',boxSizing:'border-box',
-                        background:T.bg3,border:'1px solid transparent',color:T.text,
-                        borderRadius:RADIUS.sm,padding:'10px 12px',fontSize:13.5,outline:'none',
-                        resize:'vertical',fontFamily:'inherit',lineHeight:1.5,
-                      }}/>
-                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginTop:6}}>
-                      <span style={{fontSize:12,color: notesError ? A.bad : T.text3}}>
-                        {notesError || (notesBusy ? 'Saving…' : notesDraft !== (data.internal_notes || '') ? 'Unsaved changes' : 'Saved')}
-                      </span>
-                      <button onClick={saveNotes} disabled={notesBusy || notesDraft === (data.internal_notes || '')}
-                        className="al-press al-focus al-primary"
-                        style={{padding:'7px 16px',borderRadius:RADIUS.pill,border:'1px solid transparent',background: notesDraft !== (data.internal_notes || '') && !notesBusy ? A.accent : T.bg3,color: notesDraft !== (data.internal_notes || '') && !notesBusy ? '#fff' : T.text3,fontSize:12.5,fontWeight:600,fontFamily:'inherit',minHeight:34,cursor: notesBusy || notesDraft === (data.internal_notes || '') ? 'default' : 'pointer'}}>
-                        {notesBusy ? 'Saving…' : 'Save notes'}
-                      </button>
-                    </div>
-                  </Card>
-                )}
 
               </div>
             </div>

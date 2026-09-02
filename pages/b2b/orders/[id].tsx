@@ -21,6 +21,7 @@ import B2BLayout from '../../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../../lib/b2bAuthServer'
 import { T, alpha } from '../../../lib/ui/theme'
 import { A, RADIUS, Banner, Card, Row, StatusPill, btnStyle, orderStatusColor, orderStatusLabel } from '../../../components/b2b/ui'
+import { useIsMobile } from '../../../lib/useIsMobile'
 
 interface Props {
   b2bUser: {
@@ -81,6 +82,7 @@ interface OrderDetail {
 }
 
 export default function OrderDetailPage({ b2bUser }: Props) {
+  const isMobile = useIsMobile()
   const router = useRouter()
   const orderId = String(router.query.id || '')
   const sessionIdParam = router.query.session_id ? String(router.query.session_id) : null
@@ -224,12 +226,18 @@ export default function OrderDetailPage({ b2bUser }: Props) {
                 <div style={{padding:'6px 0'}}>
                   {order.lines.map((l, i) => (
                     <div key={l.id} style={{
-                      display:'flex',alignItems:'baseline',gap:12,padding:'11px 20px',
+                      display:'flex',alignItems:'baseline',gap:12,
+                      padding: isMobile ? '11px 14px' : '11px 20px',
                       borderTop: i === 0 ? 'none' : `1px solid ${T.border}`,
                     }}>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:14,color:T.text,fontWeight:550,lineHeight:1.35}}>{l.name}</div>
-                        <div style={{fontSize:12,color:T.text3,marginTop:2,fontVariantNumeric:'tabular-nums'}}>
+                        {/* overflowWrap is the fix for the sideways scroll: a long
+                            product name has no space to break at, so the row grew
+                            wider than the phone and took the page with it. The
+                            flex/minWidth:0 pair was already right — it was the
+                            text that could not be broken. */}
+                        <div style={{fontSize:14,color:T.text,fontWeight:550,lineHeight:1.35,overflowWrap:'anywhere'}}>{l.name}</div>
+                        <div style={{fontSize:12,color:T.text3,marginTop:2,fontVariantNumeric:'tabular-nums',overflowWrap:'anywhere'}}>
                           {l.sku} · {l.qty} × ${lineUnitInc(l).toFixed(2)}
                         </div>
                       </div>
@@ -250,9 +258,34 @@ export default function OrderDetailPage({ b2bUser }: Props) {
                   <Row label="Items (inc GST)" value={`$${itemsInc.toFixed(2)}`} muted/>
                   {freightInc > 0.005 && <Row label="Freight (inc GST)" value={`$${freightInc.toFixed(2)}`} muted/>}
                   {Number(order.card_fee_inc) > 0 && <Row label="Card surcharge" value={`$${Number(order.card_fee_inc).toFixed(2)}`} muted/>}
-                  <Row label="Total paid" value={`$${Number(order.total_inc).toFixed(2)}`} large/>
-                  <div style={{fontSize:12,color:T.text3,marginTop:2,textAlign:'right'}}>
-                    Includes ${Number(order.gst).toFixed(2)} GST
+                  {/* HERO TOTAL. This is the number the distributor came to the
+                      page for, and it used to be one 17px row among four. Big,
+                      tabular, tight tracking, on desktop as well as mobile —
+                      Chris 2026-09-02. The itemisation above it stays muted so
+                      the hierarchy does the reading for you. */}
+                  <div style={{
+                    marginTop: 10, paddingTop: 12, borderTop: `1px solid ${T.border}`,
+                    display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+                  }}>
+                    <div style={{minWidth:0}}>
+                      <div style={{
+                        fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+                        color: T.text3, marginBottom: 2,
+                      }}>
+                        {order.paid_at ? 'Total paid' : 'Order total'}
+                      </div>
+                      <div style={{fontSize:12,color:T.text3}}>
+                        Includes ${Number(order.gst).toFixed(2)} GST
+                      </div>
+                    </div>
+                    <div style={{
+                      fontSize: isMobile ? 34 : 40, lineHeight: 1,
+                      fontWeight: 750, letterSpacing: '-0.03em',
+                      color: T.text, fontVariantNumeric: 'tabular-nums',
+                      marginLeft: 'auto',
+                    }}>
+                      ${Number(order.total_inc).toFixed(2)}
+                    </div>
                   </div>
                 </div>
               </Card>
