@@ -646,7 +646,9 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     {data.myob.write_error && (
                       <div style={{marginTop:8,padding:'8px 10px',background:alpha(A.bad,'14'),borderRadius:RADIUS.sm,color:A.bad,fontSize:12.5,lineHeight:1.5}}>
                         {data.myob.write_error}
-                        <div style={{marginTop:8}}>
+                        {/* retry-myob is admin:b2b, so a manager sees the
+                            error but not the button (Chris 2026-09-03). */}
+                        {canRefund && <div style={{marginTop:8}}>
                           <button
                             disabled={actionBusy}
                             onClick={async () => {
@@ -664,7 +666,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                             style={{padding:'6px 13px',borderRadius:RADIUS.pill,border:'1px solid transparent',background:alpha(A.bad,'14'),color:A.bad,fontSize:12.5,fontWeight:600,fontFamily:'inherit',cursor:'pointer',minHeight:32}}>
                             {actionBusy ? 'Retrying…' : 'Retry MYOB write'}
                           </button>
-                        </div>
+                        </div>}
                       </div>
                     )}
                   </Card>
@@ -770,7 +772,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
 
                 {/* Drop-ship purchase orders */}
                 {canEdit && data.has_drop_ship && (
-                  <DropShipCard order={data} onReloaded={() => { void load() }} onFlash={flashMsg}/>
+                  <DropShipCard order={data} canAdmin={!!canRefund} onReloaded={() => { void load() }} onFlash={flashMsg}/>
                 )}
 
                 {/* Timeline LAST (Chris 2026-09-03). It was the top of the rail,
@@ -1634,8 +1636,9 @@ function prettyFreightStatus(status: string | null): string {
 
 // Raise + show drop-ship purchase orders. Shown only when the order has
 // drop-ship line items (see has_drop_ship from the detail API).
-function DropShipCard({ order, onReloaded, onFlash }: {
+function DropShipCard({ order, canAdmin, onReloaded, onFlash }: {
   order: OrderDetail
+  canAdmin: boolean         // admin:b2b - raising and re-sending a PO
   onReloaded: () => void
   onFlash: (msg: string) => void
 }) {
@@ -1708,27 +1711,29 @@ function DropShipCard({ order, onReloaded, onFlash }: {
               {po.email_status === 'sent'    && <span title={po.emailed_to || ''} style={{color:A.good}}>emailed</span>}
               {po.email_status === 'no_email'&& <span title="No email on the MYOB supplier card" style={{color:A.warn}}>no email</span>}
               {po.email_status === 'failed'  && <span style={{color:A.bad}}>email failed</span>}
-              <button
+              {canAdmin && <button
                 onClick={() => resend(po.supplier_uid)}
                 disabled={resendingUid === po.supplier_uid}
                 title="Re-send the PO email to this supplier"
                 className="al-press al-focus al-ghost"
                 style={{background:'none', border:'1px solid transparent', color:T.text2, borderRadius:RADIUS.pill, padding:'3px 10px', fontSize:12, fontWeight:600, cursor: resendingUid === po.supplier_uid ? 'wait' : 'pointer', fontFamily:'inherit'}}>
                 {resendingUid === po.supplier_uid ? 'Sending…' : 'Re-send'}
-              </button>
+              </button>}
             </div>
           ))}
         </div>
       ) : (
         <div style={{fontSize:12, color:T.text3, marginBottom:10}}>No POs raised yet.</div>
       )}
-      <button
-        onClick={() => raise(alreadyRaised)}
-        disabled={busy}
-        className="al-press al-focus"
-        style={{padding:'7px 14px', borderRadius:RADIUS.pill, border:'1px solid transparent', background:alpha(A.accent,'15'), color:A.accent, fontSize:12.5, minHeight:32, cursor: busy ? 'wait' : 'pointer', fontFamily:'inherit', fontWeight:600}}>
-        {busy ? 'Raising…' : alreadyRaised ? 'Re-raise drop-ship PO' : 'Raise drop-ship PO'}
-      </button>
+      {canAdmin && (
+        <button
+          onClick={() => raise(alreadyRaised)}
+          disabled={busy}
+          className="al-press al-focus"
+          style={{padding:'7px 14px', borderRadius:RADIUS.pill, border:'1px solid transparent', background:alpha(A.accent,'15'), color:A.accent, fontSize:12.5, minHeight:32, cursor: busy ? 'wait' : 'pointer', fontFamily:'inherit', fontWeight:600}}>
+          {busy ? 'Raising…' : alreadyRaised ? 'Re-raise drop-ship PO' : 'Raise drop-ship PO'}
+        </button>
+      )}
     </Card>
   )
 }
