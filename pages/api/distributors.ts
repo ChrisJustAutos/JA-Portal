@@ -30,7 +30,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '../../lib/auth'
 import { parseDateRange, endDateExclusive } from '../../lib/cdata'
-import { fetchSaleInvoicesWithLines } from '../../lib/myob-reporting'
+import { fetchSaleInvoicesWithLines, fetchCustomerLocations } from '../../lib/myob-reporting'
 import { lineExGst } from '../../lib/gst'
 import { getGrouping, groupNameFor, GroupingSnapshot } from '../../lib/distGroups'
 
@@ -145,6 +145,14 @@ export async function computeDistributorsPayload(start: string, end: string) {
   // date range's Item invoices yields both the header map and the flattened
   // lines; filter the lines to the income accounts in scope here.
   const { invoices, lines: allLines } = await fetchSaleInvoicesWithLines('JAWS', { start, endExclusive: endDateExclusive(end) })
+  // Where each customer is, off their MYOB card. Carried into the cached
+  // payload so the Workshop Map can pin a distributor without needing a
+  // b2b_distributors row - former distributors did the work too, and used to
+  // fall off the map entirely. Best-effort: a card-file outage costs pins, not
+  // the whole report.
+  let custLoc = new Map<string, { postcode: string | null; city: string | null; state: string | null }>()
+  try { custLoc = await fetchCustomerLocations('JAWS') }
+  catch (e: any) { console.error('[distributors] customer locations unavailable:', e?.message || e) }
   const invById = new Map<string, any>()
   for (const inv of invoices) invById.set(inv.ID, inv)
 
@@ -231,9 +239,12 @@ export async function computeDistributorsPayload(start: string, end: string) {
         byCategory: {} as Record<string, number>,
         invoiceIds: new Set<string>(),
         lineItems: [] as any[],
+        // First address seen for any raw name folding into this canonical one.
+        loc: null as null | { postcode: string | null; city: string | null; state: string | null },
       })
     }
     const agg = byDist.get(canonical)
+    if (!agg.loc) { const l = custLoc.get(raw); if (l && l.postcode) agg.loc = l }
     agg.byCategory[cat] = (agg.byCategory[cat] || 0) + amt
     agg.invoiceIds.add(inv.ID)
     agg.lineItems.push({
@@ -260,6 +271,11 @@ export async function computeDistributorsPayload(start: string, end: string) {
     const streamsWithValue = Object.values(rounded).filter(v => v > 0).length
     return {
       customerBase: d.customerBase, location: d.location,
+      // Physical address off the MYOB card — distinct from `location`, which is
+      // the National/International/Sundry classification, not a place.
+      postcode: d.loc?.postcode || null,
+      city: d.loc?.city || null,
+      state: d.loc?.state || null,
       isSundry: !!d.isSundry,
       tuning, parts, oil,
       byCategory: rounded,

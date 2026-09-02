@@ -96,9 +96,16 @@ export async function distributorJobsForFy(db: SupabaseClient, fy: number): Prom
 
   // distributor name → vin → set of FY month indexes
   const perDist = new Map<string, Map<string, Set<number>>>()
+  // distributor name → their own address off the MYOB card, when the cache
+  // carries one. This is what lets a FORMER distributor be pinned: they have no
+  // b2b_distributors row, but they always had a card.
+  const distGeo = new Map<string, { postcode: string | null; city: string | null; state: string | null }>()
 
   for (const d of ((data.payload as any).distributors || [])) {
     const distName = String(d?.customerBase ?? '').trim()
+    if (distName && d?.postcode) {
+      distGeo.set(distName, { postcode: d.postcode, city: d.city ?? null, state: d.state ?? null })
+    }
     for (const li of (d.lineItems || [])) {
       if (String(li?.bucket ?? '') !== TUNE_BUCKET) continue   // tunes only
       const raw = String(li?.poNumber ?? '').trim()
@@ -154,23 +161,33 @@ export async function distributorJobsForFy(db: SupabaseClient, fy: number): Prom
     for (const ms of Array.from(vins.values())) tunes += ms.size
 
     const idx = matchLabel(distName, names)
+
+    // No distributor record — but MYOB knows where they are. This is the whole
+    // reason a former distributor can appear: BSC, MDD and Performance Tourers
+    // did 110 tunes between them and had no b2b row to be found under.
+    let key: string, lat: number, lng: number, suburb: string | null
     if (idx == null) {
-      unlocatedTunes += tunes
-      unlocatedNames.push(distName)
-      continue
+      const own = distGeo.get(distName)
+      const geo = own ? geoForPostcode(own.postcode) : null
+      if (!geo) {
+        unlocatedTunes += tunes
+        unlocatedNames.push(distName)
+        continue
+      }
+      key = distName
+      lat = geo[0]; lng = geo[1]
+      suburb = own?.city || geo[2] || null
+    } else {
+      const hit = located[idx]
+      key = hit.row.display_name as string
+      lat = hit.geo![0]; lng = hit.geo![1]
+      suburb = (hit.row.ship_suburb as string) || hit.geo![2] || null
     }
-    const hit = located[idx]
-    const key = hit.row.display_name as string
     // Two MYOB customer bases can match one distributor (a branch billed
     // separately) — they share the pin rather than fighting over it.
     let pin = pins.get(key)
     if (!pin) {
-      pin = {
-        name: key,
-        lat: hit.geo![0], lng: hit.geo![1],
-        suburb: (hit.row.ship_suburb as string) || hit.geo![2] || null,
-        tunes: 0, vehicles: 0, bySeries: {},
-      }
+      pin = { name: key, lat, lng, suburb, tunes: 0, vehicles: 0, bySeries: {} }
       pins.set(key, pin)
     }
     pin.tunes += tunes

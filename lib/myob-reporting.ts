@@ -313,6 +313,38 @@ export async function fetchIncomeAccounts(label: CompanyFileLabel): Promise<Arra
     .sort((a, b) => a.code.localeCompare(b.code))
 }
 
+/**
+ * Customer name → where they are, from the MYOB card file.
+ *
+ * The distributor pins on the Workshop Map used to need a b2b_distributors row
+ * to get coordinates, which meant only current distributors could be placed -
+ * former ones did the work and then vanished off the map. MYOB has had their
+ * address all along, on the card the invoices were raised against, so that is
+ * where it now comes from (Chris 2026-09-02).
+ */
+export async function fetchCustomerLocations(
+  label: CompanyFileLabel,
+): Promise<Map<string, { postcode: string | null; city: string | null; state: string | null }>> {
+  const raw = await fetchAll(label, 'Contact/Customer', { '$orderby': 'CompanyName' })
+  const out = new Map<string, { postcode: string | null; city: string | null; state: string | null }>()
+  for (const c of raw) {
+    const n = (c.CompanyName || `${c.FirstName || ''} ${c.LastName || ''}`.trim() || '').trim()
+    if (!n) continue
+    // Addresses[0] is the card's primary ("Bill To") address in MYOB. Fall back
+    // to any later address that actually carries a postcode - a card whose
+    // first address is a PO box with the yard address second is common.
+    const addrs: any[] = Array.isArray(c.Addresses) ? c.Addresses : []
+    const withPc = addrs.find(a => String(a?.PostCode || '').replace(/[^0-9]/g, '').length === 4) || addrs[0]
+    if (!withPc) continue
+    out.set(n, {
+      postcode: withPc.PostCode ? String(withPc.PostCode) : null,
+      city: withPc.City || null,
+      state: withPc.State || null,
+    })
+  }
+  return out
+}
+
 // Distinct customer names seen on sale invoices (replaces the old DISTINCT
 // CustomerName query). Reads the customer card list — the source of truth.
 export async function fetchCustomerNames(label: CompanyFileLabel): Promise<string[]> {
