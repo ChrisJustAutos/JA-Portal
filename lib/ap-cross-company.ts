@@ -96,6 +96,9 @@ export interface CrossCompanyResult {
   notes: string[]
 }
 
+// The two matchers below are exported so they can be exercised directly by
+// scripts/test-ap-cross-company.ts. They are the whole brain of this check and
+// they are pure, so they can be tested properly without touching MYOB.
 /** Strip everything that differs between two spellings of the same business. */
 function normaliseSupplier(raw: string | null | undefined): string {
   return String(raw || '')
@@ -105,17 +108,25 @@ function normaliseSupplier(raw: string | null | undefined): string {
     .trim()
 }
 
-function supplierLooksSame(a: string | null | undefined, b: string | null | undefined): boolean {
+export function supplierLooksSame(a: string | null | undefined, b: string | null | undefined): boolean {
   const A = normaliseSupplier(a), B = normaliseSupplier(b)
   if (!A || !B) return false
   if (A === B) return true
-  // Containment either way: "jmacx" vs "jmacxptyltd" once normalised, or a
-  // trading name that carries the parent's name.
+  // A PREFIX is the strong form: "boc" against "bocgases", "repco" against
+  // "repcoautoparts". A business name is written shortest-first, so the short
+  // spelling in one file is almost always how the long spelling in the other
+  // one starts. Three characters is enough here BECAUSE it is anchored at the
+  // start — plenty of real suppliers are three letters (BOC, ARB, GME) and
+  // requiring four made them unmatchable across the two files no matter what.
+  if (A.length >= 3 && B.startsWith(A)) return true
+  if (B.length >= 3 && A.startsWith(B)) return true
+  // Containment anywhere is the weak form — it can land mid-word, so it keeps
+  // the longer minimum: a trading name carrying the parent's name.
   return (A.length >= 4 && B.includes(A)) || (B.length >= 4 && A.includes(B))
 }
 
 /** Same canonicalisation the in-file duplicate check uses for OCR variants. */
-function sameNumberLoose(a: string | null | undefined, b: string | null | undefined): boolean {
+export function sameNumberLoose(a: string | null | undefined, b: string | null | undefined): boolean {
   const canon = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '')
     .replace(/O/g, '0').replace(/[IL]/g, '1').replace(/S/g, '5').replace(/B/g, '8')
   const A = canon(String(a || '')), B = canon(String(b || ''))
