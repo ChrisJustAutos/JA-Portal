@@ -29,9 +29,9 @@
 //
 // TWO NETS, deliberately different in confidence:
 //   • the same supplier invoice number  → near certain, reported as certain
-//   • the same amount, same supplier, within a date window → suspicious, and
-//     reported as suspicious. Suppliers do bill identical amounts legitimately
-//     (a monthly retainer), so this one exists to be looked at, not obeyed.
+//   • the same amount, same supplier, within a date window, ON A DOCUMENT
+//     CARRYING NO INVOICE NUMBER OF ITS OWN → suspicious, and reported as
+//     suspicious. It exists to be looked at, not obeyed.
 //
 // THE NUMBER NET HAS NO DATE LIMIT. An order can sit open in one file for
 // months before the matching invoice reaches the other, so any window is a
@@ -42,9 +42,15 @@
 // THE AMOUNT NET IS DELIBERATELY NARROWER THAN THE NUMBER NET, because a check
 // that cries wolf gets ignored and then it protects nothing. A recurring charge
 // — the same supplier, the same figure, every month — would trip a naive
-// amount match forever. So it only applies to amounts of AMOUNT_NET_MIN or
-// more, and only within AMOUNT_NET_DAYS of the invoice date. A small monthly
-// subscription never trips it; a $48k invoice paid twice in a fortnight does.
+// amount match forever. This is not hypothetical: across the last 400 days of
+// ap_auto_entry_log, NINE suppliers billed the same >=$1,000 figure twice
+// inside 180 days, Devote Digital seventeen times over. So the amount net is
+// bounded three ways: amounts of AMOUNT_NET_MIN or more, within
+// AMOUNT_NET_DAYS of the invoice date, and only against documents that carry
+// no supplier invoice number of their own — because a document with a
+// DIFFERENT number on it is simply a different invoice. That last bound is
+// what keeps a routine repeat charge quiet while still catching the JMACX
+// case, which was a hand-entered purchase order with no number on it.
 //
 // FAILS OPEN. If MYOB is unreachable the AP run continues exactly as before —
 // a duplicate check that blocks the whole pipeline when it cannot answer is
@@ -296,7 +302,17 @@ export async function findCrossCompanyDuplicate(args: {
           } else if (
             amount != null && amount >= AMOUNT_NET_MIN &&
             theirTotal != null && Math.abs(theirTotal - amount) < 0.005 &&
-            withinDays(d.Date, base, win)
+            withinDays(d.Date, base, win) &&
+            // A DIFFERENT invoice number on their document settles it: this is
+            // a different invoice that happens to be for the same money, and
+            // the amount coincidence means nothing. Without this the check
+            // cries wolf on every supplier who bills the same figure twice —
+            // measured against the real AP log, nine suppliers do, MPI and
+            // Devote Digital among them. The nets stay complementary: an
+            // amount match only speaks up where there is no number to speak
+            // for itself, which is exactly the hand-entered order the JMACX
+            // double-up was sitting on.
+            !String(theirNumber || '').trim()
           ) {
             matchedOn = 'amount'
           }
