@@ -557,7 +557,7 @@ If the freight panel says **Consignment Missing**, the consignment MachShip gave
 
 The portal now recovers from this by itself. When the id stops resolving it looks the consignment up again by the **carrier tracking number** (the number on the label, e.g. `EYA000002055`), then by the order reference, and if it finds a single unambiguous match it adopts the new id and resumes tracking. Parked orders are retried every **6 hours**, so an order that stuck earlier can come back on its own — it is no longer a dead end.
 
-**What to do:** press **Refresh from MachShip** on the order to try immediately rather than waiting for the retry. If it still can't find it, the consignment genuinely isn't there under that tracking number and the message will say so — mark the order delivered manually when it lands.
+**What to do:** press **Refresh** in the Shipping panel to try immediately rather than waiting for the retry. If it still can't find it, the consignment genuinely isn't there under that tracking number and the message will say so — mark the order delivered manually when it lands.
 
 **⚠ "Awaiting despatch — not manifested" on an order that has clearly shipped.** If a consignment is manifested outside the portal — someone despatching it from MachShip directly — the portal never gets a manifest id, and until 25 August it went on offering **Ship now** on freight the carrier had already delivered. Pressing it would have re-manifested the shipment and raised the tax invoice a **second time**. The portal now reads the carrier's own status instead: anything past "unmanifested" counts as gone, and both the button and the action behind it are withdrawn. If you ever see Ship now on an order that is plainly on a truck, don't press it — tell Chris.
 

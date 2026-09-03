@@ -1497,7 +1497,7 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
               <button onClick={receiveDropship} disabled={receiveBusy}
                 title="Supplier confirmed the drop-ship order — converts the PO to a bill in MYOB (receives the stock into the supplier's DS location), then converts this order to a tax invoice and receipts the payment"
                 className="al-press al-focus"
-                style={mb({ gridColumn: isMobile ? undefined : '1 / -1', background: alpha(A.warn, '15'), color: A.warn, cursor: receiveBusy ? 'wait' : 'pointer' })}>
+                style={mb({ gridColumn: isMobile ? undefined : '1 / -1', background: alpha(A.warn, '15'), border: `1px solid ${alpha(A.warn, '55')}`, color: A.warn, cursor: receiveBusy ? 'wait' : 'pointer' })}>
                 {receiveBusy ? 'Billing PO…' : 'Supplier confirmed — bill PO + invoice'}
               </button>
             )}
