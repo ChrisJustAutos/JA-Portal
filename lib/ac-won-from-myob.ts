@@ -91,38 +91,34 @@ function pickAddress(addrs: any[]): any | null {
 }
 
 /**
- * Every VPS customer card, indexed by UID. One paged read per run rather
- * than a card fetch per invoice — a day's invoices routinely repeat the
- * same customers, and the card list is small enough to hold.
+ * Fetch ONE customer card by UID.
+ *
+ * The first cut read the whole Contact/Customer list and indexed it. On a
+ * workshop file that is thousands of cards over dozens of slow pages, and it
+ * timed out the function (504 FUNCTION_INVOCATION_TIMEOUT) before it ever
+ * reached the AC work. A week of invoices touches a few dozen customers, so
+ * fetching only those is bounded by the thing we actually care about instead
+ * of by the size of the ledger.
  */
-export async function fetchCustomerCards(companyFileId: string, connId: string): Promise<Map<string, MyobCustomer>> {
-  const out = new Map<string, MyobCustomer>()
-  let skip = 0
-  const PAGE = 400
-  while (skip < 40000) {
-    const r = await myobFetch(connId, `/accountright/${companyFileId}/Contact/Customer`, {
-      query: { '$top': PAGE, '$skip': skip },
-    })
-    if (r.status !== 200) throw new Error(`MYOB Contact/Customer: HTTP ${r.status}`)
-    const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
-    if (items.length === 0) break
-    for (const c of items) {
-      const addr = pickAddress(c.Addresses)
-      const name = (c.CompanyName || `${c.FirstName || ''} ${c.LastName || ''}`.trim() || '').trim()
-      out.set(String(c.UID), {
-        uid: String(c.UID),
-        name,
-        email: (addr?.Email || '').trim() || null,
-        phone: (addr?.Phone1 || addr?.Phone2 || '').trim() || null,
-        postcode: addr?.PostCode ? String(addr.PostCode) : null,
-        city: addr?.City || null,
-        state: addr?.State || null,
-      })
-    }
-    if (items.length < PAGE) break
-    skip += PAGE
+export async function fetchCardByUid(
+  companyFileId: string,
+  connId: string,
+  uid: string,
+): Promise<MyobCustomer | null> {
+  const r = await myobFetch(connId, `/accountright/${companyFileId}/Contact/Customer/${encodeURIComponent(uid)}`)
+  if (r.status !== 200 || !r.data) return null
+  const c: any = r.data
+  const addr = pickAddress(c.Addresses)
+  const name = (c.CompanyName || `${c.FirstName || ''} ${c.LastName || ''}`.trim() || '').trim()
+  return {
+    uid: String(c.UID || uid),
+    name,
+    email: (addr?.Email || '').trim() || null,
+    phone: (addr?.Phone1 || addr?.Phone2 || '').trim() || null,
+    postcode: addr?.PostCode ? String(addr.PostCode) : null,
+    city: addr?.City || null,
+    state: addr?.State || null,
   }
-  return out
 }
 
 // ── AC deals for one contact ─────────────────────────────────────────────
@@ -177,6 +173,7 @@ export interface MyobWonReport {
   matched: MyobWonMatch[]
   moved: number
   contactsUpdated: number
+  cappedAt: number | null
   errors: string[]
 }
 
@@ -193,6 +190,7 @@ export async function runMyobWonPass(live: boolean): Promise<MyobWonReport> {
     matched: [],
     moved: 0,
     contactsUpdated: 0,
+    cappedAt: null,
     errors: [],
   }
 
@@ -209,7 +207,7 @@ export async function runMyobWonPass(live: boolean): Promise<MyobWonReport> {
   const conn = await getConnection('VPS')
   if (!conn) throw new Error('No MYOB VPS connection')
   if (!conn.company_file_id) throw new Error('MYOB VPS connection has no company_file_id')
-  const cards = await fetchCustomerCards(conn.company_file_id, conn.id)
+  const cardCache = new Map<string, MyobCustomer | null>()
 
   // One invoice per customer is enough: several invoices for the same
   // customer in the window would otherwise try to close the same deal
@@ -222,12 +220,21 @@ export async function runMyobWonPass(live: boolean): Promise<MyobWonReport> {
     if (!prev || inv.TotalAmount > prev.TotalAmount) bestByCustomer.set(inv.CustomerUID, inv)
   }
 
-  const entries = Array.from(bestByCustomer.entries())
+  // Hard cap. A wide lookback (or a catch-up run) must not be able to walk
+  // past the 300s function limit again — better to process 120 customers a
+  // night and say so than to time out and process none.
+  const MAX_PER_RUN = Number(process.env.AC_SWEEP_MYOB_MAX_PER_RUN || 120)
+  const entries = Array.from(bestByCustomer.entries()).slice(0, MAX_PER_RUN)
+  report.cappedAt = bestByCustomer.size > MAX_PER_RUN ? MAX_PER_RUN : null
   for (const pair of entries) {
     const uid = pair[0]
     const inv = pair[1]
     try {
-      const card = cards.get(uid)
+      let card = cardCache.get(uid)
+      if (card === undefined) {
+        card = await fetchCardByUid(conn.company_file_id, conn.id, uid)
+        cardCache.set(uid, card)
+      }
       if (!card || !card.email) continue
       report.invoicesWithCardEmail++
 

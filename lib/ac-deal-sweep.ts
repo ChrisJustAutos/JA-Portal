@@ -109,6 +109,26 @@ function sb() {
   )
 }
 
+// ── Placeholder regos ────────────────────────────────────────────────────
+// 2,667 MD quotes carry the rego "TBA", plus ~130 more as N/A, TBC or NA —
+// 12% of every rego in the system. They are the ABSENCE of a rego written
+// as text, and treating them as a value is actively harmful:
+//   - the win match requires both regos equal, so "TBA" == "TBA" reads as
+//     "same vehicle" and would let one of a customer's cars close the
+//     other's quote — exactly the failure the rego check exists to prevent
+//   - the backfill would write "TBA" into a Rego field, which is worse than
+//     leaving it empty because it looks like data
+// Normalise them to null everywhere instead.
+const PLACEHOLDER_REGOS = ['TBA', 'TBC', 'NA', 'N/A', 'NONE', 'UNKNOWN', 'PENDING', 'X', 'XX', 'XXX', '0', '00', '-', '--', '?']
+
+export function normaliseRego(raw: string | null | undefined): string | null {
+  const r = String(raw || '').toUpperCase().replace(/\s+/g, '')
+  if (!r) return null
+  if (PLACEHOLDER_REGOS.indexOf(r) !== -1) return null
+  if (r.replace(/[^A-Z0-9]/g, '').length < 3) return null   // too short to identify a vehicle
+  return r
+}
+
 // ES5 target: no matchAll, no spreading iterators.
 export function quoteNumbersFromTitle(title: string): string[] {
   const out: string[] = []
@@ -254,7 +274,7 @@ export async function runWonPass(deals: OpenDeal[], live: boolean): Promise<WonP
     for (const r of data || []) {
       quoteById.set(String(r.display_number), {
         customer_id: String(r.customer_id || ''),
-        rego: String(r.rego || '').toUpperCase().replace(/\s+/g, ''),
+        rego: normaliseRego(r.rego) || '',
         quote_date: String(r.quote_date || ''),
         total_amount: Number(r.total_amount) || 0,
       })
@@ -302,7 +322,7 @@ export async function runWonPass(deals: OpenDeal[], live: boolean): Promise<WonP
       if (!invoicesByCustomer.has(key)) invoicesByCustomer.set(key, [])
       invoicesByCustomer.get(key)!.push({
         invoice_number: String(r.display_number || r.invoice_number || ''),
-        rego: String(r.rego || '').toUpperCase().replace(/\s+/g, ''),
+        rego: normaliseRego(r.rego) || '',
         issue_date: String(r.issue_date || ''),
         total_amount: Number(r.total_amount) || 0,
       })
