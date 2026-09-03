@@ -28,7 +28,7 @@
 //   - currency must be lowercase ('aud' not 'AUD') to match what the
 //     pipeline stores.
 
-import { mechanicsDeskDealFields, tagContactAsMechanicsDesk } from './activecampaign-source'
+import { mechanicsDeskDealFields, tagContactAsMechanicsDesk, applyDealCustomFields } from './activecampaign-source'
 import { regoForDisplay } from './ac-deal-sweep'
 
 const RECENCY_DAYS = 30
@@ -165,12 +165,9 @@ export async function createDeal(input: CreateDealInput): Promise<CreateDealResu
     },
   }
   if (input.ownerId) payload.deal.owner = String(input.ownerId)
-  if (input.customFields && input.customFields.length > 0) {
-    payload.dealCustomFieldData = input.customFields.map(f => ({
-      customFieldId: f.fieldId,
-      fieldValue: f.value,
-    }))
-  }
+  // NB: custom field values deliberately NOT inlined here — see
+  // applyDealCustomFields. AC discards an inline dealCustomFieldData array
+  // and answers 200, so they are written after the deal exists.
 
   if (isPreviewOnly()) {
     console.log('[ac-deals] PREVIEW: would create deal', JSON.stringify(payload))
@@ -182,6 +179,10 @@ export async function createDeal(input: CreateDealInput): Promise<CreateDealResu
     body: JSON.stringify(payload),
   })
   const dealId = Number(created.deal.id)
+
+  if (input.customFields && input.customFields.length > 0) {
+    await applyDealCustomFields(dealId, input.customFields)
+  }
 
   let noteId: number | null = null
   if (input.initialNote) {
@@ -213,24 +214,23 @@ export async function updateDeal(input: UpdateDealInput): Promise<UpdateDealResu
     payload.deal.value = Math.round(input.newValueDollarsIncGst * 100)
     payload.deal.currency = 'aud'
   }
-  if (input.customFields && input.customFields.length > 0) {
-    payload.dealCustomFieldData = input.customFields.map(f => ({
-      customFieldId: f.fieldId,
-      fieldValue: f.value,
-    }))
-  }
+  // Custom field values are written separately — AC silently drops them
+  // from a deal PUT.
 
   if (isPreviewOnly()) {
     console.log(`[ac-deals] PREVIEW: would update deal ${input.dealId}`, JSON.stringify(payload))
     return { dealId: input.dealId, noteId: null, preview: true, payload }
   }
 
-  const hasFieldUpdates = Object.keys(payload.deal).length > 0 || (payload.dealCustomFieldData?.length || 0) > 0
-  if (hasFieldUpdates) {
+  if (Object.keys(payload.deal).length > 0) {
     await acJson(`/deals/${input.dealId}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     })
+  }
+
+  if (input.customFields && input.customFields.length > 0) {
+    await applyDealCustomFields(input.dealId, input.customFields)
   }
 
   let noteId: number | null = null

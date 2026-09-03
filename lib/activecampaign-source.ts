@@ -231,3 +231,77 @@ export async function tagContactAsMechanicsDesk(contactId: number): Promise<TagC
     return { tagged: false, tagId: null, error: e?.message || String(e) }
   }
 }
+
+// ── Writing values ───────────────────────────────────────────────────────
+//
+// ⚠ DO NOT set deal custom fields inline on the deal. `PUT /deals/{id}` with
+// a `dealCustomFieldData` array returns 200 OK and SILENTLY DISCARDS IT —
+// verified against the live API on 2026-09-04, after a "successful" backfill
+// of 50 deals turned out to have written nothing at all. Values must go
+// through POST /dealCustomFieldData, one call per field, with the body keyed
+// `dealCustomFieldDatum` (singular, exactly like dealCustomFieldMetum).
+//
+// A field already holding a value needs PUT /dealCustomFieldData/{id}
+// instead, so we fall back to that when the POST is refused.
+
+export interface SetFieldResult {
+  fieldId: number
+  ok: boolean
+  error: string | null
+}
+
+export async function setDealCustomField(
+  dealId: string | number,
+  fieldId: number,
+  value: string,
+): Promise<SetFieldResult> {
+  if (isPreviewOnly()) {
+    console.log(`[ac-source] PREVIEW: would set field ${fieldId} on deal ${dealId} = ${value}`)
+    return { fieldId, ok: false, error: null }
+  }
+  try {
+    await acJson(`/dealCustomFieldData`, {
+      method: 'POST',
+      body: JSON.stringify({
+        dealCustomFieldDatum: { dealId: Number(dealId), customFieldId: fieldId, fieldValue: value },
+      }),
+    })
+    return { fieldId, ok: true, error: null }
+  } catch (e: any) {
+    // Most likely: a value already exists for this deal+field. Find it and
+    // update in place rather than leaving the old value sitting there.
+    try {
+      const cur = await acJson<{ dealCustomFieldData: any[] }>(`/deals/${dealId}/dealCustomFieldData`)
+      const existing = (cur.dealCustomFieldData || []).find(
+        (r: any) => Number(r.customFieldId) === fieldId,
+      )
+      if (!existing) return { fieldId, ok: false, error: e?.message || String(e) }
+      await acJson(`/dealCustomFieldData/${existing.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ dealCustomFieldDatum: { fieldValue: value } }),
+      })
+      return { fieldId, ok: true, error: null }
+    } catch (e2: any) {
+      return { fieldId, ok: false, error: e2?.message || String(e2) }
+    }
+  }
+}
+
+/**
+ * Apply a whole set of resolved fields to one deal. Returns how many landed —
+ * callers should record that number rather than assuming, because this is
+ * exactly the write that used to report success while doing nothing.
+ */
+export async function applyDealCustomFields(
+  dealId: string | number,
+  fields: SourceCustomField[],
+): Promise<{ written: number; errors: string[] }> {
+  let written = 0
+  const errors: string[] = []
+  for (const f of fields) {
+    const r = await setDealCustomField(dealId, f.fieldId, f.value)
+    if (r.ok) written++
+    else if (r.error) errors.push(`field ${f.fieldId}: ${r.error}`)
+  }
+  return { written, errors }
+}

@@ -29,6 +29,7 @@ import { createClient } from '@supabase/supabase-js'
 import {
   mechanicsDeskDealFields,
   tagContactAsMechanicsDesk,
+  applyDealCustomFields,
   SOURCE_FIELD_LABEL,
   ensureDealFieldId,
 } from './activecampaign-source'
@@ -136,6 +137,7 @@ export interface EnrichReport {
   quoteNotInMd: number
   skippedNoFieldsResolved: number
   enriched: number
+  fieldValuesWritten: number
   valuesFilled: number
   contactsTagged: number
   capped: boolean
@@ -159,6 +161,7 @@ export async function runDealEnrichment(opts: {
     quoteNotInMd: 0,
     skippedNoFieldsResolved: 0,
     enriched: 0,
+    fieldValuesWritten: 0,
     valuesFilled: 0,
     contactsTagged: 0,
     capped: false,
@@ -237,16 +240,19 @@ export async function runDealEnrichment(opts: {
       }
 
       if (opts.live) {
-        const payload: any = {
-          deal: {},
-          dealCustomFieldData: fields.map(f => ({ customFieldId: f.fieldId, fieldValue: f.value })),
-        }
+        // Custom field VALUES cannot ride along on the deal PUT — AC accepts
+        // that and discards it. They go through POST /dealCustomFieldData.
+        const applied = await applyDealCustomFields(c.deal.id, fields)
+        report.fieldValuesWritten += applied.written
+        for (const err of applied.errors) report.errors.push(`deal ${c.deal.id}: ${err}`)
+
         if (fillValue !== null) {
-          payload.deal.value = Math.round(fillValue * 100)
-          payload.deal.currency = 'aud'
+          await acJson(`/deals/${c.deal.id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ deal: { value: Math.round(fillValue * 100), currency: 'aud' } }),
+          })
+          report.valuesFilled++
         }
-        await acJson(`/deals/${c.deal.id}`, { method: 'PUT', body: JSON.stringify(payload) })
-        if (fillValue !== null) report.valuesFilled++
 
         if (c.deal.contact) {
           const t = await tagContactAsMechanicsDesk(Number(c.deal.contact))

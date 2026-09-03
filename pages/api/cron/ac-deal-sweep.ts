@@ -157,14 +157,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     }
 
-    await notify(result, wonLiveEff, lostLiveEff, myobWonLive)
+    // Slack only for the SCHEDULED run. A person opening the URL to read
+    // the numbers must not post to #sales-updates — and because the link
+    // handler can open two tabs, a manual look was posting the report twice.
+    if (!sessionOnly) await notify(result, wonLiveEff, lostLiveEff, myobWonLive)
     return res.status(200).json(result)
   } catch (e: any) {
     console.error('[ac-deal-sweep] failed:', e)
-    await postMessage({
-      channel: sweepChannel(),
-      text: `:rotating_light: AC deal sweep FAILED — ${e?.message || String(e)}`,
-    }).catch(() => {})
+    if (!sessionOnly) {
+      await postMessage({
+        channel: sweepChannel(),
+        text: `:rotating_light: AC deal sweep FAILED — ${e?.message || String(e)}`,
+      }).catch(() => {})
+    }
     return res.status(500).json({ error: e?.message || String(e), startedAt })
   }
 }
