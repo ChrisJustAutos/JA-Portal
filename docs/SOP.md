@@ -801,6 +801,20 @@ A quote goes out and the clock starts. You get three touches — at **3 days**, 
 
 A never-quoted lead is **not** a lost quote — that's why the two paths end differently.
 
+### 6.2a ActiveCampaign now closes some deals for you
+
+Monday is still where you work. But the **ActiveCampaign** deal behind a quote can now change on its own overnight, without anyone clicking anything, in two cases:
+
+- **Quote Won** — the quote produced a finalised invoice in Mechanics Desk. The portal matches the invoice back to the quote (same MD customer, same rego, invoice after the quote, sensible value) and closes the deal as won. A note on the deal says which invoice it matched, so you can always see why.
+- **Quote Lost** — **nobody has touched the deal for 90 days.** The clock is on *last activity*, not on when the quote went out, so a deal you worked last week is safe. Adding a note or moving it resets it.
+
+Two things to know:
+
+1. **This does not touch your Monday board.** Monday and AC can now disagree — AC may show a deal closed that the board still has open. Monday remains the day-to-day; AC is the marketing side.
+2. **A deal closed by the sweep can be reopened.** If a customer comes back after four months, reopen the deal (or let a new quote raise a fresh one) — nothing is lost.
+
+If you see a deal close that clearly shouldn't have, say so with the deal name: the invoice match is a rule, not a certainty, and the rules are tunable.
+
 ### 6.3 If the board misbehaves
 
 Two faults were found and fixed on 20 August 2026. If you see either shape again, say so immediately rather than working around it:
@@ -1108,6 +1122,8 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | The cart says freight cannot be quoted | From 2 September 2026 there is no hand-typed fallback — the carrier did not return a rate | Quote it from the office. Check MachShip on Admin → Connections if it keeps happening |
 | A distributor will not delete | They still have orders, tune jobs, training attempts or tune aliases — deleting would take that history with it | The message names what is holding it. Switch **Active** off instead: they keep their records and disappear from the ordering side |
 | A cancelled order will not delete | It touched something real — a MYOB document, a payment, a refund, booked freight, or a supplier PO | The message says which. Only an order that never became anything can be deleted; the rest stay cancelled |
+| An ActiveCampaign deal closed as Won or Lost and nobody did it | The nightly AC/Mechanics Desk sweep — Won on a matched finalised invoice, Lost after 90 days with no activity | Read the note on the deal, which says exactly why. Reopen it if it was wrong, and report the deal name — the invoice match is a rule, not a certainty |
+| A quote was clearly won but the AC deal is still open | The sweep only fires on a FINALISED INVOICE. MD usually stops at "job created" and never advances the quote, so most real wins are not seen | Close it by hand in AC. This is a known gap, not a fault |
 | The date picker will not open a calendar | Fixed 2 September 2026 — on the dark theme the calendar icon was being drawn almost invisibly | Click anywhere in the date field now, not just the icon |
 | Order page shows a MYOB write error mentioning a duplicate number | The document was already created in MYOB on an earlier attempt; the retry reused the same number | Find the document in MYOB by that number, confirm it is right, and have it linked to the order rather than posting a second one |
 | A drop-ship supplier PO arrived numbered `00001382` instead of ours | MYOB rejected our number (usually a duplicate) and fell back to its own sequence | Quote the MYOB PO number to the supplier for that one PO, and check whether two POs on the order ended up with the same number |
@@ -1245,3 +1261,4 @@ Kate Sheridan is set up this way: role *Marketing / reports only*, reports limit
 13. **The B2B portal order number IS the MYOB invoice number.** Never renumber one of those documents in MYOB by hand — the payment, the drop-ship PO and the tax invoice all key off the number the portal reserved.
 14. **Gaps in the MYOB B2B number series are normal.** An abandoned or cancelled order burns a number. Search it in Admin → B2B → Orders before treating a gap as a missing invoice.
 15. **One post at 5:15pm has the lot** — sales figures and the day's call coaching, in #sales-updates.
+16. **A quiet ActiveCampaign deal closes itself at 90 days.** The clock runs from the last time anyone touched it, so working a deal keeps it alive — and a deal closed in AC can be reopened if the customer comes back.

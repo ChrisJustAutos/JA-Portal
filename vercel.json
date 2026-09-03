@@ -140,6 +140,10 @@
   },
   "crons": [
     {
+      "path": "/api/cron/ac-deal-sweep",
+      "schedule": "40 18 * * *"
+    },
+    {
       "path": "/api/distributors/refresh-cache",
       "schedule": "0 16 * * *"
     },

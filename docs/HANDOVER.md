@@ -13,7 +13,7 @@ An internal management platform for **Just Autos**, covering two MYOB business e
 - **JAWS** — Just Autos Wholesale (distribution arm, holds stock, ~14 distributors across Australia)
 - **VPS** — Vehicle Performance Solutions (the workshop entity; runs on **Mechanics Desk**, which remains the system of record — see §7.2)
 
-It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (28 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
+It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (30 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
 
 | | |
 |---|---|
@@ -47,7 +47,7 @@ It is one Next.js application that contains: a **staff portal** (dashboards, wor
                           │  Vercel (Next.js app, justautos.app)   │
    Staff browsers ───────▶│  pages/        UI (115 routes)         │
    Distributor browsers ─▶│  pages/api/    ~all business logic     │
-   Suppliers ────────────▶│  29 crons (vercel.json)                │
+   Suppliers ────────────▶│  30 crons (vercel.json)                │
                           └───────┬──────────────────┬─────────────┘
                                   │                  │ repository_dispatch
                                   ▼                  ▼
@@ -251,6 +251,12 @@ The worker shares the `mechanicdesk-session` concurrency group and re-logs in on
   - **⚠ Never bulk-write to these boards while a rep is working in one.** The item state can change between your read and your write — this bit on 2026-08-20: ten items were read at stage 3, Kaleb reset them to stage 1 and re-ran them seconds later, and the write landed on the new state and had to be undone.
 - **Column IDs are per board, and a wrong one fails the WHOLE write.** Most columns are template-shared (`COLUMNS` in `lib/monday-followup.ts`), but **Contact Attempts differs on all five boards** and is resolved at runtime by `getContactAttemptsColumnId()` — never hardcode it. Monday answers a bad column ID with `InvalidColumnIdException` on `change_multiple_column_values`, which rejects *every* field in that mutation, not just the bad one — so a stale counter ID silently costs you the whole item. That is exactly what happened until 2026-09-04: James and Tyronne carried a copied-from-Kaleb placeholder, and **123 of James's 188 quotes in the preceding 30 days got their AC deal but never got a board item**, so they never entered the follow-up cadence. Not backfilled. A lookup miss now skips the counter and still writes the item. Because Pipeline A searches all five boards, the resolution must be against the **matched** board, not the quoting rep's — that is why the same bad ID also took down a handful of Graham's, Dom's and Kaleb's quotes.
 - **Provenance on AC records (2026-09-04)** — `lib/activecampaign-source.ts`. Deals raised from a Mechanics Desk quote now carry deal custom fields **`Source` = "Mechanics Desk"** and **`MD Quote Number`**, and the contact gets the **`Mechanics Desk`** tag. Both are stamped on the create *and* update branches of the recency rule, so repeat quotes back-fill the marker onto older deals. The tag is what an AC automation can trigger on; the deal fields are what a report filters by — that is why it is both. Fields and the tag are **created automatically on first use** (looked up by label, cached per instance), so there is nothing to set up in the AC UI and no env var. Every call fails soft and records `sourceFieldsStamped` / `contactTagged` / `sourceError` into `quote_events.details.recencyDetails` — a missing stamp must never cost the deal. ⚠ Before this, origin was inferential only: a `Q<number>` title prefix, stage 38 rather than 35, and the note wording. Historical deals stay unmarked until a repeat quote touches them.
+- **Nightly AC↔MD reconciliation (2026-09-04)** — `lib/ac-deal-sweep.ts` + `/api/cron/ac-deal-sweep`, 18:40 UTC, **group 6 only** (groups 4/5 are legacy and never touched — group 4 has no Won/Lost stage to move to).
+  - **Quote Won** fires on a **finalised MD invoice** — Chris's explicit choice over MD's own `won` flag, which flips at *job creation*. That is a real trade: MD marked 2,598 quotes won at job-creation in two years but only 129 ever reached "invoice created", so this pass catches the invoiced subset, not every win. The first dry run gives the true number.
+  - **The join avoids fuzzy text.** `AC deal --Q<number>--> md_quotes --customer_id + rego--> md_invoices`. Only the last hop is inference, over MD's own IDs. **Both regos must be present and equal** — an earlier draft passed when either was blank, which silently degraded to matching on customer alone and would have let one car's invoice close another car's quote.
+  - **Guards**: invoice on/after the quote; within `AC_SWEEP_INVOICE_WINDOW_DAYS` (180) so a service a year later can't close an old quote; invoice ≥ `AC_SWEEP_MIN_INVOICE_RATIO` (0.5) of the quote so a $90 oil change can't close a $12k build. Near-misses are reported, not dropped, so the ratio can be tuned against evidence.
+  - **Quote Lost** at `AC_SWEEP_LOST_AFTER_DAYS` (90) since **last touched (`mdate`)**, not creation — a deal a rep worked last week survives. Won runs first so a deal invoiced on day 100 books as a win rather than being closed Lost the same night.
+  - **Safety**: both passes DRY until armed. `?dry=1` forces dry; there is deliberately no query-string way to go live. An incomplete deal scan forces dry **whatever the flags say** — if AC ignores a `filters[...]` it returns everything rather than erroring, and mass-closing deals off a short scan has no undo.
 - **ActiveCampaign** (`lib/activecampaign.ts`): env `ACTIVECAMPAIGN_API_URL`, `ACTIVECAMPAIGN_API_KEY`, owner map etc. **Landmine documented in code: `filters[phone]` is a partial match and matches everything on an empty query** — every match must be re-verified by exact digit comparison (this mis-attributed a contact to 26 customers in production once).
 
 ### 5.9 MachShip (B2B freight)
@@ -353,7 +359,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 
 ## 6. Scheduled automation
 
-### 6.1 Vercel crons (29 — `vercel.json`; schedules are UTC; Brisbane = UTC+10)
+### 6.1 Vercel crons (30 — `vercel.json`; schedules are UTC; Brisbane = UTC+10)
 
 | Cron | Brisbane time | Purpose |
 |---|---|---|
@@ -362,6 +368,7 @@ Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extracti
 | `/api/cron/calls-analyse` | every 5 min | Portal-side call coaching sweep — **off by default** (`CALLS_ANALYSIS_ENABLED`); PBX box currently does this |
 | `/api/cron/calls-weekly-report` | Mon 07:00 | Weekly coaching narrative → `#sales-coaching` |
 | `/api/cron/workshop-map-weekly` | Mon 07:10 | Quotes/jobs geography report → email Matt (cc Ryan, Chris). Its md_quotes/md_invoices reads are PAGED (`selectAllRows`) — a plain select hits the 1000-row cap and under-reports |
+| `/api/cron/ac-deal-sweep` | 18:40 daily | Reconcile the AC quote pipeline vs MD — Won on a finalised invoice, Lost after 90 idle days. **DRY until `AC_SWEEP_WON_LIVE` / `AC_SWEEP_LOST_LIVE`**. Runs 70 min after the 17:30 MD workshop-map pull |
 | `/api/cron/renew-graph-subscriptions` | every 6 h | Extend Graph mailbox subscriptions expiring <24h |
 | `/api/cron/health-check` | every 5 min | The 21 integration health checks → `integration_health` |
 | `/api/cron/b2b-freight-poll` | every 30 min | MachShip status/ETA poll on open consignments |
@@ -1210,6 +1217,8 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 - Migrations `148` and `153` are duplicated numbers; latest applied is `219_ap_rerouted_outcome`, so next is `220`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
 - **`COLUMNS.DISTRIBUTOR` and `COLUMNS.QUALIFYING_STAGE` in `lib/monday-followup.ts` carry Kaleb's IDs but sit in a map labelled shared** — both genuinely differ on all five boards, exactly like Contact Attempts did. They are harmless *only* because nothing currently reads or writes them. The first code that does will fail the whole mutation the way the counter did (§5.8). Resolve them per board or delete them; don't leave them looking usable.
+- **The AC deal sweep's Won match is inference, not a link.** MD invoices carry no quote number, so the last hop is customer_id + rego. It is guarded (both regos required, date window, value ratio) and every match is written onto the deal note for audit — but it is not proof, and `AC_SWEEP_MIN_INVOICE_RATIO` = 0.5 is a **guess until tuned against a real dry run**. MD pushes finalised invoices to MYOB, so reading the invoice from MYOB instead is the better source and is not built yet.
+- **The sweep's Won pass will miss most real wins by design.** It fires on invoicing; MD marks the vast majority of won quotes at *job creation* and never advances them. Expect the Won count to be far below actual conversion until the MYOB route lands.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.
 - The Library reader can't display images (no rewrite of relative `img/` paths, no auth-gated image route), so `docs/library-access-sop.md` sits in `docs/` as a PDF-only document rather than on the Library shelf — see §7.16.
