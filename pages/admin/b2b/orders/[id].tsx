@@ -545,16 +545,24 @@ export default function AdminOrderDetailPage({ user }: Props) {
               {/* ── LEFT COLUMN ── */}
               <div style={{display:'flex',flexDirection:'column',gap:14,minWidth:0}}>
 
-                {/* Summary and Ship to sit SIDE BY SIDE on a desktop (Chris
-                    2026-09-03: "re jig the order page so that it can be seen
-                    easily without scrolling"). Both are short and narrow, and
-                    stacking them full-width down a 1500px column is what pushed
-                    everything else below the fold - while leaving a hand's width
-                    of nothing between every label and its figure. */}
-                <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',gap:14,alignItems:'stretch',minWidth:0}}>
+                {/* SUMMARY IS A FULL-WIDTH STRIP NOW (Chris 2026-09-03: "expand
+                    the Items section"). It used to sit beside Ship to in a
+                    1fr 1fr row; Ship to has moved into the Shipping panel, and
+                    leaving Summary at half width would have moved the empty
+                    half rather than removed it. So the facts run across the
+                    page in three groups - the invoice, the money, the dates -
+                    each a short stack whose labels stay beside their figures,
+                    and Items below gets the whole column.
 
-                {/* Order summary header */}
+                    Three FIXED groups, not an auto-fitting flow: Invoiced,
+                    Paid, Shipped and Cancelled come and go with the order, and
+                    a grid that reflowed on the count would put the same row in
+                    a different place on every order you opened. */}
                 <Card title="Summary">
+                <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)',gap: isMobile ? 0 : '0 30px',alignItems:'start',minWidth:0}}>
+
+                {/* The invoice it is known by */}
+                <div style={{minWidth:0}}>
                   {/* The MYOB invoice number is what accounts, the distributor
                       and MYOB itself all quote — "Cutlers JAWSB2B0055". It used
                       to live only in the MYOB diagnostics card down the right
@@ -568,45 +576,11 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   {data.myob.order_number && data.myob.written_at && (
                     <KV label="Invoiced" value={fullDate(data.myob.written_at)} mono small/>
                   )}
-                  {/* The MYOB write ERROR is the one thing the old MYOB card
-                      carried that nothing else does — company file, order
-                      number, written date and attempt count were all either
-                      already in this card or in the Timeline, which is why that
-                      card is gone (Chris 2026-09-03). So the error stays, under
-                      the invoice row it explains, and only when there is one.
-                      retry-myob is admin:b2b, so a manager sees the error but
-                      not the button. */}
-                  {data.myob.write_error && (
-                    <div style={{margin:'6px 0 2px',padding:'8px 10px',background:alpha(A.bad,'14'),borderRadius:RADIUS.sm,color:A.bad,fontSize:12.5,lineHeight:1.5}}>
-                      {data.myob.write_error}
-                      {!!data.myob.write_attempts && (
-                        <span style={{color:T.text3}}> ({data.myob.write_attempts} attempt{data.myob.write_attempts === 1 ? '' : 's'})</span>
-                      )}
-                      {canRefund && (
-                        <div style={{marginTop:8}}>
-                          <button
-                            disabled={actionBusy}
-                            onClick={async () => {
-                              setActionBusy(true); setActionError(null)
-                              try {
-                                const r = await fetch(`/api/b2b/admin/orders/${orderId}/retry-myob`, { method: 'POST', credentials: 'same-origin' })
-                                const j = await r.json()
-                                if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-                                flashMsg(j.myob_write_error ? 'Retry ran — MYOB failed again, see error' : 'MYOB write retried successfully')
-                                await load()
-                              } catch (e: any) { setActionError(e?.message || String(e)) }
-                              finally { setActionBusy(false) }
-                            }}
-                            className="al-press al-focus"
-                            style={{padding:'6px 13px',borderRadius:RADIUS.pill,border:'1px solid transparent',background:alpha(A.bad,'14'),color:A.bad,fontSize:12.5,fontWeight:600,fontFamily:'inherit',cursor:'pointer',minHeight:32}}>
-                            {actionBusy ? 'Retrying…' : 'Retry MYOB write'}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <KV label="Distributor"    value={data.distributor?.display_name || '—'}/>
                   <KV label="Customer PO"    value={data.customer_po || '—'} mono/>
+                </div>
+
+                {/* What was paid, and how */}
+                <div style={{minWidth:0}}>
                   {(() => {
                     const m = data.payment_method || 'card'
                     const label = m === 'becs' ? 'Bank Direct Debit' : m === 'payto' ? 'PayTo' : 'Card'
@@ -651,35 +625,75 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       </button>
                     </div>
                   )}
+                  {data.paid_at && <KV label="Paid" value={fullDate(data.paid_at)} mono valueColor={A.good}/>}
+                </div>
+
+                {/* When it moved */}
+                <div style={{minWidth:0}}>
                   <KV label="Placed"         value={fullDate(data.placed_at)} mono/>
-                  {data.paid_at && <KV label="Paid"      value={fullDate(data.paid_at)}      mono valueColor={A.good}/>}
                   {data.shipped_at && <KV label="Shipped" value={fullDate(data.shipped_at)} mono valueColor={A.accent}/>}
                   {data.cancelled_at && <KV label="Cancelled" value={fullDate(data.cancelled_at)} mono valueColor={A.bad}/>}
-                </Card>
+                </div>
 
-                {/* Ship to */}
-                <Card title="Ship to">
-                  {data.ship_to ? (
-                    <div style={{fontSize:13,color:T.text2,lineHeight:1.6}}>
-                      {data.ship_to.name && <div style={{color:T.text}}>{data.ship_to.name}</div>}
-                      {data.ship_to.company && data.ship_to.company !== data.ship_to.name && <div>{data.ship_to.company}</div>}
-                      {data.ship_to.line1 && <div>{data.ship_to.line1}</div>}
-                      {data.ship_to.line2 && <div>{data.ship_to.line2}</div>}
-                      {(data.ship_to.suburb || data.ship_to.state || data.ship_to.postcode) && (
-                        <div>{[data.ship_to.suburb, data.ship_to.state, data.ship_to.postcode].filter(Boolean).join(' ')}</div>
+                </div>
+
+                  {/* The MYOB write ERROR is the one thing the old MYOB card
+                      carried that nothing else does — company file, order
+                      number, written date and attempt count were all either
+                      already in this card or in the Timeline, which is why that
+                      card is gone (Chris 2026-09-03). So the error stays, and
+                      only when there is one — across the foot of the summary
+                      rather than inside the invoice group, because it runs to
+                      a paragraph and a button and would have stretched one
+                      third of the strip to twice the height of the other two.
+                      retry-myob is admin:b2b, so a manager sees the error but
+                      not the button. */}
+                  {data.myob.write_error && (
+                    <div style={{margin:'6px 0 2px',padding:'8px 10px',background:alpha(A.bad,'14'),borderRadius:RADIUS.sm,color:A.bad,fontSize:12.5,lineHeight:1.5}}>
+                      {data.myob.write_error}
+                      {!!data.myob.write_attempts && (
+                        <span style={{color:T.text3}}> ({data.myob.write_attempts} attempt{data.myob.write_attempts === 1 ? '' : 's'})</span>
                       )}
-                      {data.ship_to.phone && <div style={{color:T.text3,fontSize:12,marginTop:4}}>☎ {data.ship_to.phone}</div>}
-                      {data.ship_to.email && <div style={{color:T.text3,fontSize:12}}>✉ {data.ship_to.email}</div>}
-                      {data.ship_to.source === 'distributor' && (
-                        <div style={{fontSize:12,color:T.text3,marginTop:6,fontStyle:'italic'}}>From the distributor's ship address (no per-order delivery address on file).</div>
+                      {canRefund && (
+                        <div style={{marginTop:8}}>
+                          <button
+                            disabled={actionBusy}
+                            onClick={async () => {
+                              setActionBusy(true); setActionError(null)
+                              try {
+                                const r = await fetch(`/api/b2b/admin/orders/${orderId}/retry-myob`, { method: 'POST', credentials: 'same-origin' })
+                                const j = await r.json()
+                                if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+                                flashMsg(j.myob_write_error ? 'Retry ran — MYOB failed again, see error' : 'MYOB write retried successfully')
+                                await load()
+                              } catch (e: any) { setActionError(e?.message || String(e)) }
+                              finally { setActionBusy(false) }
+                            }}
+                            className="al-press al-focus"
+                            style={{padding:'6px 13px',borderRadius:RADIUS.pill,border:'1px solid transparent',background:alpha(A.bad,'14'),color:A.bad,fontSize:12.5,fontWeight:600,fontFamily:'inherit',cursor:'pointer',minHeight:32}}>
+                            {actionBusy ? 'Retrying…' : 'Retry MYOB write'}
+                          </button>
+                        </div>
                       )}
                     </div>
-                  ) : (
-                    <div style={{fontSize:12.5,color:A.warn}}>No delivery address — add a ship address to the distributor before booking freight.</div>
                   )}
                 </Card>
 
-                </div>
+                {/* SHIP TO HAS MOVED INTO THE SHIPPING PANEL (Chris 2026-09-03:
+                    "lets merge the Shipping and ship to section"). Where an
+                    order is going and how it is getting there were two cards
+                    that each filled about half of themselves, and the address
+                    is only ever read next to the carrier.
+
+                    It stays a card of its own for a role that cannot edit -
+                    sales or accounts on view:b2b never get the rail at all, so
+                    folding the address into a panel they never see would have
+                    taken the delivery address off their page entirely. */}
+                {!canEdit && (
+                  <Card title="Ship to">
+                    <ShipToBlock shipTo={data.ship_to}/>
+                  </Card>
+                )}
 
                 {/* Lines */}
                 <Card title={`Items (${data.lines.length})`}>
@@ -861,6 +875,31 @@ export default function AdminOrderDetailPage({ user }: Props) {
 }
 
 // ─── Components ────────────────────────────────────────────────────────
+
+// The delivery address, in ONE definition. It reads inside the Shipping panel
+// for staff and as a card of its own for a read-only role - see the two call
+// sites for why there are two. Same markup either way, so the address can never
+// drift between them.
+function ShipToBlock({ shipTo }: { shipTo: OrderDetail['ship_to'] }) {
+  if (!shipTo) {
+    return <div style={{fontSize:12.5,color:A.warn}}>No delivery address — add a ship address to the distributor before booking freight.</div>
+  }
+  const locality = [shipTo.suburb, shipTo.state, shipTo.postcode].filter(Boolean).join(' ')
+  return (
+    <div style={{fontSize:13,color:T.text2,lineHeight:1.55}}>
+      {shipTo.name && <div style={{color:T.text}}>{shipTo.name}</div>}
+      {shipTo.company && shipTo.company !== shipTo.name && <div>{shipTo.company}</div>}
+      {shipTo.line1 && <div>{shipTo.line1}</div>}
+      {shipTo.line2 && <div>{shipTo.line2}</div>}
+      {locality && <div>{locality}</div>}
+      {shipTo.phone && <div style={{color:T.text3,fontSize:12,marginTop:4}}>☎ {shipTo.phone}</div>}
+      {shipTo.email && <div style={{color:T.text3,fontSize:12,overflowWrap:'anywhere'}}>✉ {shipTo.email}</div>}
+      {shipTo.source === 'distributor' && (
+        <div style={{fontSize:12,color:T.text3,marginTop:6,fontStyle:'italic'}}>From the distributor's ship address (no per-order delivery address on file).</div>
+      )}
+    </div>
+  )
+}
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -1395,7 +1434,7 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
 
         const mb = (extra: React.CSSProperties = {}): React.CSSProperties => ({
           borderRadius: RADIUS.pill, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
-          border: '1px solid transparent', whiteSpace: 'nowrap', width: '100%',
+          border: `1px solid ${T.border2}`, whiteSpace: 'nowrap', width: '100%',
           background: 'transparent', color: A.accent, textAlign: 'center',
           ...(isMobile ? { padding: '11px 14px', fontSize: 13, minHeight: 44 } : { padding: '7px 10px', fontSize: 12.5, minHeight: 34 }),
           ...extra,
@@ -1641,6 +1680,17 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
         <div style={{fontSize:12.5, color:A.bad, marginBottom:10, lineHeight:1.5}}>{actionError}</div>
       )}
 
+      {/* WHERE IT IS GOING, then how (Chris 2026-09-03: "lets merge the
+          Shipping and ship to section"). The address heads the freight facts
+          rather than the panel: the actions come first in a panel you work in,
+          and the address is reference - you read it against the carrier and
+          the tracking number directly below it, which is the whole reason the
+          two cards became one. */}
+      <div style={{marginTop:12, paddingTop:12, borderTop:`1px solid ${T.border}`, marginBottom:10}}>
+        <div style={{fontSize:12, color:T.text3, marginBottom:5}}>Ship to</div>
+        <ShipToBlock shipTo={order.ship_to}/>
+      </div>
+
       {/* Method and Carrier were printing the same string on every MachShip
          order — "TNT Express — Road Express" twice, a row of the rail spent
          saying nothing (Chris 2026-09-03). */}
@@ -1655,12 +1705,21 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
           </>
         )
       })()}
-      <KV label="Tracking" value={order.tracking_number || '—'} mono/>
-      {effectiveTrackingUrl && order.tracking_number && (
-        <div style={{display:'grid', gridTemplateColumns:'90px 1fr', gap:'4px 12px', alignItems:'baseline'}}>
-          <span style={{fontSize:12, color:T.text3}}>Track</span>
-          <a href={effectiveTrackingUrl} target="_blank" rel="noopener noreferrer" style={{color:A.accent, fontSize:13, textDecoration:'none'}}>Open tracking page →</a>
+      {/* The tracking NUMBER is the link (Chris 2026-09-03: "clean it up
+          more"). "Open tracking page →" was a second row, laid out on its own
+          hand-rolled 90px grid that lined up with none of the KV rows around
+          it, to link the number printed directly above it. */}
+      {effectiveTrackingUrl && order.tracking_number ? (
+        <div style={{display:'flex',justifyContent:'space-between',gap:14,padding:'5px 0',fontSize:13,borderBottom:`1px solid ${T.border}`}}>
+          <span style={{color:T.text3,flexShrink:0}}>Tracking</span>
+          <a href={effectiveTrackingUrl} target="_blank" rel="noopener noreferrer"
+            title="Open the carrier's tracking page"
+            style={{color:A.accent, fontSize:12.5, fontFamily:'monospace', textAlign:'right', wordBreak:'break-all', textDecoration:'none'}}>
+            {order.tracking_number} →
+          </a>
         </div>
+      ) : (
+        <KV label="Tracking" value={order.tracking_number || '—'} mono/>
       )}
       <KV label="Cost ex"  value={order.freight_cost_ex_gst != null ? `$${money(order.freight_cost_ex_gst)}` : '—'} mono/>
       {order.dropship_freight_ex_gst != null && order.dropship_freight_ex_gst > 0 && (
@@ -1677,7 +1736,7 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
           <KV label="ETA" value={order.freight_eta_at ? fullDate(order.freight_eta_at) : '—'}/>
           <button onClick={() => setDetailsOpen(o => !o)}
             className="al-press al-focus"
-            style={{background:'none', border:'none', padding:'2px 0 0', color:T.text3, fontSize:12, fontWeight:550, cursor:'pointer', fontFamily:'inherit'}}>
+            style={{background:'none', border:'none', padding:'2px 0 0', color:A.accent, fontSize:12.5, fontWeight:550, cursor:'pointer', fontFamily:'inherit'}}>
             {detailsOpen ? '▾' : '▸'} Consignment details
           </button>
           {detailsOpen && (

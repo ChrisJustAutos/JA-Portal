@@ -528,22 +528,25 @@ Before this (31 August 2026) two separate numbers ran and drifted apart — orde
 
 **⚠ The MYOB invoice number fields on Admin → B2B → Settings no longer set new order numbers.** They govern only the fallback used for pre-change orders. The section is labelled "fallback only" for that reason — editing it will look like it changes numbering and will not.
 
-**Admin → B2B → Orders → open the order.** The **Summary** card leads with the **MYOB invoice** number — `JAWSB2B0100` — above the distributor and the customer PO, with the date it was invoiced beneath it. That is the number MYOB, accounts and the distributor all quote, so when someone rings about "Cutlers JAWSB2B0100" you can match it without hunting.
+**Admin → B2B → Orders → open the order.** The **Summary** card leads with the **MYOB invoice** number — `JAWSB2B0100` — above the customer PO, with the date it was invoiced beneath it. That is the number MYOB, accounts and the distributor all quote, so when someone rings about "Cutlers JAWSB2B0100" you can match it without hunting.
 
 On an order where the distributor did not enter their own PO, MYOB's "Purchase Order No." box now repeats the document number. It has always fallen back to the portal order number — which is now the same thing. Harmless.
 
-Until the invoice is written it reads **"Not written to MYOB yet"** in amber. **If a write fails, the reason appears in red directly under that row**, with the attempt count and a *Retry MYOB write* button for admins. There is no separate MYOB card any more — the company file is always JAWS, and the order number, the invoiced date and every write attempt are in the Summary and the Timeline already.
+Until the invoice is written it reads **"Not written to MYOB yet"** in amber. **If a write fails, the reason appears in red across the foot of the Summary card**, with the attempt count and a *Retry MYOB write* button for admins. There is no separate MYOB card any more — the company file is always JAWS, and the order number, the invoiced date and every write attempt are in the Summary and the Timeline already.
 
-The **Timeline** card shows the **three most recent events** with "N earlier events hidden" above them; **Show all N events** opens the lot. A busy order — drop-ship POs, freight polls, a refund — used to run to a wall of entries, and what you almost always want is what happened last.
+The **Timeline** is a pop-up, opened from **Timeline (N)** beside the distributor name at the top of the page. It lists **every** event, newest last — a busy order (drop-ship POs, freight polls, a refund) runs to dozens, and a dialog has the room for them where the page did not.
 
 **The order page was condensed on 3 September 2026**, to fit on one screen without scrolling:
 
-- **Summary and Ship to sit side by side**, and the totals moved into the bottom of the Items card, under the money column they add up.
+- **Summary runs across the top in three groups** — the invoice, the money, the dates — and the totals moved into the bottom of the Items card, under the money column they add up. The groups stay in the same three places on every order, so *Placed* is where you last saw it even when the order has no *Paid* or *Shipped* row yet.
+- **Ship to is inside the Shipping panel**, under the actions and above the carrier — where the order is going and how it is getting there are one panel now, not two half-empty cards. (On a view-only login, which never gets the Shipping panel, the address stays a card of its own on the left.)
+- **Items has the full width of the page**, which is what Summary and Ship to were taking half of.
 - **The Stripe and MYOB cards are gone.** Both repeated what the Summary and the Timeline already say. What they uniquely held was kept: **Open in Stripe →** is now a link under the Payment row, and a failed MYOB write shows its reason under the MYOB invoice row.
 - **Everything you can do to an order is in the Shipping panel**, in one order: where it is up to, then **one blue button for the thing to do next**, then *More actions…*, then the standing tools in an even two-column grid — Refresh, Manual book, Print label, Print pick list.
 - **There is only ever one blue button.** On an order with freight booked it is **Ship now**, and *Mark as shipped* moves into *More actions…* — the two read as the same instruction, but only Ship now manifests the consignment, raises the tax invoice and emails the distributor. Use *Mark as shipped* only for freight booked outside the portal. Where there is no consignment yet the button is **Book Shipment**, or **Approve order** on a large order waiting for release, and otherwise it is the status step itself.
 - The undo, **Refund…**, **Cancel order…** and **Delete order** are under *More actions…*. Each still asks for confirmation, so choosing one from the list does not do anything on its own.
 - **The Timeline is a pop-up now**, opened from **Timeline (N)** beside the distributor name at the top of the page. It is the full history, every event, rather than the most recent three — it just is not taking up the page when you are not reading it.
+- **The tracking number is the link** — click `EYA000002111` to open the carrier's tracking page. There is no separate *Open tracking page →* row.
 - **Boxes and consignments** stays folded until you open it, the consignment number, freight status and last poll time sit behind **Consignment details** (the ETA stays out where you can see it), and **Method** only appears separately from **Carrier** when the two actually differ.
 
 Nothing was removed but duplication; every figure is still on the page.
