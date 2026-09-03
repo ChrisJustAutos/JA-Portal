@@ -20,8 +20,15 @@
 // MD invoices carry no quote number, so the naive version of this is a fuzzy
 // name/rego text match. We don't do that. Instead we walk MD's own keys:
 //
-//     AC deal  --Q<number> in the title-->  md_quotes  (exact)
+//     AC deal  --Q<number> in the title-->  md_quotes.DISPLAY_NUMBER (exact)
 //     md_quotes --customer_id + rego-->     md_invoices (MD's own IDs)
+//
+// ⚠ It is display_number, NOT quote_number. `quote_number` is MD's internal
+// row id (4750477); `display_number` is the number printed on the quote and
+// carried in the deal title (61235). The first cut joined on quote_number,
+// matched exactly zero rows, and reported that as "no MD-sourced deals"
+// rather than as a fault. A join that silently returns nothing is worse
+// than one that throws.
 //
 // Only the last hop is an inference, and it is over MD's internal customer
 // and vehicle identifiers rather than free text. Both hops are recorded on
@@ -32,12 +39,11 @@
 //                                     evidence for it
 //   - issue_date <= quote_date + N    otherwise a routine service 14 months
 //                                     later marks an ancient quote Won
-//   - invoice total >= ratio * quote  stops a $90 oil change closing a
-//                                     $12k build. Partial work is real, so
-//                                     this is a ratio and not equality, and
-//                                     near-misses are REPORTED rather than
-//                                     silently dropped so the ratio can be
-//                                     tuned against evidence.
+//   - invoice total within a RATIO BAND of the quote (0.5x - 3x). The floor
+//     stops a $90 oil change closing a $12k build; the ceiling stops a $50
+//     quote being closed by an unrelated $11k job on the same car. Partial
+//     work is real, so this is a band and not equality, and near-misses are
+//     REPORTED rather than silently dropped so the band can be tuned.
 //
 // ── SAFETY ───────────────────────────────────────────────────────────────
 // Both passes are DRY BY DEFAULT. They report precisely what they would do
@@ -60,6 +66,12 @@ const DEAL_STATUS_LOST = 2
 export const LOST_AFTER_DAYS = Number(process.env.AC_SWEEP_LOST_AFTER_DAYS || 90)
 export const INVOICE_WINDOW_DAYS = Number(process.env.AC_SWEEP_INVOICE_WINDOW_DAYS || 180)
 export const MIN_INVOICE_RATIO = Number(process.env.AC_SWEEP_MIN_INVOICE_RATIO || 0.5)
+// Ceiling added 2026-09-04 after the first dry run. The floor alone let
+// through invoices 35x, 83x and 230x the quote — a tiny quote and a big
+// unrelated job on the same car, not the quoted work. Across the open
+// pipeline only one deal sits above 3x, so this costs almost nothing and
+// removes the whole class of false win.
+export const MAX_INVOICE_RATIO = Number(process.env.AC_SWEEP_MAX_INVOICE_RATIO || 3)
 
 export function wonPassIsLive(): boolean {
   return (process.env.AC_SWEEP_WON_LIVE || '').toLowerCase() === 'true'
@@ -236,11 +248,11 @@ export async function runWonPass(deals: OpenDeal[], live: boolean): Promise<WonP
     const chunk = allQuoteNos.slice(i, i + 500)
     const { data, error } = await sb()
       .from('md_quotes')
-      .select('quote_number, customer_id, rego, quote_date, total_amount')
-      .in('quote_number', chunk)
+      .select('display_number, customer_id, rego, quote_date, total_amount')
+      .in('display_number', chunk)
     if (error) throw new Error(`md_quotes lookup failed: ${error.message}`)
     for (const r of data || []) {
-      quoteById.set(String(r.quote_number), {
+      quoteById.set(String(r.display_number), {
         customer_id: String(r.customer_id || ''),
         rego: String(r.rego || '').toUpperCase().replace(/\s+/g, ''),
         quote_date: String(r.quote_date || ''),
@@ -275,7 +287,7 @@ export async function runWonPass(deals: OpenDeal[], live: boolean): Promise<WonP
     // and page it rather than trusting one request to return everything.
     const { data, error } = await sb()
       .from('md_invoices')
-      .select('invoice_number, customer_id, rego, issue_date, total_amount')
+      .select('invoice_number, display_number, customer_id, rego, issue_date, total_amount')
       .in('customer_id', chunk)
       .eq('missing', false)
       .gte('issue_date', invoiceFloor)
@@ -289,7 +301,7 @@ export async function runWonPass(deals: OpenDeal[], live: boolean): Promise<WonP
       const key = String(r.customer_id)
       if (!invoicesByCustomer.has(key)) invoicesByCustomer.set(key, [])
       invoicesByCustomer.get(key)!.push({
-        invoice_number: String(r.invoice_number || ''),
+        invoice_number: String(r.display_number || r.invoice_number || ''),
         rego: String(r.rego || '').toUpperCase().replace(/\s+/g, ''),
         issue_date: String(r.issue_date || ''),
         total_amount: Number(r.total_amount) || 0,
@@ -339,7 +351,7 @@ export async function runWonPass(deals: OpenDeal[], live: boolean): Promise<WonP
         }
         // Prefer the earliest qualifying invoice — the one most likely to
         // be the work the quote described.
-        if (ratio >= MIN_INVOICE_RATIO) {
+        if (ratio >= MIN_INVOICE_RATIO && ratio <= MAX_INVOICE_RATIO) {
           if (!best || new Date(cand.invoiceDate).getTime() < new Date(best.invoiceDate).getTime()) best = cand
         } else if (!best) {
           report.rejectedByRatio.push(cand)

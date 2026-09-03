@@ -19,7 +19,14 @@
 // The provenance marker (Source = "Mechanics Desk") only started on
 // 2026-09-04, so for history we fall back to the convention Pipeline A and
 // the Zapier zap before it both followed — a "Q<number>" title prefix — and
-// then CONFIRM it by looking the quote number up in md_quotes. A title that
+// then CONFIRM it by looking the quote number up in md_quotes.
+//
+// ⚠ The join column is md_quotes.DISPLAY_NUMBER, not quote_number.
+// `quote_number` is MechanicDesk's internal row id (4750477); the number
+// printed on the quote and carried in the deal title is `display_number`
+// (61235). Joining on the wrong one matches ZERO rows and reads as "no MD
+// deals exist" rather than as an error — which is exactly what it did on
+// the first run. A title that
 // parses AND resolves to a real MD quote is as close to proof as the old
 // data gets. A title that parses but doesn't resolve is reported separately
 // rather than being quietly counted as either.
@@ -114,9 +121,9 @@ export default withAuth(['view:reports', 'admin:settings'], async (req, res) => 
   const quoteList = Array.from(allQuoteNos)
   for (let i = 0; i < quoteList.length; i += 500) {
     const chunk = quoteList.slice(i, i + 500)
-    const { data, error } = await sb().from('md_quotes').select('quote_number').in('quote_number', chunk)
+    const { data, error } = await sb().from('md_quotes').select('display_number').in('display_number', chunk)
     if (error) throw new Error(`md_quotes lookup failed: ${error.message}`)
-    for (const row of data || []) knownQuotes.add(String(row.quote_number))
+    for (const row of data || []) knownQuotes.add(String(row.display_number))
   }
 
   // ── 3. Classify ──────────────────────────────────────────────────────

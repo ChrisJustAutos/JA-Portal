@@ -25,6 +25,7 @@
 //   AC_SWEEP_LOST_AFTER_DAYS       default 90
 //   AC_SWEEP_INVOICE_WINDOW_DAYS   default 180
 //   AC_SWEEP_MIN_INVOICE_RATIO     default 0.5
+//   AC_SWEEP_MAX_INVOICE_RATIO     default 3
 //   AC_SWEEP_ENABLED=false         kill switch, no redeploy needed
 //
 // Manual dry run (safe at any time — it ignores the LIVE flags):
@@ -42,6 +43,7 @@ import {
   LOST_AFTER_DAYS,
   INVOICE_WINDOW_DAYS,
   MIN_INVOICE_RATIO,
+  MAX_INVOICE_RATIO,
 } from '../../../lib/ac-deal-sweep'
 
 export const config = { maxDuration: 300 }
@@ -95,6 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         lostAfterDays: LOST_AFTER_DAYS,
         invoiceWindowDays: INVOICE_WINDOW_DAYS,
         minInvoiceRatio: MIN_INVOICE_RATIO,
+        maxInvoiceRatio: MAX_INVOICE_RATIO,
         wonLive: wonLiveEff,
         lostLive: lostLiveEff,
         forcedDryByIncompleteScan: (wonLive || lostLive) && !scanTrustworthy,
@@ -141,7 +144,7 @@ async function notify(r: any, wonLive: boolean, lostLive: boolean) {
     `*Quote Won* (${mode(wonLive)}) — ${r.won.matchedCount} matched a finalised MD invoice`,
     `   ${r.won.dealsWithQuoteNumber} deals carried a quote number, ${r.won.quotesResolved} resolved in MD`,
     r.won.rejectedByRatioCount
-      ? `   ${r.won.rejectedByRatioCount} rejected: invoice under ${Math.round(MIN_INVOICE_RATIO * 100)}% of the quote`
+      ? `   ${r.won.rejectedByRatioCount} rejected: invoice outside ${MIN_INVOICE_RATIO}x-${MAX_INVOICE_RATIO}x the quote`
       : null,
     '',
     `*Quote Lost* (${mode(lostLive)}) — ${r.lost.candidateCount} untouched for ${r.lost.cutoffDays}+ days`,
