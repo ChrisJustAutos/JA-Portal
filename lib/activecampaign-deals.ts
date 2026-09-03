@@ -326,7 +326,7 @@ export async function applyQuoteRecencyRule(
   // BOTH branches — the update branch is what back-fills the marker onto
   // deals that predate it, as repeat quotes touch them. Both calls swallow
   // their own failures; a missing stamp must never cost us the deal.
-  const sourceFields = await mechanicsDeskDealFields(input.quoteNumber)
+  const sourceFields = await mechanicsDeskDealFields(input.quoteNumber, input.vehicleMakeModel, input.vehicleRego)
   const tagResult = await tagContactAsMechanicsDesk(input.contactId)
   const sourceError = tagResult.error
     || (sourceFields.length === 0 ? 'no deal source fields resolved' : null)

@@ -384,6 +384,12 @@ export async function runWonPass(deals: OpenDeal[], live: boolean): Promise<WonP
 
 // ── LOST PASS ────────────────────────────────────────────────────────────
 
+// Deals whose STAGE is already Won or Lost while their STATUS is still open.
+// 56 of these exist in the live pipeline — someone moved the card without
+// the status following. They are already decided, so the Lost sweep must
+// leave them alone rather than "closing" a deal that reads as Won.
+const DECIDED_STAGES = [STAGE_QUOTE_WON, STAGE_QUOTE_LOST]
+
 export interface LostCandidate {
   dealId: string
   dealTitle: string
@@ -399,6 +405,7 @@ export interface LostPassReport {
   candidates: LostCandidate[]
   totalValue: number
   oldestTouch: string | null
+  skippedAlreadyDecided: number
   moved: number
   errors: string[]
 }
@@ -417,6 +424,7 @@ export async function runLostPass(
     candidates: [],
     totalValue: 0,
     oldestTouch: null,
+    skippedAlreadyDecided: 0,
     moved: 0,
     errors: [],
   }
@@ -424,6 +432,9 @@ export async function runLostPass(
   for (const d of deals) {
     // Anything the Won pass just closed is no longer ours to close.
     if (excludeDealIds.indexOf(d.id) !== -1) continue
+
+    // Already sitting at Quote Won / Quote Lost, status just never followed.
+    if (DECIDED_STAGES.indexOf(d.stage) !== -1) { report.skippedAlreadyDecided++; continue }
 
     const touched = new Date(d.mdate).getTime()
     if (!Number.isFinite(touched)) continue

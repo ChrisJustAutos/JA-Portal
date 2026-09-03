@@ -36,6 +36,8 @@ import { ensureTagExists, attachTagToContact } from './activecampaign'
 // existing ones, which would orphan every record already stamped. Don't.
 export const SOURCE_FIELD_LABEL = 'Source'
 export const QUOTE_NUMBER_FIELD_LABEL = 'MD Quote Number'
+export const VEHICLE_FIELD_LABEL = 'Vehicle'
+export const REGO_FIELD_LABEL = 'Rego'
 export const SOURCE_VALUE_MECHANICS_DESK = 'Mechanics Desk'
 export const MD_CONTACT_TAG = 'Mechanics Desk'
 
@@ -166,7 +168,11 @@ export interface SourceCustomField {
  * Returns [] rather than throwing when the fields can't be resolved, so a
  * provenance problem can never stop a deal being written.
  */
-export async function mechanicsDeskDealFields(quoteNumber: string | null): Promise<SourceCustomField[]> {
+export async function mechanicsDeskDealFields(
+  quoteNumber: string | null,
+  vehicle?: string | null,
+  rego?: string | null,
+): Promise<SourceCustomField[]> {
   const out: SourceCustomField[] = []
   try {
     const sourceId = await ensureDealFieldId(SOURCE_FIELD_LABEL)
@@ -178,6 +184,18 @@ export async function mechanicsDeskDealFields(quoteNumber: string | null): Promi
       // accumulates several, and the full history stays in the deal TITLE
       // ("Q61288 | Q61294") — which is what the won/lost sweeps parse.
       if (quoteId) out.push({ fieldId: quoteId, value: quoteNumber })
+    }
+
+    // Vehicle and rego are in the deal TITLE already, but only as free text
+    // a rep can edit away. As fields they are filterable and survive a
+    // rename — and the rego is what the MD-fallback win match keys on.
+    if (vehicle) {
+      const vId = await ensureDealFieldId(VEHICLE_FIELD_LABEL)
+      if (vId) out.push({ fieldId: vId, value: vehicle })
+    }
+    if (rego) {
+      const rId = await ensureDealFieldId(REGO_FIELD_LABEL)
+      if (rId) out.push({ fieldId: rId, value: rego })
     }
   } catch (e: any) {
     console.error('[ac-source] mechanicsDeskDealFields failed:', e?.message)
