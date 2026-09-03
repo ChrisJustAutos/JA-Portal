@@ -396,51 +396,66 @@ export async function postNoteAndTag(
 
   // 2. Apply the tag — first ensure it exists, then attach
   const tagId = await ensureTagExists(TAG_NAME)
-  let tagApplied = false
-  if (tagId) {
-    try {
-      await acJson(`/contactTags`, {
-        method: 'POST',
-        body: JSON.stringify({
-          contactTag: {
-            contact: contactId,
-            tag: tagId,
-          },
-        }),
-      })
-      tagApplied = true
-    } catch (e: any) {
-      // 422 = already had the tag, fine.
-      if (!String(e?.message || '').includes('422')) {
-        console.error(`[ac] failed to attach tag to contact ${contactId}:`, e?.message)
-      } else {
-        tagApplied = true
-      }
-    }
-  }
+  const tagApplied = tagId ? await attachTagToContact(contactId, tagId) : false
 
   return { noteId, tagApplied }
 }
 
-let cachedTagId: number | null = null
-async function ensureTagExists(name: string): Promise<number | null> {
-  if (cachedTagId !== null) return cachedTagId
-  const data = await acJson<{ tags: any[] }>(`/tags?search=${encodeURIComponent(name)}&limit=20`)
-  const exact = (data.tags || []).find(t => t.tag === name)
-  if (exact) {
-    cachedTagId = Number(exact.id)
-    return cachedTagId
+// Keyed by tag NAME. This was a single `cachedTagId` slot until 2026-09-04,
+// which was fine while one tag existed and silently wrong the moment a second
+// one did — every caller after the first would have got the first tag's ID
+// back regardless of the name it asked for.
+const tagIdCache = new Map<string, number | null>()
+
+export async function ensureTagExists(
+  name: string,
+  description = 'Auto-applied when a call follow-up summary is pushed to AC. Use as a trigger for follow-up automations.',
+): Promise<number | null> {
+  const hit = tagIdCache.get(name)
+  if (hit !== undefined) return hit
+
+  try {
+    const data = await acJson<{ tags: any[] }>(`/tags?search=${encodeURIComponent(name)}&limit=20`)
+    const exact = (data.tags || []).find(t => t.tag === name)
+    if (exact) {
+      const id = Number(exact.id)
+      tagIdCache.set(name, id)
+      return id
+    }
+  } catch (e: any) {
+    console.error(`[ac] tag search failed for '${name}':`, e?.message)
+    return null   // don't cache a transient search failure
   }
+
   try {
     const created = await acJson<{ tag: { id: string } }>(`/tags`, {
       method: 'POST',
-      body: JSON.stringify({ tag: { tag: name, tagType: 'contact', description: 'Auto-applied when a call follow-up summary is pushed to AC. Use as a trigger for follow-up automations.' } }),
+      body: JSON.stringify({ tag: { tag: name, tagType: 'contact', description } }),
     })
-    cachedTagId = Number(created.tag.id)
-    return cachedTagId
+    const id = Number(created.tag.id)
+    tagIdCache.set(name, id)
+    return id
   } catch (e: any) {
-    console.error('[ac] could not create tag:', e?.message)
+    console.error(`[ac] could not create tag '${name}':`, e?.message)
     return null
+  }
+}
+
+/**
+ * Attach an existing tag to a contact. Returns true if the contact now
+ * carries it (including when it already did — AC answers 422 for that).
+ */
+export async function attachTagToContact(contactId: number, tagId: number): Promise<boolean> {
+  try {
+    await acJson(`/contactTags`, {
+      method: 'POST',
+      body: JSON.stringify({ contactTag: { contact: contactId, tag: tagId } }),
+    })
+    return true
+  } catch (e: any) {
+    if (String(e?.message || '').includes('422')) return true   // already tagged
+    console.error(`[ac] failed to attach tag ${tagId} to contact ${contactId}:`, e?.message)
+    return false
   }
 }
 

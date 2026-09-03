@@ -28,6 +28,8 @@
 //   - currency must be lowercase ('aud' not 'AUD') to match what the
 //     pipeline stores.
 
+import { mechanicsDeskDealFields, tagContactAsMechanicsDesk } from './activecampaign-source'
+
 const RECENCY_DAYS = 30
 
 function acFetch(path: string, opts: RequestInit = {}): Promise<Response> {
@@ -283,6 +285,11 @@ export interface ApplyQuoteRecencyResult {
     chosenDealId: number | null
     chosenDealCreatedAt: string | null
     landedAtStageId: number | null    // The AC stage the deal ended up at after this run
+    // Provenance stamping (2026-09-04). Recorded so a silent failure is
+    // visible in quote_events rather than just absent from AC.
+    sourceFieldsStamped: number       // how many deal custom fields were written
+    contactTagged: boolean
+    sourceError: string | null
   }
 }
 
@@ -314,6 +321,16 @@ export async function applyQuoteRecencyRule(
   }
   const noteBody = noteLines.join('\n')
 
+  // ── Provenance ───────────────────────────────────────────────────────
+  // Stamp Source = "Mechanics Desk" on the deal and tag the contact, on
+  // BOTH branches — the update branch is what back-fills the marker onto
+  // deals that predate it, as repeat quotes touch them. Both calls swallow
+  // their own failures; a missing stamp must never cost us the deal.
+  const sourceFields = await mechanicsDeskDealFields(input.quoteNumber)
+  const tagResult = await tagContactAsMechanicsDesk(input.contactId)
+  const sourceError = tagResult.error
+    || (sourceFields.length === 0 ? 'no deal source fields resolved' : null)
+
   if (decision.action === 'create') {
     // CREATE branch: land directly at the configured stage (= 38 "Quote Sent").
     // No Make involvement (Make listens at stage 35), no Zapier (we're
@@ -324,6 +341,7 @@ export async function applyQuoteRecencyRule(
       valueDollarsIncGst: dealValue,
       ownerId: input.ownerId,
       initialNote: noteBody,
+      customFields: sourceFields,
     })
 
     return {
@@ -336,6 +354,9 @@ export async function applyQuoteRecencyRule(
         chosenDealId: null,
         chosenDealCreatedAt: null,
         landedAtStageId: targetStageId || null,
+        sourceFieldsStamped: sourceFields.length,
+        contactTagged: tagResult.tagged,
+        sourceError,
       },
     }
   }
@@ -355,6 +376,7 @@ export async function applyQuoteRecencyRule(
     newTitle,
     newValueDollarsIncGst: newValue,
     appendNote: noteBody,
+    customFields: sourceFields,
   })
 
   return {
@@ -367,6 +389,9 @@ export async function applyQuoteRecencyRule(
       chosenDealId: existing.id,
       chosenDealCreatedAt: existing.createdAt,
       landedAtStageId: existing.stageId,
+      sourceFieldsStamped: sourceFields.length,
+      contactTagged: tagResult.tagged,
+      sourceError,
     },
   }
 }
