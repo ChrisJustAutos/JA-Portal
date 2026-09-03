@@ -583,6 +583,15 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   <Meta label="Invoiced" value={timeAgainst(data.myob.written_at, data.placed_at)}/>
                 )}
                 {data.customer_po && <Meta label="PO" value={data.customer_po} mono/>}
+                {/* The Shipping panel owns freight dates, so the strip carries
+                    Shipped only when the panel will NOT: a role without the
+                    rail at all, or a delivered order, whose pill reads
+                    "Delivered" and takes the despatch time down with it. Not a
+                    double-up — on a delivered order the two say different
+                    things. */}
+                {data.shipped_at && (!canEdit || data.delivered_at) && (
+                  <Meta label="Shipped" value={timeAgainst(data.shipped_at, data.placed_at)} color={A.accent}/>
+                )}
                 {data.cancelled_at && <Meta label="Cancelled" value={fullDate(data.cancelled_at)} color={A.bad}/>}
               </div>
             )}
