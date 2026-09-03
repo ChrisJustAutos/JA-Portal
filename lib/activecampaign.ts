@@ -189,7 +189,7 @@ async function findByPhone(rawPhone: string): Promise<ACContact | null> {
 
 // ── Search by email ──────────────────────────────────────────────────────
 
-async function findByEmail(rawEmail: string): Promise<ACContact | null> {
+export async function findByEmail(rawEmail: string): Promise<ACContact | null> {
   const email = rawEmail.trim().toLowerCase()
   if (!email || !email.includes('@')) return null
 
@@ -287,7 +287,7 @@ function ownerIdForAgent(agentName: string | null): number | null {
 // When an existing contact is missing fields we have data for, fill them
 // in. Never overwrite existing values — only fill empties.
 
-async function backfillContact(
+export async function backfillContact(
   contactId: number,
   current: ACContact,
   newData: { phone: string | null; email: string | null },

@@ -7,14 +7,20 @@
 // one and you must move the other — running before the pull silently costs
 // a day of invoices, which reads as "no wins today" rather than as a fault.
 //
-// TWO PASSES, in order:
-//   1. WON  — deals whose quote produced a finalised MD invoice → stage 39
-//   2. LOST — deals untouched for 90 days → stage 40
-// Won first, so a deal invoiced on day 100 is booked as the win it is
+// THREE PASSES, in order:
+//   1. WON (MYOB)  — the invoice reached MYOB. Matched to the AC contact by
+//                     EMAIL off the customer card, which is an identity
+//                     match rather than an inference. Strongest signal, so
+//                     it runs first and its wins are excluded from pass 2.
+//   2. WON (MD)    — fallback for customers whose MYOB card has no email:
+//                     quote number → md_quotes → md_invoices on customer+rego.
+//   3. LOST        — deals untouched for 90 days → stage 40.
+// Won before Lost, so a deal invoiced on day 100 is booked as the win it is
 // instead of being closed Lost the same night for going quiet.
 //
 // BOTH PASSES ARE DRY UNTIL EXPLICITLY ARMED:
-//   AC_SWEEP_WON_LIVE=true      arms the Won pass
+//   AC_SWEEP_MYOB_WON_LIVE=true arms the MYOB Won pass
+//   AC_SWEEP_WON_LIVE=true      arms the MD-fallback Won pass
 //   AC_SWEEP_LOST_LIVE=true     arms the Lost pass
 // A dry run does every lookup and every decision and writes nothing, so the
 // report is exactly what a live run would do. The first live Lost run closes
@@ -34,6 +40,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { postMessage } from '../../../lib/slack-bot/slack'
+import { runMyobWonPass, myobWonIsLive, MYOB_WON_LOOKBACK_DAYS } from '../../../lib/ac-won-from-myob'
 import {
   listOpenGroupDeals,
   runWonPass,
@@ -63,6 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // deliberately no inverse — you cannot go live from a query string.
   const forceDry = req.query.dry === '1'
   const verbose = req.query.verbose === '1'
+  const myobWonLive = !forceDry && myobWonIsLive()
   const wonLive = !forceDry && wonPassIsLive()
   const lostLive = !forceDry && lostPassIsLive()
 
@@ -80,11 +88,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const wonLiveEff = wonLive && scanTrustworthy
     const lostLiveEff = lostLive && scanTrustworthy
 
-    const won = await runWonPass(deals, wonLiveEff)
+    // Pass 1 — MYOB. Independent of the AC deal scan (it starts from
+    // invoices), so an incomplete scan doesn't force it dry.
+    let myobWon
+    try {
+      myobWon = await runMyobWonPass(myobWonLive)
+    } catch (e: any) {
+      myobWon = { live: myobWonLive, error: e?.message || String(e), matched: [], moved: 0 } as any
+      console.error('[ac-deal-sweep] MYOB won pass failed:', e)
+    }
+    const myobWonDealIds: string[] = (myobWon.matched || []).map((m: any) => m.dealId)
+
+    // Pass 2 — MD fallback. Skip anything MYOB already claimed.
+    const dealsForMd = deals.filter(d => myobWonDealIds.indexOf(d.id) === -1)
+    const won = await runWonPass(dealsForMd, wonLiveEff)
     // Exclude what Won just closed — in a dry run nothing actually moved,
     // but the exclusion still applies so the dry report matches what a live
     // run would really do.
-    const won2 = won.matched.map(m => m.dealId)
+    const won2 = won.matched.map(m => m.dealId).concat(myobWonDealIds)
     const lost = await runLostPass(deals, lostLiveEff, won2)
 
     const result = {
@@ -102,6 +123,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         lostLive: lostLiveEff,
         forcedDryByIncompleteScan: (wonLive || lostLive) && !scanTrustworthy,
       },
+      myobWon: {
+        ...myobWon,
+        matched: verbose ? myobWon.matched : (myobWon.matched || []).slice(0, 25),
+        matchedCount: (myobWon.matched || []).length,
+        lookbackDays: MYOB_WON_LOOKBACK_DAYS,
+        live: myobWonLive,
+      },
       won: {
         ...won,
         matched: verbose ? won.matched : won.matched.slice(0, 25),
@@ -116,7 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     }
 
-    await notify(result, wonLiveEff, lostLiveEff)
+    await notify(result, wonLiveEff, lostLiveEff, myobWonLive)
     return res.status(200).json(result)
   } catch (e: any) {
     console.error('[ac-deal-sweep] failed:', e)
@@ -135,13 +163,18 @@ function sweepChannel(): string {
   return process.env.AC_SWEEP_SLACK_CHANNEL || 'C0BTL0TND6X'
 }
 
-async function notify(r: any, wonLive: boolean, lostLive: boolean) {
+async function notify(r: any, wonLive: boolean, lostLive: boolean, myobWonLive: boolean) {
 
   const mode = (live: boolean) => (live ? 'LIVE' : 'dry run — nothing changed')
   const lines = [
     `*AC deal sweep* — ${r.openDealsScanned} open deals in the quote pipeline`,
     '',
-    `*Quote Won* (${mode(wonLive)}) — ${r.won.matchedCount} matched a finalised MD invoice`,
+    `*Quote Won — MYOB* (${mode(myobWonLive)}) — ${r.myobWon.matchedCount} matched by customer email`,
+    `   ${r.myobWon.invoicesScanned || 0} invoices in the last ${r.myobWon.lookbackDays}d, ${r.myobWon.invoicesWithCardEmail || 0} with an email on the card`,
+    r.myobWon.contactsNotFound ? `   ${r.myobWon.contactsNotFound} card emails had no AC contact` : null,
+    r.myobWon.error ? `   :warning: MYOB pass failed: ${r.myobWon.error}` : null,
+    '',
+    `*Quote Won — MD fallback* (${mode(wonLive)}) — ${r.won.matchedCount} matched a finalised MD invoice`,
     `   ${r.won.dealsWithQuoteNumber} deals carried a quote number, ${r.won.quotesResolved} resolved in MD`,
     r.won.rejectedByRatioCount
       ? `   ${r.won.rejectedByRatioCount} rejected: invoice outside ${MIN_INVOICE_RATIO}x-${MAX_INVOICE_RATIO}x the quote`

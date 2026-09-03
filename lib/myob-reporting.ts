@@ -64,6 +64,9 @@ const dt = (d: string) => `datetime'${d}T00:00:00'`
 
 export interface SaleInvoiceRow {
   ID: string; Number: string | null; Date: string | null; CustomerName: string | null
+  // Customer card UID. Needed to look the card up for its email address —
+  // the name alone is not a reliable key (duplicates, renames).
+  CustomerUID: string | null
   CustomerPurchaseOrderNumber: string | null; IsTaxInclusive: boolean
   TotalAmount: number; TotalTax: number; BalanceDueAmount: number; Status: string | null; InvoiceType: string | null
   Freight: number
@@ -118,6 +121,7 @@ export async function fetchSaleInvoicesWithLines(
     invoices.push({
       ID: inv.UID, Number: inv.Number ?? null, Date: inv.Date ?? null,
       CustomerName: inv.Customer?.Name ?? null,
+      CustomerUID: inv.Customer?.UID ?? null,
       CustomerPurchaseOrderNumber: inv.CustomerPurchaseOrderNumber ?? null,
       IsTaxInclusive: inv.IsTaxInclusive === true,
       TotalAmount: Number(inv.TotalAmount) || 0, TotalTax: Number(inv.TotalTax) || 0,
@@ -173,6 +177,7 @@ export async function fetchSaleInvoices(
   const rows = raw.map((inv): SaleInvoiceRow => ({
     ID: inv.UID, Number: inv.Number ?? null, Date: inv.Date ?? null,
     CustomerName: inv.Customer?.Name ?? null,
+    CustomerUID: inv.Customer?.UID ?? null,
     CustomerPurchaseOrderNumber: inv.CustomerPurchaseOrderNumber ?? null,
     IsTaxInclusive: inv.IsTaxInclusive === true,
     TotalAmount: Number(inv.TotalAmount) || 0, TotalTax: Number(inv.TotalTax) || 0,
