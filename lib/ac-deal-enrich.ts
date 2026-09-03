@@ -32,7 +32,7 @@ import {
   SOURCE_FIELD_LABEL,
   ensureDealFieldId,
 } from './activecampaign-source'
-import { quoteNumbersFromTitle, AC_GROUP, normaliseRego } from './ac-deal-sweep'
+import { quoteNumbersFromTitle, AC_GROUP, regoForDisplay } from './ac-deal-sweep'
 
 function acFetch(path: string, opts: RequestInit = {}) {
   const baseUrl = process.env.ACTIVECAMPAIGN_API_URL
@@ -200,7 +200,8 @@ export async function runDealEnrichment(opts: {
     for (const r of data || []) {
       quoteById.set(String(r.display_number), {
         vehicle: (r.vehicle_model || '').trim() || null,
-        rego: normaliseRego(r.rego),   // 'TBA' and friends become null, not data
+        // DISPLAY form — this is written into a field a rep reads.
+        rego: regoForDisplay(r.rego),   // 'TBA' and friends become null, not data
         total: Number(r.total_amount) || 0,
         date: String(r.quote_date || ''),
       })

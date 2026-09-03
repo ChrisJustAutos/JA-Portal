@@ -121,12 +121,28 @@ function sb() {
 // Normalise them to null everywhere instead.
 const PLACEHOLDER_REGOS = ['TBA', 'TBC', 'NA', 'N/A', 'NONE', 'UNKNOWN', 'PENDING', 'X', 'XX', 'XXX', '0', '00', '-', '--', '?']
 
+/**
+ * COMPARISON key: upper-cased, spaces removed, placeholders null. Use this
+ * for matching a quote's vehicle to an invoice's — "MRM 40" and "MRM40" are
+ * the same plate and must compare equal.
+ */
 export function normaliseRego(raw: string | null | undefined): string | null {
   const r = String(raw || '').toUpperCase().replace(/\s+/g, '')
   if (!r) return null
   if (PLACEHOLDER_REGOS.indexOf(r) !== -1) return null
   if (r.replace(/[^A-Z0-9]/g, '').length < 3) return null   // too short to identify a vehicle
   return r
+}
+
+/**
+ * DISPLAY form: the rego as it actually reads, with inner spacing kept —
+ * "MRM 40", not "MRM40". Same validity rules as normaliseRego (placeholders
+ * and stubs are still null), but never write the comparison key into a field
+ * a human reads: the stripped form is an artefact of matching, not the plate.
+ */
+export function regoForDisplay(raw: string | null | undefined): string | null {
+  if (!normaliseRego(raw)) return null
+  return String(raw || '').toUpperCase().replace(/\s+/g, ' ').trim()
 }
 
 // ES5 target: no matchAll, no spreading iterators.
