@@ -31,6 +31,9 @@ export default withAuth(['view:reports', 'admin:settings'], async (req, res) => 
     return res.status(200).json({
       mode: live ? 'LIVE — deals were written' : 'dry run — nothing was written',
       ...report,
+      health: report.skippedNoFieldsResolved > 0
+        ? `WARNING: ${report.skippedNoFieldsResolved} deals were skipped because the AC deal custom fields could not be resolved or created. That is a configuration/API fault, not an empty backlog — nothing will be stamped until it is fixed.`
+        : 'Deal custom fields resolved normally.',
       note: report.capped
         ? `Stopped at the ${limit}-deal cap. Re-run to continue — already-stamped deals are skipped.`
         : 'No cap hit on this run.',

@@ -134,6 +134,7 @@ export interface EnrichReport {
   alreadyStamped: number
   quotesResolved: number
   quoteNotInMd: number
+  skippedNoFieldsResolved: number
   enriched: number
   valuesFilled: number
   contactsTagged: number
@@ -156,6 +157,7 @@ export async function runDealEnrichment(opts: {
     alreadyStamped: 0,
     quotesResolved: 0,
     quoteNotInMd: 0,
+    skippedNoFieldsResolved: 0,
     enriched: 0,
     valuesFilled: 0,
     contactsTagged: 0,
@@ -214,7 +216,14 @@ export async function runDealEnrichment(opts: {
 
     try {
       const fields = await mechanicsDeskDealFields(c.quote, q.vehicle, q.rego)
-      if (fields.length === 0) continue
+      if (fields.length === 0) {
+        // COUNT THIS. An earlier version just `continue`d, so when the field
+        // lookup was broken every single deal fell through here and the run
+        // reported "enriched: 0, errors: []" — indistinguishable from having
+        // no work to do. A silent zero is the worst possible failure shape.
+        report.skippedNoFieldsResolved++
+        continue
+      }
 
       // Only fill a value that is genuinely absent — never restate or
       // change one a rep has set.

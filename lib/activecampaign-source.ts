@@ -133,19 +133,26 @@ export async function ensureDealFieldId(
   }
 
   try {
-    const created = await acJson<{ dealCustomFieldMeta: { id: string } }>(`/dealCustomFieldMeta`, {
+    // ⚠ AC SINGULARISES THE KEY ON WRITE. GET /dealCustomFieldMeta returns
+    // `dealCustomFieldMeta`, but POST demands `dealCustomFieldMetum` in the
+    // BODY and answers with `dealCustomFieldMetum` too. Sending the plural
+    // fails 400 "A dealCustomFieldMetum object must be provided" — which the
+    // catch below swallowed into a null field id, so every deal silently
+    // went unstamped and the run reported success. Verified against the live
+    // API on 2026-09-04; `isDealVisible` is not a real property and is gone.
+    const created = await acJson<{ dealCustomFieldMetum: { id: string } }>(`/dealCustomFieldMeta`, {
       method: 'POST',
       body: JSON.stringify({
-        dealCustomFieldMeta: {
+        dealCustomFieldMetum: {
           fieldLabel: label,
           fieldType,
           fieldDefault: '',
-          isFormVisible: 1,
-          isDealVisible: 1,
+          isFormVisible: 0,
+          isRequired: 0,
         },
       }),
     })
-    const id = Number(created.dealCustomFieldMeta.id)
+    const id = Number(created.dealCustomFieldMetum.id)
     fieldIdCache.set(label, id)
     console.log(`[ac-source] created deal custom field '${label}' -> ${id}`)
     return id
