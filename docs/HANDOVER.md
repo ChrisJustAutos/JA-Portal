@@ -2,7 +2,7 @@
 
 How the portal is built, where it runs, every connection it has (and how to set up or change them), and operating procedures for every module.
 
-Compiled 20 August 2026 from the live codebase; **last updated 2 September 2026**. Supersedes `03_SYSTEM_OVERVIEW.md` / `05_INTEGRATIONS.md` (May 2026) where they conflict.
+Compiled 20 August 2026 from the live codebase; **last updated 4 September 2026**. Supersedes `03_SYSTEM_OVERVIEW.md` / `05_INTEGRATIONS.md` (May 2026) where they conflict.
 
 ---
 
@@ -249,6 +249,7 @@ The worker shares the `mechanicdesk-session` concurrency group and re-logs in on
   - **MCP cannot delete or deactivate Monday automations** (`USER_UNAUTHORIZED`, even for the account owner — the connector lacks the scope). The workaround is always: create a corrected version, add the bad one to a manual delete list. `create_automation` is also **nondeterministic** — always re-dump with `list_automations` and check the block config; phrase status triggers as "changes to X (from any previous status)" or it will set the from-status to the same label and the workflow can never fire.
   - **End of cadence (2026-08-20).** After the third follow-up the item deliberately does NOT move — it stays in Quote - Follow Up awaiting a Won/Lost decision. Two changes made that legible: a **"Decision Required"** status label the stage-3 handler now sets (workflows 1940257758 Ka / 1940257760 Ty / 1940257765 Ja / 1940257773 Do / 1940257784 Gr), so the row visibly differs from a transient "Follow Up Done"; and the **Owner** column is now stamped by Pipeline A (`REP_BOARDS[].mondayUserId`). **⚠ Owner was blank on every item on every board**, so the existing "notify the Owner" automation had been reporting success while notifying nobody — ten of Kaleb's quotes sat at the decision point from mid-June. Historical items were backfilled 2026-08-20 out of hours: **704 active quotes** across the five boards (Tyronne 84, James 188, Kaleb 294, Dom 169, Graham ~111) — scoped to Quote - Pending, Follow Up, Follow up RLMNA and On Hold only. Won, Lost, Not issued and the pre-quote Lead groups were deliberately left blank. Verified: zero blank Owners remain in those 20 groups.
   - **⚠ Never bulk-write to these boards while a rep is working in one.** The item state can change between your read and your write — this bit on 2026-08-20: ten items were read at stage 3, Kaleb reset them to stage 1 and re-ran them seconds later, and the write landed on the new state and had to be undone.
+- **Column IDs are per board, and a wrong one fails the WHOLE write.** Most columns are template-shared (`COLUMNS` in `lib/monday-followup.ts`), but **Contact Attempts differs on all five boards** and is resolved at runtime by `getContactAttemptsColumnId()` — never hardcode it. Monday answers a bad column ID with `InvalidColumnIdException` on `change_multiple_column_values`, which rejects *every* field in that mutation, not just the bad one — so a stale counter ID silently costs you the whole item. That is exactly what happened until 2026-09-04: James and Tyronne carried a copied-from-Kaleb placeholder, and **123 of James's 188 quotes in the preceding 30 days got their AC deal but never got a board item**, so they never entered the follow-up cadence. Not backfilled. A lookup miss now skips the counter and still writes the item. Because Pipeline A searches all five boards, the resolution must be against the **matched** board, not the quoting rep's — that is why the same bad ID also took down a handful of Graham's, Dom's and Kaleb's quotes.
 - **ActiveCampaign** (`lib/activecampaign.ts`): env `ACTIVECAMPAIGN_API_URL`, `ACTIVECAMPAIGN_API_KEY`, owner map etc. **Landmine documented in code: `filters[phone]` is a partial match and matches everything on an empty query** — every match must be re-verified by exact digit comparison (this mis-attributed a contact to 26 customers in production once).
 
 ### 5.9 MachShip (B2B freight)
@@ -1194,7 +1195,7 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 
 ---
 
-## 9. Known risks, debt & outstanding items (as of 2026-09-02)
+## 9. Known risks, debt & outstanding items (as of 2026-09-04)
 
 **Security**
 - Supabase `service_role` key was exposed in an April 2026 session and **has never been rotated**. Rotation must update: Vercel env, the FreePBX host workers, the workshop print agent `.env`, and GitHub Actions secrets — all hold it.
@@ -1207,6 +1208,7 @@ Per SKU: `historyUnits` / `historyRevenueEx`, `avgUnitsPerMonth` / `avgRevenuePe
 - `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
 - Migrations `148` and `153` are duplicated numbers; latest applied is `219_ap_rerouted_outcome`, so next is `220`.
 - **Other selects still relying on a big `.limit()`** rather than `selectAllRows()`. Paged 2026-08-24: the weekly quotes/jobs map report and the weekly calls report (both were already truncating), and the overnight-leads store (`lib/sales-recap-leads-store.ts` — its read is unbounded, so a 3-month custom range in Reports → Sales Report was heading for ~2.6k rows). Remaining sites are safe only while their tables stay small — measured 2026-08-24, all well under the cap: `lib/crm-campaigns.ts` and `lib/reports/fetchers.ts` (×2) plus `pages/api/crm/campaigns/index.ts` (CRM tables still empty), `pages/api/imports/[id]/{run,finalize}.ts` (max 78 chunks per import), `pages/api/notifications/summary.ts`, `pages/api/b2b/admin/stock-transfer.ts` (109 rows), `pages/api/workshop/purchase-orders/generate-low-stock.ts` (0 rows). Re-check before any of them grows.
+- **`COLUMNS.DISTRIBUTOR` and `COLUMNS.QUALIFYING_STAGE` in `lib/monday-followup.ts` carry Kaleb's IDs but sit in a map labelled shared** — both genuinely differ on all five boards, exactly like Contact Attempts did. They are harmless *only* because nothing currently reads or writes them. The first code that does will fail the whole mutation the way the counter did (§5.8). Resolve them per board or delete them; don't leave them looking usable.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.
 - The Library reader can't display images (no rewrite of relative `img/` paths, no auth-gated image route), so `docs/library-access-sop.md` sits in `docs/` as a PDF-only document rather than on the Library shelf — see §7.16.

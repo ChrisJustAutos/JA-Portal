@@ -138,8 +138,7 @@ The old "PurchaseBillItems is read-only" wall is no longer relevant — that con
 - Quote-Pending board receives new items from Pipeline A via API
 
 ### Known issues
-- `monday-followup` integration has hardcoded column ID `numeric_mm12czp1` — should look up per board
-- James and Tyronne `contactAttempts` column IDs are placeholders
+- ~~`monday-followup` integration has hardcoded column ID `numeric_mm12czp1`~~ / ~~James and Tyronne `contactAttempts` column IDs are placeholders~~ — **FIXED 2026-09-04.** Both were the same defect. Contact Attempts is now resolved per board at runtime by `getContactAttemptsColumnId()` in every caller, Pipeline A included. Real IDs, for reference: Dom `numeric_mm12a3kp`, Kaleb `numeric_mm12czp1`, Graham `numeric_mm0ymvvp`, James `numeric_mm12hfbc`, Tyronne `numeric_mm12e9mz`.
 
 ---
 

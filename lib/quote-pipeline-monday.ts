@@ -37,6 +37,7 @@ import {
   COLUMNS as SHARED_COLS,
   STATUS_INDICES,
   GROUPS,
+  getContactAttemptsColumnId,
   type FoundItem,
 } from './monday-followup'
 
@@ -46,12 +47,22 @@ import {
 // board, so each board has unique column IDs. Quote Value, Phone, Email,
 // Postcode, Status, Date are all template-shared and live in SHARED_COLS.
 //
-// Source: column IDs returned by Monday's create_column API on 29 Apr 2026.
+// Source: column IDs returned by Monday's create_column API on 29 Apr 2026,
+// re-verified against live board metadata on 2026-09-04.
 // If the columns are recreated, update these values.
+//
+// NOT here: Contact Attempts. Its ID differs on every board and two of them
+// were wrong — James and Tyronne carried a copied-from-Kaleb placeholder,
+// which made Monday reject the WHOLE change_multiple_column_values mutation
+// with InvalidColumnIdException. That silently cost James 123 of 188 quotes
+// in the 30 days to 2026-09-04: the AC deal was written, the board item was
+// not, so the item never entered the follow-up cadence. It is now resolved
+// per board at runtime via getContactAttemptsColumnId(), the same lookup
+// monday-followup.ts and monday-update.ts already use. A lookup miss skips
+// the counter; it must never take the item write down with it.
 interface BoardSpecificColumns {
   quoteNo: string
   quotePdf: string
-  contactAttempts: string  // Also varies per board (post-fork in some cases)
 }
 
 const BOARD_COLUMNS: Record<string, BoardSpecificColumns> = {
@@ -59,31 +70,26 @@ const BOARD_COLUMNS: Record<string, BoardSpecificColumns> = {
   '5025942308': {
     quoteNo: 'text_mm2w2nj0',
     quotePdf: 'file_mm2wen64',
-    contactAttempts: 'numeric_mm12a3kp',
   },
   // Kaleb (5025942316)
   '5025942316': {
     quoteNo: 'text_mm2wzhgv',
     quotePdf: 'file_mm2wktgq',
-    contactAttempts: 'numeric_mm12czp1',
   },
   // Graham (5026840169)
   '5026840169': {
     quoteNo: 'text_mm2wa265',
     quotePdf: 'file_mm2wr8zy',
-    contactAttempts: 'numeric_mm0ymvvp',
   },
   // James (5025942292)
   '5025942292': {
     quoteNo: 'text_mm2w15m5',
     quotePdf: 'file_mm2wxx1k',
-    contactAttempts: 'numeric_mm12czp1',  // TODO: confirm — copied from template default; verify if James has unique ID
   },
   // Tyronne (5025942288)
   '5025942288': {
     quoteNo: 'text_mm2wbv9x',
     quotePdf: 'file_mm2wr4pm',
-    contactAttempts: 'numeric_mm12czp1',  // TODO: confirm — copied from template default; verify if Tyronne has unique ID
   },
 }
 
@@ -229,16 +235,21 @@ export async function createPendingItem(input: CreatePendingItemInput): Promise<
     .toISOString()
     .substring(0, 10)
 
+  // Resolved per board at runtime. Null = no Contact Attempts column found
+  // (or the lookup failed) — create the item without the counter rather than
+  // letting a counter problem reject the whole mutation.
+  const attemptsCol = await getContactAttemptsColumnId(board.boardId)
+
   const columnValues: Record<string, any> = {
     [SHARED_COLS.STATUS]: { index: STATUS_INDICES.QUOTE_SENT },
     [SHARED_COLS.DATE]: { date: dateIso },
     [SHARED_COLS.QUOTE_VALUE]: input.quoteValueIncGst,
     [boardCols.quoteNo]: input.quoteNumber,
-    [boardCols.contactAttempts]: 1,
     // Owner = the rep whose board this is. Without it the end-of-cadence
     // notification has no recipient and silently reaches nobody.
     [SHARED_COLS.OWNER]: { personsAndTeams: [{ id: board.mondayUserId, kind: 'person' }] },
   }
+  if (attemptsCol) columnValues[attemptsCol] = 1
   if (input.phone) columnValues[SHARED_COLS.PHONE] = input.phone
   if (input.email) columnValues[SHARED_COLS.EMAIL] = input.email
   if (input.postcode) columnValues[SHARED_COLS.POSTCODE] = input.postcode
@@ -299,12 +310,22 @@ export interface UpdateMatchedItemResult {
 export async function updateMatchedItem(input: UpdateMatchedItemInput): Promise<UpdateMatchedItemResult> {
   const boardCols = getBoardColumns(input.boardId)
 
-  // Read the current Quote Value, Quote No, and Contact Attempts so we can
-  // compute the new values intelligently.
+  // input.boardId is the board the item was MATCHED on, which is not
+  // necessarily the quoting rep's own board — cross-board search means a
+  // Graham quote can land on James's item. So the counter column has to be
+  // resolved against this board, not the rep's. Getting that wrong is
+  // exactly how a bad ID on one board took down other reps' quotes too.
+  const attemptsCol = await getContactAttemptsColumnId(input.boardId)
+
+  // Read the current Quote Value, Quote No, and (if it exists) Contact
+  // Attempts so we can compute the new values intelligently.
+  const readIds = [SHARED_COLS.QUOTE_VALUE, boardCols.quoteNo]
+  if (attemptsCol) readIds.push(attemptsCol)
+
   const cur = await mondayQuery<{ items: Array<{ column_values: any[] }> }>(
     `query GetCurrent($itemId: [ID!]) {
       items(ids: $itemId) {
-        column_values(ids: ["${SHARED_COLS.QUOTE_VALUE}", "${boardCols.quoteNo}", "${boardCols.contactAttempts}"]) {
+        column_values(ids: [${readIds.map(id => escGqlString(id)).join(', ')}]) {
           id text value
         }
       }
@@ -316,7 +337,9 @@ export async function updateMatchedItem(input: UpdateMatchedItemInput): Promise<
   const prevValueText = cvs.find((c: any) => c.id === SHARED_COLS.QUOTE_VALUE)?.text || ''
   const prevValue = parseFloat(prevValueText) || 0
   const prevQuoteNo = cvs.find((c: any) => c.id === boardCols.quoteNo)?.text || ''
-  const prevAttemptsText = cvs.find((c: any) => c.id === boardCols.contactAttempts)?.text || ''
+  const prevAttemptsText = attemptsCol
+    ? (cvs.find((c: any) => c.id === attemptsCol)?.text || '')
+    : ''
   const prevAttempts = parseInt(prevAttemptsText, 10) || 0
 
   const newValue = Math.max(prevValue, input.newQuoteValueIncGst)
@@ -330,9 +353,9 @@ export async function updateMatchedItem(input: UpdateMatchedItemInput): Promise<
   const columnValues: Record<string, any> = {
     [SHARED_COLS.QUOTE_VALUE]: newValue,
     [boardCols.quoteNo]: newQuoteNo,
-    [boardCols.contactAttempts]: prevAttempts + 1,
     [SHARED_COLS.DATE]: { date: todayIso },
   }
+  if (attemptsCol) columnValues[attemptsCol] = prevAttempts + 1
 
   await mondayQuery(
     `mutation UpdateMatched($itemId: ID!, $boardId: ID!, $columnValues: JSON!) {

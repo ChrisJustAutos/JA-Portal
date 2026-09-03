@@ -101,8 +101,7 @@ Existing `ConnectionsTab.tsx` is a good foundation. Extend into a full deploy-ve
 - **Old Zapier Zap not disabled.** Cosmetic. Disable when convenient.
 - **AC orphan-contact bug on stage 38 transitions.** Cosmetic.
 - **Backfill old tips not run.** Historical quotes from before Pipeline A went live don't have AC/Monday data populated.
-- **James and Tyronne `contactAttempts` column IDs are placeholders.**
-- **`monday-followup` integration has hardcoded column ID `numeric_mm12czp1`.**
+- ~~**James and Tyronne `contactAttempts` column IDs are placeholders.**~~ / ~~**`monday-followup` integration has hardcoded column ID `numeric_mm12czp1`.**~~ — **FIXED 2026-09-04.** These were never cosmetic. The placeholder ID made Monday reject the entire column-values mutation, so the item write failed outright: in the 30 days to 2026-09-04, **123 of James's 188 quotes reached ActiveCampaign but never reached his board**, and so never entered the follow-up cadence. Pipeline A now resolves the column per board at runtime like its siblings already did. The lost items were **not** backfilled (decision 2026-09-04) — they remain AC-only.
 
 ### Stocktake
 - **Already-pushed items with QTY=0 can't be retroactively fixed.** Cosmetic in MD UI; counts are what matters for finalisation.
