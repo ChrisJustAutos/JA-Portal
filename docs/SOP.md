@@ -233,7 +233,7 @@ The Orders list used to carry a single **Status** pill. It has been split into *
 
 ### 4.1bc Has the money actually cleared?
 
-**Admin > B2B > Orders > open the order > Summary > "Check if payment cleared".**
+**Admin > B2B > Orders > open the order > the amber banner at the top > "Check if payment cleared".**
 
 Card and PayTo payments settle at checkout. **Bank Direct Debit (BECS) does not** - checkout only accepts the mandate, and the funds land 2-4 business days later. The order shows **Paid - bank, unsettled** until Stripe tells us the money arrived.
 
@@ -528,28 +528,32 @@ Before this (31 August 2026) two separate numbers ran and drifted apart — orde
 
 **⚠ The MYOB invoice number fields on Admin → B2B → Settings no longer set new order numbers.** They govern only the fallback used for pre-change orders. The section is labelled "fallback only" for that reason — editing it will look like it changes numbering and will not.
 
-**Admin → B2B → Orders → open the order.** The **Summary** card leads with the **MYOB invoice** number — `JAWSB2B0100` — above the customer PO, with the date it was invoiced beneath it. That is the number MYOB, accounts and the distributor all quote, so when someone rings about "Cutlers JAWSB2B0100" you can match it without hunting.
+**Admin → B2B → Orders → open the order.** The **order number in the page heading — `JAWSB2B0100` — IS the MYOB invoice number.** That is the number MYOB, accounts and the distributor all quote, so when someone rings about "Cutlers JAWSB2B0100" you can match it without hunting. The date it was invoiced is on the fact line underneath.
 
 On an order where the distributor did not enter their own PO, MYOB's "Purchase Order No." box now repeats the document number. It has always fallen back to the portal order number — which is now the same thing. Harmless.
 
-Until the invoice is written it reads **"Not written to MYOB yet"** in amber. **If a write fails, the reason appears in red across the foot of the Summary card**, with the attempt count and a *Retry MYOB write* button for admins. There is no separate MYOB card any more — the company file is always JAWS, and the order number, the invoiced date and every write attempt are in the Summary and the Timeline already.
+Until the invoice is written the strip reads **"MYOB invoice — Not written yet"** in amber. **If a write fails, a red banner appears across the top of the page** with the reason, the attempt count and a *Retry MYOB write* button for admins. There is no separate MYOB card any more — the company file is always JAWS, and the order number, the invoiced date and every write attempt are on the page or in the Timeline already.
 
 The **Timeline** is a pop-up, opened from **Timeline (N)** beside the distributor name at the top of the page. It lists **every** event, newest last — a busy order (drop-ship POs, freight polls, a refund) runs to dozens, and a dialog has the room for them where the page did not.
 
-**The order page was condensed on 3 September 2026**, to fit on one screen without scrolling:
+**The order page was rebuilt on 3 September 2026** around two ideas: **one fact, one place**, and **two boxes instead of five**.
 
-- **Summary runs across the top in three groups** — the invoice, the money, the dates — and the totals moved into the bottom of the Items card, under the money column they add up. The groups stay in the same three places on every order, so *Placed* is where you last saw it even when the order has no *Paid* or *Shipped* row yet.
-- **Ship to is inside the Shipping panel**, under the actions and above the carrier — where the order is going and how it is getting there are one panel now, not two half-empty cards. (On a view-only login, which never gets the Shipping panel, the address stays a card of its own on the left.)
-- **Items has the full width of the page**, which is what Summary and Ship to were taking half of.
-- **The Stripe and MYOB cards are gone.** Both repeated what the Summary and the Timeline already say. What they uniquely held was kept: **Open in Stripe →** is now a link under the Payment row, and a failed MYOB write shows its reason under the MYOB invoice row.
-- **Everything you can do to an order is in the Shipping panel**, in one order: where it is up to, then **one blue button for the thing to do next**, then *More actions…*, then the standing tools in an even two-column grid — Refresh, Manual book, Print label, Print pick list.
+- **There is no Summary card.** The handful of facts that are not stated anywhere else — *Placed*, *Paid*, *Invoiced*, *PO* — are now a single line under the order number, above a rule. Four facts never filled a card, and every width we tried either left an empty half beside it or stranded the labels a hand's width from their figures.
+- **The MYOB invoice number only appears when it is not simply the order number.** Since the numbering change they are the same string on every current order, so printing it twice said nothing. On a **legacy `B2B-2026-000NN` order**, where the two genuinely differ, the MYOB number is on the strip as before — and it is always there when it has not been written yet.
+- **Placed, Paid and Invoiced usually show a time, not a full date.** They are nearly always the same day, so only the first prints the date; the others print the clock. **If the day actually differs, the full date comes back** — so a payment that landed the next morning is never disguised as the same morning.
+- **The exceptions are banners at the top of the page**, not rows inside a card: a failed MYOB write, a payment that needs chasing, and a **missing delivery address** (which used to be grey text inside Ship to, where you only saw it if you were already looking). They take up no room at all until something is actually wrong.
+- **Items has the full width of the page**, with the totals under the money column they add up.
+- **The Shipping panel is the only other box.** It runs in two halves: the half you **act** in — where the order is up to, **one blue button** for the thing to do next, *More actions…*, then the standing tools — above the half you **read**: Ship to, carrier, tracking, cost, ETA, and the folded detail at the foot.
+- **Ship to lives in the Shipping panel** and **drops the name line when it is just the distributor again** — the distributor is already at the top of the page. On a view-only login, which never gets the Shipping panel at all, the address stays a card of its own on the left.
+- **The standing tools are a light row of links on a desktop** — *Refresh*, *Edit shipping*, *Print label*, *Print pick list* — rather than four boxed buttons competing with the blue one. **On a phone they stay full-size buttons** you can actually hit.
 - **There is only ever one blue button.** On an order with freight booked it is **Ship now**, and *Mark as shipped* moves into *More actions…* — the two read as the same instruction, but only Ship now manifests the consignment, raises the tax invoice and emails the distributor. Use *Mark as shipped* only for freight booked outside the portal. Where there is no consignment yet the button is **Book Shipment**, or **Approve order** on a large order waiting for release, and otherwise it is the status step itself.
 - The undo, **Refund…**, **Cancel order…** and **Delete order** are under *More actions…*. Each still asks for confirmation, so choosing one from the list does not do anything on its own.
-- **The Timeline is a pop-up now**, opened from **Timeline (N)** beside the distributor name at the top of the page. It is the full history, every event, rather than the most recent three — it just is not taking up the page when you are not reading it.
-- **The tracking number is the link** — click `EYA000002111` to open the carrier's tracking page. There is no separate *Open tracking page →* row.
-- **Boxes and consignments** stays folded until you open it, the consignment number, freight status and last poll time sit behind **Consignment details** (the ETA stays out where you can see it), and **Method** only appears separately from **Carrier** when the two actually differ.
+- **The Timeline is a pop-up**, opened from **Timeline (N)** beside the distributor name. It is the full history, every event.
+- **The tracking number is the link** — click `EYA000002111` to open the carrier's tracking page.
+- **Boxes and consignments** and **Consignment details** are both folded, and both sit together at the foot of the Shipping panel. The ETA stays out where you can see it, and **Method** only appears separately from **Carrier** when the two actually differ.
+- **The freight line in the totals just says "Freight"** — the carrier and service are named in the Shipping panel a few centimetres to the right.
 
-Nothing was removed but duplication; every figure is still on the page.
+Nothing was removed but duplication; every figure is still on the page. **The one deliberate repeat is the order total** — the big figure in the header and *Total paid* at the foot of the items — because a column of figures has to add up to something you can see.
 
 ### 4.2b "Consignment Missing" on a shipped order
 
@@ -580,7 +584,7 @@ The portal now recovers from this by itself. When the id stops resolving it look
 | Consignment shows `consignment_missing` | It vanished at MachShip's end. Rebook from the order page. |
 | Booking blocked on an unsettled BECS payment | Deliberate — the money hasn't cleared. If you accept the risk, the Book button offers "Book anyway"; the decision is stamped on the order timeline. |
 | "Settled, but the MYOB payment failed" | The message now names the document it tried (type, number, status, customer, balance) - read it. `CustomerMismatch` on a document whose customer looks right usually means the sale order was already converted; the portal handles that itself now, so report it if you still see it. |
-| Bank payment cleared, but it isn't in MYOB | Open the order and press **Receipt payment in MYOB** (Summary, where "Check if payment cleared" normally sits). Safe to press twice. It should be rare — the six-hourly check applies these on its own and notifies you when it has. |
+| Bank payment cleared, but it isn't in MYOB | Open the order and press **Receipt payment in MYOB** in the amber banner at the top of the page (where "Check if payment cleared" normally sits). Safe to press twice. It should be rare — the six-hourly check applies these on its own and notifies you when it has. |
 | Rates look wrong | Admin → B2B → Settings → freight zones / carriers / packaging. Drop-ship rates have their own calibration panel. |
 
 ### 4.3aa Freight prices are live carrier rates only

@@ -1,10 +1,28 @@
 // pages/admin/b2b/orders/[id].tsx
 //
-// Staff order detail. Two columns:
-//   Left:  header info, lines, totals, Stripe, MYOB, refund history
-//   Right: status timeline, action buttons, internal notes (autosave on blur)
+// Staff order detail. ONE DOCUMENT AND ONE CONTROL PANEL - not a dashboard of
+// cards. Rebuilt 2026-09-03 after four attempts at rearranging the cards each
+// fixed one hole and opened another (Chris: "layout looks completely off...
+// clean simple elegant practical, no double up of information").
 //
-// Modals: Mark as Shipped (carrier + tracking), Refund, Cancel.
+//   Header    identity + the total, then an inline strip of the few facts that
+//             are not stated anywhere else on the page. NOT a Summary card:
+//             four facts do not fill one, and every width we gave it either
+//             left an empty half or stranded the labels from their figures.
+//   Banners   the exceptions - MYOB write failed, payment needs chasing, no
+//             delivery address. Zero height until they fire.
+//   Left      Items, full width, with the totals ledger under the money column.
+//   Right     Shipping: the half you ACT in (state, one primary button, More
+//             actions, the standing tools) above the half you READ (Ship to,
+//             carrier, tracking, cost, ETA, then the folded detail).
+//
+// Every fact appears ONCE. The only deliberate repeat is the order total -
+// headline in the header, and the last row of a ledger that has to add up.
+// The rail does not render at all for a role without edit:b2b_orders, so
+// anything moved into it must keep a fallback on the left (see ShipToBlock).
+//
+// Modals: Mark as Shipped (carrier + tracking), Pickup, Refund, Cancel,
+// Timeline (the full history, opened from the header).
 
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import Head from 'next/head'
@@ -513,6 +531,61 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 </span>
               </div>
             )}
+
+            {/* THE SUMMARY CARD IS GONE; ITS FACTS ARE THIS LINE (Chris
+                2026-09-03: "layout looks completely off... clean simple
+                elegant practical, no double up of information").
+
+                Four facts do not justify a card. As a half-width card it left
+                the empty half beside it; as a full-width card its labels ended
+                up 400px from their figures with ragged rules between three
+                unequal groups. An inline strip has NO columns to misalign and
+                NO width to fill - it is as long as its content and it wraps -
+                so neither failure is reachable from here. Conditional facts
+                just drop out of the flow.
+
+                What is NOT here is as deliberate as what is. The MYOB invoice
+                number is the order number since migration 214, so it only
+                appears when it genuinely differs (a legacy B2B-2026-000NN
+                order) or has not been written. The distributor is in the row
+                above; the shipped date belongs to the Shipping panel, which
+                owns every freight fact; Payment and Paid were two rows saying
+                the money arrived, and are now one. */}
+            {data && (
+              <div style={{
+                display:'flex', flexWrap:'wrap', alignItems:'baseline',
+                gap: isMobile ? '7px 18px' : '7px 26px',
+                marginTop:12, paddingTop:12, borderTop:`1px solid ${T.border}`,
+              }}>
+                <Meta label="Placed" value={fullDate(data.placed_at)}/>
+                {data.paid_at && (
+                  <Meta label="Paid" value={timeAgainst(data.paid_at, data.placed_at)} color={A.good} after={
+                    <span style={{color:T.text3}}>
+                      {' · '}{paymentLabel(data)}
+                      {data.stripe.payment_intent_id && (
+                        <a href={`https://dashboard.stripe.com/payments/${data.stripe.payment_intent_id}`}
+                          target="_blank" rel="noopener noreferrer"
+                          title={`Payment intent ${data.stripe.payment_intent_id}`}
+                          style={{color:A.accent,textDecoration:'none',marginLeft:6}}>
+                          Stripe →
+                        </a>
+                      )}
+                    </span>
+                  }/>
+                )}
+                {!data.paid_at && <Meta label="Payment" value={paymentLabel(data)} color={A.warn}/>}
+                {/* Only when it is NOT simply the order number again. */}
+                {data.myob.order_number && data.myob.order_number !== data.order_number && (
+                  <Meta label="MYOB invoice" value={data.myob.order_number} mono/>
+                )}
+                {!data.myob.order_number && <Meta label="MYOB invoice" value="Not written yet" color={A.warn}/>}
+                {data.myob.order_number && data.myob.written_at && (
+                  <Meta label="Invoiced" value={timeAgainst(data.myob.written_at, data.placed_at)}/>
+                )}
+                {data.customer_po && <Meta label="PO" value={data.customer_po} mono/>}
+                {data.cancelled_at && <Meta label="Cancelled" value={fullDate(data.cancelled_at)} color={A.bad}/>}
+              </div>
+            )}
           </header>
 
           {flash && (
@@ -531,6 +604,90 @@ export default function AdminOrderDetailPage({ user }: Props) {
             </div>
           )}
 
+          {/* EXCEPTIONS ARE BANNERS, NOT PERMANENT ROWS (Chris 2026-09-03:
+              "clean simple elegant practical"). A failed MYOB write, a payment
+              that needs chasing and a missing delivery address each used to be
+              a row or a button tucked inside a card, costing layout on every
+              order while mattering on a handful. As banners they cost nothing
+              at all until they fire, and are then impossible to miss - which
+              is both the tidier page AND the more useful one. */}
+
+          {/* The company file, order number, written date and attempt count
+              are all in the header strip or the Timeline; the REASON a write
+              failed was the one thing the old MYOB card uniquely held.
+              retry-myob is admin:b2b, so a manager sees the error but not the
+              button. */}
+          {data?.myob.write_error && (
+            <div style={{marginBottom:14}}>
+              <Banner tone="error">
+                <strong style={{fontWeight:650}}>MYOB write failed.</strong>{' '}
+                {data.myob.write_error}
+                {!!data.myob.write_attempts && (
+                  <span style={{color:T.text3}}> ({data.myob.write_attempts} attempt{data.myob.write_attempts === 1 ? '' : 's'})</span>
+                )}
+                {canRefund && (
+                  <div style={{marginTop:9}}>
+                    <button
+                      disabled={actionBusy}
+                      onClick={async () => {
+                        setActionBusy(true); setActionError(null)
+                        try {
+                          const r = await fetch(`/api/b2b/admin/orders/${orderId}/retry-myob`, { method: 'POST', credentials: 'same-origin' })
+                          const j = await r.json()
+                          if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+                          flashMsg(j.myob_write_error ? 'Retry ran — MYOB failed again, see error' : 'MYOB write retried successfully')
+                          await load()
+                        } catch (e: any) { setActionError(e?.message || String(e)) }
+                        finally { setActionBusy(false) }
+                      }}
+                      className="al-press al-focus"
+                      style={{padding:'6px 13px',borderRadius:RADIUS.pill,border:`1px solid ${alpha(A.bad,'55')}`,background:alpha(A.bad,'14'),color:A.bad,fontSize:12.5,fontWeight:600,fontFamily:'inherit',cursor: actionBusy ? 'wait' : 'pointer',minHeight:32}}>
+                      {actionBusy ? 'Retrying…' : 'Retry MYOB write'}
+                    </button>
+                  </div>
+                )}
+              </Banner>
+            </div>
+          )}
+
+          {/* Offered while there is something to find out (a paid order whose
+              funds are not confirmed cleared) AND when the money HAS cleared
+              but never reached MYOB - the second case is the repair for a
+              payment the webhook skipped, and it used to have no button at all
+              (JAWSB2B0059). payment_at without a uid means someone receipted it
+              by hand in MYOB - done, not outstanding. */}
+          {data?.paid_at && data.status !== 'cancelled' && data.status !== 'refunded'
+            && (!data.payment_settled_at || (!data.myob.payment_uid && !data.myob.payment_at)) && (
+            <div style={{marginBottom:14}}>
+              <Banner tone="warn">
+                {data.payment_settled_at
+                  ? 'The funds have cleared but no customer payment exists in MYOB.'
+                  : 'This order is paid but Stripe has not confirmed the funds cleared.'}
+                <div style={{marginTop:9}}>
+                  <button onClick={checkPayment} disabled={payCheckBusy}
+                    className="al-press al-focus"
+                    title={data.payment_settled_at ? 'Apply the customer payment in MYOB now' : 'Ask Stripe whether the funds have actually cleared, rather than waiting for the webhook'}
+                    style={{padding:'6px 13px',minHeight:32,borderRadius:RADIUS.pill,border:`1px solid ${alpha(A.warn,'66')}`,background:alpha(A.warn,'14'),color:A.warn,fontSize:12.5,fontWeight:600,fontFamily:'inherit',cursor: payCheckBusy ? 'wait' : 'pointer'}}>
+                    {payCheckBusy
+                      ? (data.payment_settled_at ? 'Receipting in MYOB…' : 'Checking Stripe…')
+                      : (data.payment_settled_at ? 'Receipt payment in MYOB' : 'Check if payment cleared')}
+                  </button>
+                </div>
+              </Banner>
+            </div>
+          )}
+
+          {/* Buried inside the Ship to block before, where you only saw it if
+              you were already looking at the address. It stops freight being
+              booked, so it belongs with the other blockers. */}
+          {data && !data.ship_to && (
+            <div style={{marginBottom:14}}>
+              <Banner tone="warn">
+                No delivery address — add a ship address to the distributor before booking freight.
+              </Banner>
+            </div>
+          )}
+
           {loading && !data && (
             <div style={{padding:40,textAlign:'center',color:T.text3,fontSize:13}}>Loading…</div>
           )}
@@ -545,140 +702,6 @@ export default function AdminOrderDetailPage({ user }: Props) {
               {/* ── LEFT COLUMN ── */}
               <div style={{display:'flex',flexDirection:'column',gap:14,minWidth:0}}>
 
-                {/* SUMMARY IS A FULL-WIDTH STRIP NOW (Chris 2026-09-03: "expand
-                    the Items section"). It used to sit beside Ship to in a
-                    1fr 1fr row; Ship to has moved into the Shipping panel, and
-                    leaving Summary at half width would have moved the empty
-                    half rather than removed it. So the facts run across the
-                    page in three groups - the invoice, the money, the dates -
-                    each a short stack whose labels stay beside their figures,
-                    and Items below gets the whole column.
-
-                    Three FIXED groups, not an auto-fitting flow: Invoiced,
-                    Paid, Shipped and Cancelled come and go with the order, and
-                    a grid that reflowed on the count would put the same row in
-                    a different place on every order you opened. */}
-                <Card title="Summary">
-                <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)',gap: isMobile ? 0 : '0 30px',alignItems:'start',minWidth:0}}>
-
-                {/* The invoice it is known by */}
-                <div style={{minWidth:0}}>
-                  {/* The MYOB invoice number is what accounts, the distributor
-                      and MYOB itself all quote — "Cutlers JAWSB2B0055". It used
-                      to live only in the MYOB diagnostics card down the right
-                      rail, so the order you were looking at and the invoice
-                      someone was asking about had nothing visibly in common.
-                      It leads the summary now, above the PO. */}
-                  <KV label="MYOB invoice"
-                      value={data.myob.order_number || 'Not written to MYOB yet'}
-                      mono={!!data.myob.order_number}
-                      valueColor={data.myob.order_number ? undefined : A.warn}/>
-                  {data.myob.order_number && data.myob.written_at && (
-                    <KV label="Invoiced" value={fullDate(data.myob.written_at)} mono small/>
-                  )}
-                  <KV label="Customer PO"    value={data.customer_po || '—'} mono/>
-                </div>
-
-                {/* What was paid, and how */}
-                <div style={{minWidth:0}}>
-                  {(() => {
-                    const m = data.payment_method || 'card'
-                    const label = m === 'becs' ? 'Bank Direct Debit' : m === 'payto' ? 'PayTo' : 'Card'
-                    const settled = !!data.payment_settled_at
-                    const state = settled ? 'Settled' : (m === 'becs' ? 'Awaiting settlement' : m === 'payto' ? 'Awaiting confirmation' : 'Unsettled')
-                    return <KV label="Payment" value={`${label} · ${state}`} valueColor={settled ? A.good : (m === 'card' ? undefined : A.warn)}/>
-                  })()}
-                  {/* All the old Stripe card was ever used for. The payment
-                      intent and session id are on the far side of this link. */}
-                  {data.stripe.payment_intent_id && (
-                    <div style={{display:'flex', justifyContent:'flex-end'}}>
-                      <a href={`https://dashboard.stripe.com/payments/${data.stripe.payment_intent_id}`}
-                        target="_blank" rel="noopener noreferrer"
-                        title={`Payment intent ${data.stripe.payment_intent_id}`}
-                        style={{fontSize:12,color:A.accent,textDecoration:'none'}}>
-                        Open in Stripe →
-                      </a>
-                    </div>
-                  )}
-                  {/* Offered while there is something to find out (a paid order
-                      whose funds aren't confirmed cleared) AND when the money
-                      HAS cleared but never reached MYOB — the second case is
-                      the repair for a payment the webhook skipped, and it used
-                      to have no button at all (JAWSB2B0059). payment_at without
-                      a uid means someone receipted it by hand in MYOB — done,
-                      not outstanding. */}
-                  {data.paid_at && data.status !== 'cancelled' && data.status !== 'refunded'
-                    && (!data.payment_settled_at || (!data.myob.payment_uid && !data.myob.payment_at)) && (
-                    <div style={{display:'flex', justifyContent:'flex-end', padding:'6px 0 2px'}}>
-                      <button onClick={checkPayment} disabled={payCheckBusy}
-                        className="al-press al-focus"
-                        title={data.payment_settled_at ? 'The funds have cleared but no customer payment exists in MYOB — apply it now' : 'Ask Stripe whether the funds have actually cleared, rather than waiting for the webhook'}
-                        style={{
-                          padding:'5px 12px', minHeight:30, borderRadius:RADIUS.pill,
-                          border:`1px solid ${alpha(A.warn, '66')}`, background:alpha(A.warn, '14'),
-                          color:A.warn, fontSize:12, fontWeight:600, fontFamily:'inherit',
-                          cursor: payCheckBusy ? 'wait' : 'pointer',
-                        }}>
-                        {payCheckBusy
-                          ? (data.payment_settled_at ? 'Receipting in MYOB…' : 'Checking Stripe…')
-                          : (data.payment_settled_at ? 'Receipt payment in MYOB' : 'Check if payment cleared')}
-                      </button>
-                    </div>
-                  )}
-                  {data.paid_at && <KV label="Paid" value={fullDate(data.paid_at)} mono valueColor={A.good}/>}
-                </div>
-
-                {/* When it moved */}
-                <div style={{minWidth:0}}>
-                  <KV label="Placed"         value={fullDate(data.placed_at)} mono/>
-                  {data.shipped_at && <KV label="Shipped" value={fullDate(data.shipped_at)} mono valueColor={A.accent}/>}
-                  {data.cancelled_at && <KV label="Cancelled" value={fullDate(data.cancelled_at)} mono valueColor={A.bad}/>}
-                </div>
-
-                </div>
-
-                  {/* The MYOB write ERROR is the one thing the old MYOB card
-                      carried that nothing else does — company file, order
-                      number, written date and attempt count were all either
-                      already in this card or in the Timeline, which is why that
-                      card is gone (Chris 2026-09-03). So the error stays, and
-                      only when there is one — across the foot of the summary
-                      rather than inside the invoice group, because it runs to
-                      a paragraph and a button and would have stretched one
-                      third of the strip to twice the height of the other two.
-                      retry-myob is admin:b2b, so a manager sees the error but
-                      not the button. */}
-                  {data.myob.write_error && (
-                    <div style={{margin:'6px 0 2px',padding:'8px 10px',background:alpha(A.bad,'14'),borderRadius:RADIUS.sm,color:A.bad,fontSize:12.5,lineHeight:1.5}}>
-                      {data.myob.write_error}
-                      {!!data.myob.write_attempts && (
-                        <span style={{color:T.text3}}> ({data.myob.write_attempts} attempt{data.myob.write_attempts === 1 ? '' : 's'})</span>
-                      )}
-                      {canRefund && (
-                        <div style={{marginTop:8}}>
-                          <button
-                            disabled={actionBusy}
-                            onClick={async () => {
-                              setActionBusy(true); setActionError(null)
-                              try {
-                                const r = await fetch(`/api/b2b/admin/orders/${orderId}/retry-myob`, { method: 'POST', credentials: 'same-origin' })
-                                const j = await r.json()
-                                if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-                                flashMsg(j.myob_write_error ? 'Retry ran — MYOB failed again, see error' : 'MYOB write retried successfully')
-                                await load()
-                              } catch (e: any) { setActionError(e?.message || String(e)) }
-                              finally { setActionBusy(false) }
-                            }}
-                            className="al-press al-focus"
-                            style={{padding:'6px 13px',borderRadius:RADIUS.pill,border:'1px solid transparent',background:alpha(A.bad,'14'),color:A.bad,fontSize:12.5,fontWeight:600,fontFamily:'inherit',cursor:'pointer',minHeight:32}}>
-                            {actionBusy ? 'Retrying…' : 'Retry MYOB write'}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </Card>
-
                 {/* SHIP TO HAS MOVED INTO THE SHIPPING PANEL (Chris 2026-09-03:
                     "lets merge the Shipping and ship to section"). Where an
                     order is going and how it is getting there were two cards
@@ -689,9 +712,9 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     sales or accounts on view:b2b never get the rail at all, so
                     folding the address into a panel they never see would have
                     taken the delivery address off their page entirely. */}
-                {!canEdit && (
+                {!canEdit && data.ship_to && (
                   <Card title="Ship to">
-                    <ShipToBlock shipTo={data.ship_to}/>
+                    <ShipToBlock shipTo={data.ship_to} hideName={data.distributor?.display_name}/>
                   </Card>
                 )}
 
@@ -771,9 +794,12 @@ export default function AdminOrderDetailPage({ user }: Props) {
                         return (
                           <>
                             <Row label="Items (inc GST)" value={`$${money(itemsInc)}`}/>
-                            {freightInc > 0 && (
-                              <Row label={`Freight${data.freight_service_label || data.freight_method_label ? ` — ${data.freight_service_label || data.freight_method_label}` : ' (inc GST)'}`} value={`$${money(freightInc)}`}/>
-                            )}
+                            {/* Just "Freight". The carrier and service are named
+                                in the Shipping panel 200px to the right, and
+                                printing "Freight — TNT Express — Road Express"
+                                here said it a second time (Chris 2026-09-03:
+                                "no double up of information"). */}
+                            {freightInc > 0 && <Row label="Freight (inc GST)" value={`$${money(freightInc)}`}/>}
                           </>
                         )
                       })()}
@@ -876,18 +902,55 @@ export default function AdminOrderDetailPage({ user }: Props) {
 
 // ─── Components ────────────────────────────────────────────────────────
 
+// ONE FACT ON THE HEADER STRIP: a quiet label, then the value, on one
+// baseline. Label-first (not the value-first Stat on the orders list) because
+// these are reference facts you scan for by name, not figures you compare.
+// Everything is inline, so a strip of them wraps like a sentence and never has
+// a column to fall out of alignment with.
+function Meta({ label, value, mono, color, after }: {
+  label: string; value: string; mono?: boolean; color?: string; after?: React.ReactNode
+}) {
+  return (
+    <span style={{display:'inline-flex',alignItems:'baseline',gap:6,fontSize:12.5,minWidth:0}}>
+      <span style={{color:T.text3,flexShrink:0}}>{label}</span>
+      <span style={{
+        color: color || T.text2,
+        fontFamily: mono ? 'monospace' : 'inherit',
+        fontVariantNumeric:'tabular-nums',
+        overflowWrap:'anywhere',
+      }}>{value}</span>
+      {after}
+    </span>
+  )
+}
+
+// "Card · Settled", "Bank Direct Debit · Awaiting settlement". Payment method
+// and settle state were two separate Summary rows both reporting on the money;
+// one phrase says it, and it hangs off the Paid date it describes.
+function paymentLabel(order: OrderDetail): string {
+  const m = order.payment_method || 'card'
+  const method = m === 'becs' ? 'Bank Direct Debit' : m === 'payto' ? 'PayTo' : 'Card'
+  if (order.payment_settled_at) return `${method} · settled`
+  return `${method} · ${m === 'becs' ? 'awaiting settlement' : m === 'payto' ? 'awaiting confirmation' : 'unsettled'}`
+}
+
 // The delivery address, in ONE definition. It reads inside the Shipping panel
 // for staff and as a card of its own for a read-only role - see the two call
 // sites for why there are two. Same markup either way, so the address can never
 // drift between them.
-function ShipToBlock({ shipTo }: { shipTo: OrderDetail['ship_to'] }) {
-  if (!shipTo) {
-    return <div style={{fontSize:12.5,color:A.warn}}>No delivery address — add a ship address to the distributor before booking freight.</div>
-  }
+// `hideName` drops the first line when it only repeats the distributor already
+// printed in the page header - which is the usual case, because most orders
+// ship to the distributor themselves.
+function ShipToBlock({ shipTo, hideName }: { shipTo: OrderDetail['ship_to']; hideName?: string | null }) {
+  // The missing-address case is a banner at the top of the page now: it blocks
+  // booking freight, so it belongs with the other blockers rather than as grey
+  // text you only see if you were already reading the address.
+  if (!shipTo) return null
+  const sameAsHeader = !!hideName && !!shipTo.name && shipTo.name.trim().toLowerCase() === hideName.trim().toLowerCase()
   const locality = [shipTo.suburb, shipTo.state, shipTo.postcode].filter(Boolean).join(' ')
   return (
     <div style={{fontSize:13,color:T.text2,lineHeight:1.55}}>
-      {shipTo.name && <div style={{color:T.text}}>{shipTo.name}</div>}
+      {shipTo.name && !sameAsHeader && <div style={{color:T.text}}>{shipTo.name}</div>}
       {shipTo.company && shipTo.company !== shipTo.name && <div>{shipTo.company}</div>}
       {shipTo.line1 && <div>{shipTo.line1}</div>}
       {shipTo.line2 && <div>{shipTo.line2}</div>}
@@ -1434,9 +1497,10 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
 
         const mb = (extra: React.CSSProperties = {}): React.CSSProperties => ({
           borderRadius: RADIUS.pill, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
-          border: `1px solid ${T.border2}`, whiteSpace: 'nowrap', width: '100%',
-          background: 'transparent', color: A.accent, textAlign: 'center',
-          ...(isMobile ? { padding: '11px 14px', fontSize: 13, minHeight: 44 } : { padding: '7px 10px', fontSize: 12.5, minHeight: 34 }),
+          whiteSpace: 'nowrap', color: A.accent,
+          ...(isMobile
+            ? { border: `1px solid ${T.border2}`, width: '100%', background: T.bg3, textAlign: 'center' as const, padding: '11px 14px', fontSize: 13, minHeight: 44 }
+            : { border: 'none', background: 'none', padding: 0, fontSize: 12.5, textAlign: 'left' as const }),
           ...extra,
         })
         return (
@@ -1463,41 +1527,58 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
 
           {actions && actions(!!primary)}
 
-          {/* The standing tools. Two even columns, so they read as a set
-              rather than a wrapped paragraph of buttons. */}
+          {/* THE STANDING TOOLS ARE A LIGHT ROW, NOT A GRID OF PILLS (Chris
+              2026-09-03, on making the Shipping panel end nearer the Items
+              card). Four bordered buttons in a 2x2 grid cost ~90px of rail and
+              competed with the one blue button above them for attention, which
+              is the opposite of what a secondary tool should do. On a desktop
+              they are now text buttons that wrap like a sentence: same four
+              things, a third of the height, and the primary action is once
+              again the only thing shouting.
+
+              MOBILE KEEPS THE GRID. A 13px text button is not a 44px touch
+              target, and the warehouse presses Print pick list on a phone. */}
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
-            gap: 8, marginTop: 10, marginBottom: 10,
+            display: isMobile ? 'grid' : 'flex',
+            flexWrap: isMobile ? undefined : 'wrap',
+            gridTemplateColumns: isMobile ? '1fr' : undefined,
+            alignItems: 'baseline',
+            gap: isMobile ? 8 : '4px 14px',
+            marginTop: 10, marginBottom: 10,
           }}>
             {hasConsignment && canShip && (
               <button onClick={refreshFromMachShip} disabled={refreshBusy}
                 className="al-press al-focus al-ghost"
-                style={mb({ background: T.bg3, cursor: refreshBusy ? 'wait' : 'pointer' })}>
+                style={mb({ cursor: refreshBusy ? 'wait' : 'pointer' })}>
                 {refreshBusy ? 'Refreshing…' : 'Refresh'}
               </button>
             )}
             {canShip && (
-              <button onClick={onEdit} className="al-press al-focus al-ghost" style={mb({ background: T.bg3 })}>
+              <button onClick={onEdit} className="al-press al-focus al-ghost" style={mb()}>
                 {isShipped ? 'Edit shipping' : 'Manual book'}
               </button>
             )}
             {order.label_pdf_path && canShip && (
-              <button onClick={openLabel} className="al-press al-focus al-ghost" style={mb({ background: T.bg3 })}>
+              <button onClick={openLabel} className="al-press al-focus al-ghost" style={mb()}>
                 Print label
               </button>
             )}
             <button onClick={printPickList} disabled={pickBusy}
               title="Prints the box-by-box pick list on the upstairs printer (auto-prints on payment; this is a reprint)"
               className="al-press al-focus al-ghost"
-              style={mb({ background: T.bg3, color: pickDone ? A.good : A.accent, cursor: pickBusy ? 'wait' : 'pointer' })}>
+              style={mb({ color: pickDone ? A.good : A.accent, cursor: pickBusy ? 'wait' : 'pointer' })}>
               {pickDone ? 'Pick list queued' : pickBusy ? 'Queuing…' : 'Print pick list'}
             </button>
             {unbilledDropship.length > 0 && canAdmin && (
               <button onClick={receiveDropship} disabled={receiveBusy}
                 title="Supplier confirmed the drop-ship order — converts the PO to a bill in MYOB (receives the stock into the supplier's DS location), then converts this order to a tax invoice and receipts the payment"
                 className="al-press al-focus"
-                style={mb({ gridColumn: isMobile ? undefined : '1 / -1', background: alpha(A.warn, '15'), border: `1px solid ${alpha(A.warn, '55')}`, color: A.warn, cursor: receiveBusy ? 'wait' : 'pointer' })}>
+                style={mb({
+                  width: '100%', flexBasis: '100%', textAlign: 'center',
+                  padding: isMobile ? '11px 14px' : '8px 12px', minHeight: isMobile ? 44 : 34,
+                  background: alpha(A.warn, '15'), border: `1px solid ${alpha(A.warn, '55')}`,
+                  color: A.warn, cursor: receiveBusy ? 'wait' : 'pointer',
+                })}>
                 {receiveBusy ? 'Billing PO…' : 'Supplier confirmed — bill PO + invoice'}
               </button>
             )}
@@ -1536,6 +1617,94 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
         </div>
       )}
 
+
+      {/* Collection time — optional. Blank = collect ASAP; a future time sets
+          MachShip's desired despatch so the carrier collects then. */}
+      {hasLiveQuote && !hasConsignment && (
+        <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
+          <span style={{fontSize:12, color:T.text3, whiteSpace:'nowrap'}}>Collection time</span>
+          <input
+            type="datetime-local"
+            value={dispatchAt}
+            min={localNow()}
+            onChange={e => setDispatchAt(e.target.value)}
+            className="al-focus"
+            style={{flex:1, minWidth: isMobile ? 0 : 160, background:T.bg3, border:'1px solid transparent', color:T.text, borderRadius:RADIUS.sm, padding: isMobile ? '9px 10px' : '6px 9px', fontSize: isMobile ? 16 : 12.5, outline:'none', fontFamily:'inherit', colorScheme:'dark'}}
+          />
+          {dispatchAt
+            ? <button onClick={() => setDispatchAt('')} className="al-press al-focus" style={{background:'none', border:'none', color:T.text3, fontSize:12, cursor:'pointer', fontFamily:'inherit'}}>clear (ASAP)</button>
+            : <span style={{fontSize:12, color:T.text3}}>blank = ASAP</span>}
+        </div>
+      )}
+
+      {actionError && (
+        <div style={{fontSize:12.5, color:A.bad, marginBottom:10, lineHeight:1.5}}>{actionError}</div>
+      )}
+
+      {/* WHERE IT IS GOING, then how (Chris 2026-09-03: "lets merge the
+          Shipping and ship to section"). The address heads the freight facts
+          rather than the panel: the actions come first in a panel you work in,
+          and the address is reference - you read it against the carrier and
+          the tracking number directly below it, which is the whole reason the
+          two cards became one. */}
+      {order.ship_to && (
+        <div style={{marginTop:12, paddingTop:12, borderTop:`1px solid ${T.border}`, marginBottom:10}}>
+          <div style={{fontSize:12, color:T.text3, marginBottom:5}}>Ship to</div>
+          <ShipToBlock shipTo={order.ship_to} hideName={order.distributor?.display_name}/>
+        </div>
+      )}
+
+      {/* Method and Carrier were printing the same string on every MachShip
+         order — "TNT Express — Road Express" twice, a row of the rail spent
+         saying nothing (Chris 2026-09-03). */}
+      {(() => {
+        const method  = order.freight_service_label || order.freight_method_label || ''
+        const carrier = order.carrier || ''
+        const same = !!method && !!carrier && method.trim().toLowerCase() === carrier.trim().toLowerCase()
+        return (
+          <>
+            <KV label={same ? 'Carrier' : 'Method'} value={method || carrier || '—'}/>
+            {!same && <KV label="Carrier" value={carrier || '—'}/>}
+          </>
+        )
+      })()}
+      {/* The tracking NUMBER is the link (Chris 2026-09-03: "clean it up
+          more"). "Open tracking page →" was a second row, laid out on its own
+          hand-rolled 90px grid that lined up with none of the KV rows around
+          it, to link the number printed directly above it. */}
+      {effectiveTrackingUrl && order.tracking_number ? (
+        <div style={{display:'flex',justifyContent:'space-between',gap:14,padding:'5px 0',fontSize:13,borderBottom:`1px solid ${T.border}`}}>
+          <span style={{color:T.text3,flexShrink:0}}>Tracking</span>
+          <a href={effectiveTrackingUrl} target="_blank" rel="noopener noreferrer"
+            title="Open the carrier's tracking page"
+            style={{color:A.accent, fontSize:12.5, fontFamily:'monospace', textAlign:'right', wordBreak:'break-all', textDecoration:'none'}}>
+            {order.tracking_number} →
+          </a>
+        </div>
+      ) : (
+        <KV label="Tracking" value={order.tracking_number || '—'} mono/>
+      )}
+      <KV label="Cost ex"  value={order.freight_cost_ex_gst != null ? `$${money(order.freight_cost_ex_gst)}` : '—'} mono/>
+      {order.dropship_freight_ex_gst != null && order.dropship_freight_ex_gst > 0 && (
+        <KV label="  incl. drop-ship" value={`$${money(order.dropship_freight_ex_gst)}`} mono/>
+      )}
+
+      {/* ETA is the one anybody asks about, so it reads with the carrier and
+          the tracking number rather than below a rule of its own. */}
+      {hasConsignment && <KV label="ETA" value={order.freight_eta_at ? fullDate(order.freight_eta_at) : '—'}/>}
+
+      {/* BOTH DISCLOSURES, TOGETHER, AT THE FOOT (Chris 2026-09-03: the panel
+          "doesn't look quite right"). "Boxes and consignments" used to sit
+          between the tool buttons and the address, splitting the half of the
+          panel you ACT in from the half you READ - so the panel changed
+          subject twice on the way down. They are both folded detail, they are
+          both about the consignment, and they now sit side by side under
+          everything else.
+
+          The consignment number, freight status and poll clock stay closed by
+          default: diagnostics, useful when something is wrong and three rows
+          of nothing when it isn't. */}
+      <div style={{marginTop:10, paddingTop:10, borderTop:`1px dashed ${T.border}`}}>
       {/* Boxes and consignments - the pack plan. Shown ALWAYS, because you need
           to be able to SEE what an order ships in even after it's booked; it
           goes read-only at that point because the consignment is already
@@ -1656,98 +1825,23 @@ function ShippingCard({ order, canShip, canAdmin, actions, onEdit, onReloaded, o
           )}
         </div>
       )}
-
-      {/* Collection time — optional. Blank = collect ASAP; a future time sets
-          MachShip's desired despatch so the carrier collects then. */}
-      {hasLiveQuote && !hasConsignment && (
-        <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
-          <span style={{fontSize:12, color:T.text3, whiteSpace:'nowrap'}}>Collection time</span>
-          <input
-            type="datetime-local"
-            value={dispatchAt}
-            min={localNow()}
-            onChange={e => setDispatchAt(e.target.value)}
-            className="al-focus"
-            style={{flex:1, minWidth: isMobile ? 0 : 160, background:T.bg3, border:'1px solid transparent', color:T.text, borderRadius:RADIUS.sm, padding: isMobile ? '9px 10px' : '6px 9px', fontSize: isMobile ? 16 : 12.5, outline:'none', fontFamily:'inherit', colorScheme:'dark'}}
-          />
-          {dispatchAt
-            ? <button onClick={() => setDispatchAt('')} className="al-press al-focus" style={{background:'none', border:'none', color:T.text3, fontSize:12, cursor:'pointer', fontFamily:'inherit'}}>clear (ASAP)</button>
-            : <span style={{fontSize:12, color:T.text3}}>blank = ASAP</span>}
-        </div>
-      )}
-
-      {actionError && (
-        <div style={{fontSize:12.5, color:A.bad, marginBottom:10, lineHeight:1.5}}>{actionError}</div>
-      )}
-
-      {/* WHERE IT IS GOING, then how (Chris 2026-09-03: "lets merge the
-          Shipping and ship to section"). The address heads the freight facts
-          rather than the panel: the actions come first in a panel you work in,
-          and the address is reference - you read it against the carrier and
-          the tracking number directly below it, which is the whole reason the
-          two cards became one. */}
-      <div style={{marginTop:12, paddingTop:12, borderTop:`1px solid ${T.border}`, marginBottom:10}}>
-        <div style={{fontSize:12, color:T.text3, marginBottom:5}}>Ship to</div>
-        <ShipToBlock shipTo={order.ship_to}/>
-      </div>
-
-      {/* Method and Carrier were printing the same string on every MachShip
-         order — "TNT Express — Road Express" twice, a row of the rail spent
-         saying nothing (Chris 2026-09-03). */}
-      {(() => {
-        const method  = order.freight_service_label || order.freight_method_label || ''
-        const carrier = order.carrier || ''
-        const same = !!method && !!carrier && method.trim().toLowerCase() === carrier.trim().toLowerCase()
-        return (
+        {hasConsignment && (
           <>
-            <KV label={same ? 'Carrier' : 'Method'} value={method || carrier || '—'}/>
-            {!same && <KV label="Carrier" value={carrier || '—'}/>}
+            <button onClick={() => setDetailsOpen(o => !o)}
+              className="al-press al-focus"
+              style={{background:'none', border:'none', padding:0, color:A.accent, fontSize:12.5, fontWeight:550, cursor:'pointer', fontFamily:'inherit'}}>
+              {detailsOpen ? '▾' : '▸'} Consignment details
+            </button>
+            {detailsOpen && (
+              <div style={{marginTop:4}}>
+                <KV label="Consignment" value={order.machship_consignment_number || order.machship_consignment_id || '—'} mono/>
+                <KV label="Status"      value={prettyFreightStatus(order.freight_status)}/>
+                <KV label="Last poll"   value={order.last_freight_poll_at ? fullDate(order.last_freight_poll_at) : 'never'}/>
+              </div>
+            )}
           </>
-        )
-      })()}
-      {/* The tracking NUMBER is the link (Chris 2026-09-03: "clean it up
-          more"). "Open tracking page →" was a second row, laid out on its own
-          hand-rolled 90px grid that lined up with none of the KV rows around
-          it, to link the number printed directly above it. */}
-      {effectiveTrackingUrl && order.tracking_number ? (
-        <div style={{display:'flex',justifyContent:'space-between',gap:14,padding:'5px 0',fontSize:13,borderBottom:`1px solid ${T.border}`}}>
-          <span style={{color:T.text3,flexShrink:0}}>Tracking</span>
-          <a href={effectiveTrackingUrl} target="_blank" rel="noopener noreferrer"
-            title="Open the carrier's tracking page"
-            style={{color:A.accent, fontSize:12.5, fontFamily:'monospace', textAlign:'right', wordBreak:'break-all', textDecoration:'none'}}>
-            {order.tracking_number} →
-          </a>
-        </div>
-      ) : (
-        <KV label="Tracking" value={order.tracking_number || '—'} mono/>
-      )}
-      <KV label="Cost ex"  value={order.freight_cost_ex_gst != null ? `$${money(order.freight_cost_ex_gst)}` : '—'} mono/>
-      {order.dropship_freight_ex_gst != null && order.dropship_freight_ex_gst > 0 && (
-        <KV label="  incl. drop-ship" value={`$${money(order.dropship_freight_ex_gst)}`} mono/>
-      )}
-
-      {/* ETA is the one anybody asks about, so it stays out. The consignment
-          number, the freight status and the poll clock are diagnostics - useful
-          when something is wrong, three rows of nothing when it isn't - and
-          they were part of what kept the Timeline off the first screen
-          (Chris 2026-09-03). Folded, and closed by default. */}
-      {hasConsignment && (
-        <div style={{marginTop:10, paddingTop:10, borderTop:`1px dashed ${T.border}`}}>
-          <KV label="ETA" value={order.freight_eta_at ? fullDate(order.freight_eta_at) : '—'}/>
-          <button onClick={() => setDetailsOpen(o => !o)}
-            className="al-press al-focus"
-            style={{background:'none', border:'none', padding:'2px 0 0', color:A.accent, fontSize:12.5, fontWeight:550, cursor:'pointer', fontFamily:'inherit'}}>
-            {detailsOpen ? '▾' : '▸'} Consignment details
-          </button>
-          {detailsOpen && (
-            <div style={{marginTop:4}}>
-              <KV label="Consignment" value={order.machship_consignment_number || order.machship_consignment_id || '—'} mono/>
-              <KV label="Status"      value={prettyFreightStatus(order.freight_status)}/>
-              <KV label="Last poll"   value={order.last_freight_poll_at ? fullDate(order.last_freight_poll_at) : 'never'}/>
-            </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Native-style pinned primary action on mobile: Book now (ASAP) or
           Later (pick a collection time). Lifted clear of the bottom edge. */}
@@ -2359,6 +2453,17 @@ function money(n: number): string {
 function round2x(n: number): number { return Math.round(n * 100) / 100 }
 // GST-inclusive amount (taxable +10%, FRE as-is).
 function incGstAmt(ex: number, taxable: boolean): number { return taxable ? round2x(ex * 1.10) : ex }
+
+// A time on the header strip, printed against the date already shown by the
+// fact to its left. Placed, Paid and Invoiced are nearly always the same day -
+// three copies of "03 Sept 2026" in one line is the sort of repetition that
+// made the old Summary card feel cluttered - so the later two print the clock
+// alone, and fall back to the full date the moment the day actually differs.
+function timeAgainst(iso: string, ref: string): string {
+  const d = new Date(iso), r = new Date(ref)
+  if (d.toDateString() !== r.toDateString()) return fullDate(iso)
+  return d.toLocaleString('en-AU', { hour:'2-digit', minute:'2-digit' })
+}
 
 function fullDate(iso: string): string {
   const d = new Date(iso)
