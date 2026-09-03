@@ -39,6 +39,8 @@
 //     "https://justautos.app/api/cron/ac-deal-sweep?dry=1&verbose=1"
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { getCurrentUser } from '../../../lib/authServer'
+import { roleHasPermission } from '../../../lib/permissions'
 import { postMessage } from '../../../lib/slack-bot/slack'
 import { runMyobWonPass, myobWonIsLive, MYOB_WON_LOOKBACK_DAYS } from '../../../lib/ac-won-from-myob'
 import {
@@ -56,10 +58,21 @@ import {
 export const config = { maxDuration: 300 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Two ways in:
+  //   1. Vercel Cron / scripts, with the CRON_SECRET bearer token. Can run live.
+  //   2. A signed-in portal admin, in a browser. ALWAYS forced dry, whatever
+  //      the arm flags say — so the report can be read by the person who has
+  //      to approve it without handing them the cron secret, and without a
+  //      page refresh ever being able to close 400 deals.
   const expected = process.env.CRON_SECRET
   if (!expected) return res.status(500).json({ error: 'CRON_SECRET not configured' })
+
+  let sessionOnly = false
   if ((req.headers.authorization || '') !== `Bearer ${expected}`) {
-    return res.status(401).json({ error: 'Unauthorized' })
+    const user = await getCurrentUser(req)
+    const ok = user && roleHasPermission(user.role, 'view:reports') && roleHasPermission(user.role, 'admin:settings')
+    if (!ok) return res.status(401).json({ error: 'Unauthorized' })
+    sessionOnly = true
   }
 
   if ((process.env.AC_SWEEP_ENABLED ?? 'true') === 'false') {
@@ -68,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ?dry=1 forces a dry run regardless of the LIVE flags. There is
   // deliberately no inverse — you cannot go live from a query string.
-  const forceDry = req.query.dry === '1'
+  const forceDry = req.query.dry === '1' || sessionOnly
   const verbose = req.query.verbose === '1'
   const myobWonLive = !forceDry && myobWonIsLive()
   const wonLive = !forceDry && wonPassIsLive()
