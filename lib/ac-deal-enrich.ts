@@ -275,7 +275,26 @@ export async function runDealEnrichment(opts: {
     const group = queue.slice(i, i + CONCURRENCY)
     await Promise.all(group.map(async c => {
       const q = quoteById.get(c.quote)
-      if (!q) { report.quoteNotInMd++; return }
+      if (!q) {
+        report.quoteNotInMd++
+        // The quote has aged out of the MD cache, so there is nothing to
+        // stamp — but the deal still CARRIES a quote number, so it is still
+        // quoted and still must not sit at "Quote Required". Don't gate the
+        // stage fix behind an unrelated lookup; that is the same mistake as
+        // gating it behind "needs stamping".
+        if (opts.live && c.deal.stage === STAGE_QUOTE_REQUIRED) {
+          try {
+            await acJson(`/deals/${c.deal.id}`, {
+              method: 'PUT',
+              body: JSON.stringify({ deal: { stage: STAGE_QUOTE_SENT } }),
+            })
+            report.stagesAdvanced++
+          } catch (e: any) {
+            report.errors.push(`deal ${c.deal.id} stage: ${e?.message || String(e)}`)
+          }
+        }
+        return
+      }
 
       try {
         const fields = await mechanicsDeskDealFields(c.quote, q.vehicle, q.rego)
