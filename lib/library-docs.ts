@@ -57,6 +57,15 @@ export const LIBRARY_DOCS: LibraryDoc[] = [
     downloadName: 'Just-Autos-Wholesale-App-Install-Guide',
   },
   {
+    slug: 'md-activecampaign-bridge',
+    title: 'Bridging Mechanics Desk and ActiveCampaign',
+    description: 'What connected the two systems before, what was missing, and the nightly reconciliation that now closes deals as Won or Lost. Includes where the pipeline figures moved and why.',
+    audience: 'Sales & management',
+    md: 'docs/md-activecampaign-bridge.md',
+    pdf: 'docs/md-activecampaign-bridge.pdf',
+    downloadName: 'JA-Mechanics-Desk-ActiveCampaign-Bridge',
+  },
+  {
     slug: 'handover',
     title: 'Full Handover Document',
     description: 'How the portal is built, where it runs, every integration and credential location, the scheduled automation, and known risks.',
