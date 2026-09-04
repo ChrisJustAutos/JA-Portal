@@ -815,6 +815,19 @@ Two things to know:
 
 If you see a deal close that clearly shouldn't have, say so with the deal name: the invoice match is a rule, not a certainty, and the rules are tunable.
 
+### 6.2b Arming the nightly sweep (admins)
+
+**Settings → Connections → Integrations → "AC deal sweep — arming"**. Each pass is a dry run until its box reads exactly `true`:
+
+| Setting | What arming it does |
+|---|---|
+| Won — from MYOB | Closes a deal as Won when the customer's invoice reaches MYOB, matched by the email on the MYOB customer card |
+| Won — MD fallback | The same, for customers whose MYOB card has no email — matched on MD customer + rego |
+| Lost — 90 days idle | **⚠ No undo.** Closes every deal untouched for 90 days, in one pass |
+| Kill switch | Set to `false` to stop the whole nightly sweep within 30 seconds |
+
+Press **Preview a dry run** on that card before arming anything — it reports exactly what would change without changing it. Arm the two Won passes first and watch one night's run before arming Lost.
+
 ### 6.3 If the board misbehaves
 
 Two faults were found and fixed on 20 August 2026. If you see either shape again, say so immediately rather than working around it:

@@ -225,6 +225,24 @@ export default function IntegrationsTab() {
         <Row k="ACCOUNTING_PROVIDER_JAWS" label="JAWS provider" placeholder="myob (default) — set to xero at cutover" hint="Same switch for the JAWS entity (B2B, stock, transfers)." />
       </Card>
 
+      {/* Nightly AC deal sweep — arming flags */}
+      <Card icon="🎯" title="AC deal sweep — arming" connected={fields.AC_SWEEP_MYOB_WON_LIVE?.preview === 'true' || fields.AC_SWEEP_WON_LIVE?.preview === 'true' || fields.AC_SWEEP_LOST_LIVE?.preview === 'true'}
+        desc="The nightly reconciliation between ActiveCampaign, Mechanics Desk and MYOB (18:40 UTC). Each pass is a DRY RUN until its flag reads exactly 'true'. Blank or anything else = report only, nothing is changed."
+        footer={<>
+          <button onClick={() => saveCard('acsweep', ['AC_SWEEP_MYOB_WON_LIVE', 'AC_SWEEP_WON_LIVE', 'AC_SWEEP_LOST_LIVE', 'AC_SWEEP_ENABLED'])} disabled={savingCard === 'acsweep'} style={btn(T.accent)}>{savingCard === 'acsweep' ? 'Saving…' : 'Save'}</button>
+          <span style={{ flex: 1 }} />
+          <a href="/api/cron/ac-deal-sweep?verbose=1" target="_blank" rel="noreferrer" style={{ ...btn(`${T.blue}22`, T.blue), textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>Preview a dry run →</a>
+        </>}>
+        <Row k="AC_SWEEP_MYOB_WON_LIVE" label="Won — from MYOB" placeholder="blank = dry run · set to: true"
+          hint="Closes a deal as Quote Won when its customer's invoice reaches MYOB, matched to the AC contact by the email on the customer card. The strongest match of the three." />
+        <Row k="AC_SWEEP_WON_LIVE" label="Won — MD fallback" placeholder="blank = dry run · set to: true"
+          hint="Same outcome for customers whose MYOB card carries no email: quote number → Mechanics Desk quote → invoice, matched on MD customer id + rego." />
+        <Row k="AC_SWEEP_LOST_LIVE" label="Lost — 90 days idle" placeholder="blank = dry run · set to: true"
+          hint="⚠ NO UNDO. Closes every deal untouched for 90 days as Quote Lost, in one nightly pass. The clock runs from last activity, not from when the quote went out. Read a dry run before arming this one." />
+        <Row k="AC_SWEEP_ENABLED" label="Kill switch" placeholder="blank = running · set to: false to stop"
+          hint="Set to false to stop the whole nightly sweep immediately — takes effect within 30 seconds, no deploy." />
+      </Card>
+
       {/* API endpoints reference */}
       <Card icon="🔌" title="API endpoints" desc="The URLs external systems connect to — click any to copy.">
         {[
