@@ -36,7 +36,9 @@ export default withAuth(['view:reports', 'admin:settings'], async (req, res) => 
     return res.status(200).json({
       mode: live ? 'LIVE — deals were written' : 'dry run — nothing was written',
       ...report,
-      health: (report.live && report.enriched > 0 && report.fieldValuesWritten === 0)
+      health: !report.stampedLookupOk
+        ? 'STOP: could not read which deals are already stamped, so this run repeated the same batch and CANNOT make progress through the backlog. Fix that before re-running.'
+        : (report.live && report.enriched > 0 && report.fieldValuesWritten === 0)
         ? 'WARNING: deals were processed but ZERO field values landed. That is the "200 OK and discards it" failure — do not trust the enriched count.'
         : report.skippedNoFieldsResolved > 0
         ? `WARNING: ${report.skippedNoFieldsResolved} deals were skipped because the AC deal custom fields could not be resolved or created. That is a configuration/API fault, not an empty backlog — nothing will be stamped until it is fixed.`

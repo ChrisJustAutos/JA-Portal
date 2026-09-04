@@ -101,30 +101,42 @@ async function listGroupDeals(maxPages: number): Promise<{ deals: EnrichDeal[]; 
   return { deals: out, complete }
 }
 
-/** Deal IDs that already carry a Source value — cheap way to skip done work. */
-async function alreadyStamped(): Promise<Set<string>> {
+/**
+ * Deal IDs that already carry a Source value, so a re-run skips them.
+ *
+ * ⚠ TWO AC QUIRKS, both of which silently produced an EMPTY set:
+ *   1. `/dealCustomFieldData?filters[dealCustomFieldMetumId]=N` is a 422
+ *      "Invalid attribute" — that filter does not exist. Values for one
+ *      field are listed at /dealCustomFieldMeta/{id}/dealCustomFieldData.
+ *   2. That endpoint returns its rows under the key `dealCustomFieldMeta`,
+ *      not `dealCustomFieldData` — so even a 200 parsed as zero rows.
+ *
+ * An empty set here does not mean "nothing done", it means "re-do
+ * everything", so a failed lookup makes every run repeat the same batch
+ * forever and never reach the rest of the backlog. That is why this reports
+ * failure instead of quietly returning nothing.
+ */
+async function alreadyStamped(): Promise<{ ids: Set<string>; ok: boolean; error: string | null }> {
   const out = new Set<string>()
   const fieldId = await ensureDealFieldId(SOURCE_FIELD_LABEL)
-  if (!fieldId) return out
+  if (!fieldId) return { ids: out, ok: false, error: 'Source field could not be resolved' }
+
   let offset = 0
-  while (offset < 50000) {
+  while (offset < 100000) {
     try {
-      const data = await acJson<{ dealCustomFieldData: any[] }>(
-        `/dealCustomFieldData?filters[dealCustomFieldMetumId]=${fieldId}&limit=100&offset=${offset}`,
+      const data = await acJson<any>(
+        `/dealCustomFieldMeta/${fieldId}/dealCustomFieldData?limit=100&offset=${offset}`,
       )
-      const page = data.dealCustomFieldData || []
+      const page: any[] = data.dealCustomFieldData || data.dealCustomFieldMeta || []
       if (page.length === 0) break
       for (const r of page) if (String(r.fieldValue || '').trim()) out.add(String(r.dealId))
       if (page.length < 100) break
       offset += 100
     } catch (e: any) {
-      // Not fatal: without this list we simply re-stamp deals that already
-      // have the field, which is idempotent — just slower.
-      console.warn('[ac-enrich] could not list stamped deals:', e?.message)
-      break
+      return { ids: out, ok: false, error: e?.message || String(e) }
     }
   }
-  return out
+  return { ids: out, ok: true, error: null }
 }
 
 export interface EnrichReport {
@@ -144,6 +156,7 @@ export interface EnrichReport {
   timeBudgetHit: boolean
   elapsedMs: number
   concurrency: number
+  stampedLookupOk: boolean
   samples: Array<{ dealId: string; quote: string; vehicle: string | null; rego: string | null; filledValue: number | null }>
   errors: string[]
 }
@@ -171,6 +184,7 @@ export async function runDealEnrichment(opts: {
     timeBudgetHit: false,
     elapsedMs: 0,
     concurrency: 0,
+    stampedLookupOk: false,
     samples: [],
     errors: [],
   }
@@ -190,8 +204,10 @@ export async function runDealEnrichment(opts: {
   if (candidates.length === 0) return report
 
   const stamped = await alreadyStamped()
+  report.stampedLookupOk = stamped.ok
+  if (!stamped.ok) report.errors.push(`already-stamped lookup failed: ${stamped.error}`)
 
-  const todo = candidates.filter(c => !stamped.has(c.deal.id))
+  const todo = candidates.filter(c => !stamped.ids.has(c.deal.id))
   report.alreadyStamped = candidates.length - todo.length
 
   // Resolve every quote in one batched read before touching AC.
