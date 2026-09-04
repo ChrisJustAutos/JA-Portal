@@ -211,8 +211,16 @@ export async function runDealEnrichment(opts: {
   report.stampedLookupOk = stamped.ok
   if (!stamped.ok) report.errors.push(`already-stamped lookup failed: ${stamped.error}`)
 
-  const todo = candidates.filter(c => !stamped.ids.has(c.deal.id))
-  report.alreadyStamped = candidates.length - todo.length
+  // A deal is work if it still needs STAMPING **or** if it is stranded at
+  // Quote Required. Gating the stage fix behind "needs stamping" meant that
+  // once a deal was stamped it was skipped entirely — wrong stage and all —
+  // so the 464 stranded deals were reported as "no correction needed" while
+  // sitting exactly where they were. Two independent jobs, two independent
+  // reasons to touch a deal.
+  report.alreadyStamped = candidates.filter(c => stamped.ids.has(c.deal.id)).length
+  const todo = candidates.filter(c =>
+    !stamped.ids.has(c.deal.id) || c.deal.stage === STAGE_QUOTE_REQUIRED,
+  )
 
   // Resolve every quote in one batched read before touching AC.
   const nums: string[] = []
@@ -254,6 +262,7 @@ export async function runDealEnrichment(opts: {
   const startedAt = Date.now()
   report.concurrency = CONCURRENCY
 
+  const stampedIds = stamped.ids
   const queue = todo.slice(0, limit)
   report.capped = todo.length > limit
 
@@ -322,7 +331,9 @@ export async function runDealEnrichment(opts: {
           }
         }
 
-        report.enriched++
+        // Only count it as enriched if it actually needed stamping — a deal
+        // pulled in purely for the stage fix is not new enrichment.
+        if (!stampedIds.has(c.deal.id)) report.enriched++
         done++
       } catch (e: any) {
         report.errors.push(`deal ${c.deal.id}: ${e?.message || String(e)}`)

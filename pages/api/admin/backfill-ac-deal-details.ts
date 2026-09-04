@@ -46,6 +46,10 @@ export default withAuth(['view:reports', 'admin:settings'], async (req, res) => 
       stageNote: report.stagesAdvanced > 0
         ? `${report.stagesAdvanced} deals were still at "Quote Required" despite carrying a quote number — advanced to "Quote Sent". Only that transition is ever made; any other stage is left as someone set it.`
         : 'No deals needed a stage correction.',
+      stageBacklog:
+        'Deals stranded at "Quote Required" are picked up even when they are already stamped — the stage fix '
+        + 'and the stamping are independent reasons to touch a deal. Re-run until BOTH enriched and '
+        + 'stagesAdvanced come back 0.',
       pacing: report.timeBudgetHit
         ? `Stopped on the time budget after ${Math.round(report.elapsedMs / 1000)}s with ${report.enriched} done — this is a CLEAN stop, not a failure. Re-run to continue.`
         : `Ran ${Math.round(report.elapsedMs / 1000)}s at concurrency ${report.concurrency}.`,
