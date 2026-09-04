@@ -58,6 +58,8 @@ import { getIntegration } from './integration-config'
 // ── AC pipeline geometry. Group 6 only — groups 4 and 5 are legacy and are
 // deliberately never touched (group 4 has no Won/Lost stage to move to).
 export const AC_GROUP = '6'
+export const STAGE_QUOTE_REQUIRED = '35'
+export const STAGE_QUOTE_SENT = '38'
 export const STAGE_QUOTE_WON = '39'
 export const STAGE_QUOTE_LOST = '40'
 const DEAL_STATUS_OPEN = 0

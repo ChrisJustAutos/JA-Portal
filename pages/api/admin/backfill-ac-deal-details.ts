@@ -43,6 +43,9 @@ export default withAuth(['view:reports', 'admin:settings'], async (req, res) => 
         : report.skippedNoFieldsResolved > 0
         ? `WARNING: ${report.skippedNoFieldsResolved} deals were skipped because the AC deal custom fields could not be resolved or created. That is a configuration/API fault, not an empty backlog — nothing will be stamped until it is fixed.`
         : 'Deal custom fields resolved normally.',
+      stageNote: report.stagesAdvanced > 0
+        ? `${report.stagesAdvanced} deals were still at "Quote Required" despite carrying a quote number — advanced to "Quote Sent". Only that transition is ever made; any other stage is left as someone set it.`
+        : 'No deals needed a stage correction.',
       pacing: report.timeBudgetHit
         ? `Stopped on the time budget after ${Math.round(report.elapsedMs / 1000)}s with ${report.enriched} done — this is a CLEAN stop, not a failure. Re-run to continue.`
         : `Ran ${Math.round(report.elapsedMs / 1000)}s at concurrency ${report.concurrency}.`,

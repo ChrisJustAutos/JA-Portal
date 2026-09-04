@@ -29,7 +29,7 @@
 //     pipeline stores.
 
 import { mechanicsDeskDealFields, tagContactAsMechanicsDesk, applyDealCustomFields } from './activecampaign-source'
-import { regoForDisplay } from './ac-deal-sweep'
+import { regoForDisplay, STAGE_QUOTE_REQUIRED, STAGE_QUOTE_SENT } from './ac-deal-sweep'
 
 const RECENCY_DAYS = 30
 
@@ -194,6 +194,7 @@ export async function createDeal(input: CreateDealInput): Promise<CreateDealResu
 
 export interface UpdateDealInput {
   dealId: number
+  newStage?: string
   newTitle?: string
   newValueDollarsIncGst?: number
   appendNote?: string | null
@@ -209,6 +210,7 @@ export interface UpdateDealResult {
 
 export async function updateDeal(input: UpdateDealInput): Promise<UpdateDealResult> {
   const payload: any = { deal: {} }
+  if (input.newStage !== undefined) payload.deal.stage = input.newStage
   if (input.newTitle !== undefined) payload.deal.title = input.newTitle
   if (input.newValueDollarsIncGst !== undefined) {
     payload.deal.value = Math.round(input.newValueDollarsIncGst * 100)
@@ -376,8 +378,25 @@ export async function applyQuoteRecencyRule(
     ? existing.title
     : `${existing.title} | Q${input.quoteNumber}`
 
+  // ADVANCE THE STAGE, but only out of "Quote Required".
+  //
+  // The update branch used to leave the stage entirely alone, on the
+  // reasoning that a rep may have moved the deal somewhere deliberately.
+  // That is right for a deal already at Quote Sent or beyond — and wrong for
+  // one still sitting at Quote Required, because that stage means "no quote
+  // yet" and we are in the middle of proving otherwise. Left unfixed it had
+  // stranded 464 quoted deals worth $6.05M in Quote Required (measured
+  // 2026-09-04).
+  //
+  // So: 35 -> 38 only. Any other stage is a decision someone made and is
+  // never overridden here.
+  const advanceStage = String(existing.stageId) === STAGE_QUOTE_REQUIRED
+    ? STAGE_QUOTE_SENT
+    : undefined
+
   const result = await updateDeal({
     dealId: existing.id,
+    newStage: advanceStage,
     newTitle,
     newValueDollarsIncGst: newValue,
     appendNote: noteBody,
@@ -393,7 +412,7 @@ export async function applyQuoteRecencyRule(
       existingDealsCount: deals.length,
       chosenDealId: existing.id,
       chosenDealCreatedAt: existing.createdAt,
-      landedAtStageId: existing.stageId,
+      landedAtStageId: advanceStage ? Number(advanceStage) : existing.stageId,
       sourceFieldsStamped: sourceFields.length,
       contactTagged: tagResult.tagged,
       sourceError,

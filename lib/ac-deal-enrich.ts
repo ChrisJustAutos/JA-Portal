@@ -33,7 +33,7 @@ import {
   SOURCE_FIELD_LABEL,
   ensureDealFieldId,
 } from './activecampaign-source'
-import { quoteNumbersFromTitle, AC_GROUP, regoForDisplay } from './ac-deal-sweep'
+import { quoteNumbersFromTitle, AC_GROUP, regoForDisplay, STAGE_QUOTE_REQUIRED, STAGE_QUOTE_SENT } from './ac-deal-sweep'
 
 function acFetch(path: string, opts: RequestInit = {}) {
   const baseUrl = process.env.ACTIVECAMPAIGN_API_URL
@@ -68,6 +68,7 @@ interface EnrichDeal {
   value: number
   contact: string
   cdate: string
+  stage: string
 }
 
 /** Every deal in group 6, any status — historical reporting wants the closed ones too. */
@@ -94,6 +95,7 @@ async function listGroupDeals(maxPages: number): Promise<{ deals: EnrichDeal[]; 
         value: (Number(d.value) || 0) / 100,
         contact: String(d.contact || ''),
         cdate: String(d.cdate || ''),
+        stage: String(d.stage || ''),
       })
     }
     offset += 100
@@ -150,6 +152,7 @@ export interface EnrichReport {
   skippedNoFieldsResolved: number
   enriched: number
   fieldValuesWritten: number
+  stagesAdvanced: number
   valuesFilled: number
   contactsTagged: number
   capped: boolean
@@ -178,6 +181,7 @@ export async function runDealEnrichment(opts: {
     skippedNoFieldsResolved: 0,
     enriched: 0,
     fieldValuesWritten: 0,
+    stagesAdvanced: 0,
     valuesFilled: 0,
     contactsTagged: 0,
     capped: false,
@@ -290,12 +294,26 @@ export async function runDealEnrichment(opts: {
           report.fieldValuesWritten += applied.written
           for (const err of applied.errors) report.errors.push(`deal ${c.deal.id}: ${err}`)
 
+          // A deal carrying a quote number cannot still be at "Quote
+          // Required" — that stage means no quote has gone out. Pipeline A
+          // now advances it on update, but everything quoted before that fix
+          // is stranded, so correct it here while we are on the deal.
+          // 35 -> 38 ONLY: any other stage is somebody's decision.
+          const dealPatch: any = {}
           if (fillValue !== null) {
+            dealPatch.value = Math.round(fillValue * 100)
+            dealPatch.currency = 'aud'
+          }
+          const advancing = c.deal.stage === STAGE_QUOTE_REQUIRED
+          if (advancing) dealPatch.stage = STAGE_QUOTE_SENT
+
+          if (Object.keys(dealPatch).length > 0) {
             await acJson(`/deals/${c.deal.id}`, {
               method: 'PUT',
-              body: JSON.stringify({ deal: { value: Math.round(fillValue * 100), currency: 'aud' } }),
+              body: JSON.stringify({ deal: dealPatch }),
             })
-            report.valuesFilled++
+            if (fillValue !== null) report.valuesFilled++
+            if (advancing) report.stagesAdvanced++
           }
 
           if (c.deal.contact) {
