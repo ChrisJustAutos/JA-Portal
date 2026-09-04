@@ -8,7 +8,7 @@
 // chip), aligned label/field rows, divider, footer with Save on the left and
 // the live-test control on the right.
 
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { T } from '../../lib/ui/theme'
 import { useToast } from '../ui/Feedback'
 
@@ -18,6 +18,92 @@ type Fields = Record<string, FieldInfo>
 const LABEL_W = 170
 const inp: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border}`, color: T.text, borderRadius: 6, padding: '7px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }
 const btn = (bg: string, fg = '#fff'): React.CSSProperties => ({ padding: '7px 16px', borderRadius: 6, fontSize: 12, fontWeight: 600, background: bg, color: fg, border: 'none', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' })
+
+
+// ⚠ Row / Card / Source MUST live at module scope.
+//
+// They used to be declared inside IntegrationsTab. That makes them a NEW
+// component type on every render, so React unmounted and remounted the whole
+// subtree on each keystroke — the focused input was destroyed and recreated,
+// which threw away the caret and scrolled the page back to the top. Typing a
+// single character was enough to lose the field. (Reported 2026-09-04:
+// "every time I type a letter it scrolls all the way to the top".)
+//
+// Module scope keeps the type stable, so React reconciles instead of
+// remounting. The per-render values they need come through this context —
+// a changing context value re-renders consumers, which is fine; it is the
+// changing component TYPE that was destroying them.
+interface RowCtxValue {
+  fields: Fields
+  edits: Record<string, string>
+  setEdit: (key: string, v: string) => void
+}
+const RowCtx = createContext<RowCtxValue>({ fields: {}, edits: {}, setEdit: () => {} })
+
+function Source({ f }: { f?: FieldInfo }) {
+  if (!f?.source) return <span style={{ fontSize: 9, color: T.text3 }}>not set</span>
+  return (
+    <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: f.source === 'db' ? T.green : T.blue, whiteSpace: 'nowrap' }}>
+      {f.source === 'db' ? 'set here' : 'env'}
+    </span>
+  )
+}
+
+function StatusChip({ on }: { on: boolean }) {
+  return (
+    <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', padding: '3px 8px', borderRadius: 999, whiteSpace: 'nowrap', color: on ? T.green : T.text3, background: on ? `${T.green}1f` : T.bg3 }}>
+      {on ? 'connected' : 'not set'}
+    </span>
+  )
+}
+
+function Row({ k, label, secret, placeholder, hint }: { k: string; label: string; secret?: boolean; placeholder?: string; hint?: string }) {
+  const { fields, edits, setEdit } = useContext(RowCtx)
+  const f = fields[k]
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `${LABEL_W}px 1fr`, gap: 12, alignItems: 'start', padding: '7px 0' }}>
+      <div style={{ paddingTop: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: T.text2 }}>{label}</div>
+        <Source f={f} />
+      </div>
+      <div>
+        <input
+          type={secret ? 'password' : 'text'}
+          autoComplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other"
+          value={edits[k] ?? (secret ? '' : (f?.source ? f.preview : ''))}
+          onChange={e => setEdit(k, e.target.value)}
+          placeholder={secret ? (f?.source ? `${f.preview} — type to replace` : (placeholder || '')) : (placeholder || '')}
+          style={inp}
+        />
+        {hint && <div style={{ fontSize: 10, color: T.text3, marginTop: 4, lineHeight: 1.45 }}>{hint}</div>}
+      </div>
+    </div>
+  )
+}
+
+function Card({ icon, title, desc, connected, children, footer }: {
+  icon: string; title: string; desc: string; connected?: boolean
+  children: React.ReactNode; footer?: React.ReactNode
+}) {
+  return (
+    <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, overflow: 'hidden' }}>
+      <div style={{ padding: '14px 18px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 16 }}>{icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{title}</div>
+          <div style={{ fontSize: 11, color: T.text3, marginTop: 2, lineHeight: 1.4 }}>{desc}</div>
+        </div>
+        {connected !== undefined && <StatusChip on={connected} />}
+      </div>
+      <div style={{ padding: '8px 18px' }}>{children}</div>
+      {footer && (
+        <div style={{ padding: '12px 18px', borderTop: `1px solid ${T.border}`, background: T.bg3, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {footer}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function IntegrationsTab() {
   const toast = useToast()
@@ -85,71 +171,6 @@ export default function IntegrationsTab() {
   }
 
   // ── Building blocks ─────────────────────────────────────────────────
-  function StatusChip({ on }: { on: boolean }) {
-    const c = on ? T.green : T.text3
-    return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 12, background: `${c}18`, border: `1px solid ${c}40`, color: c, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: c }} />
-        {on ? 'Connected' : 'Not configured'}
-      </span>
-    )
-  }
-
-  function Source({ f }: { f?: FieldInfo }) {
-    if (!f?.source) return null
-    return (
-      <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: f.source === 'db' ? T.green : T.blue, whiteSpace: 'nowrap' }}>
-        {f.source === 'db' ? 'set here' : 'env'}
-      </span>
-    )
-  }
-
-  function Row({ k, label, secret, placeholder, hint }: { k: string; label: string; secret?: boolean; placeholder?: string; hint?: string }) {
-    const f = fields[k]
-    return (
-      <div style={{ display: 'grid', gridTemplateColumns: `${LABEL_W}px 1fr`, gap: 12, alignItems: 'start', padding: '7px 0' }}>
-        <div style={{ paddingTop: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: T.text2 }}>{label}</div>
-          <Source f={f} />
-        </div>
-        <div>
-          <input
-            type={secret ? 'password' : 'text'}
-            autoComplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other"
-            value={edits[k] ?? (secret ? '' : (f?.source ? f.preview : ''))}
-            onChange={e => setEdit(k, e.target.value)}
-            placeholder={secret ? (f?.source ? `${f.preview} — type to replace` : (placeholder || '')) : (placeholder || '')}
-            style={inp}
-          />
-          {hint && <div style={{ fontSize: 10, color: T.text3, marginTop: 4, lineHeight: 1.45 }}>{hint}</div>}
-        </div>
-      </div>
-    )
-  }
-
-  function Card({ icon, title, desc, connected, children, footer }: {
-    icon: string; title: string; desc: string; connected?: boolean
-    children: React.ReactNode; footer?: React.ReactNode
-  }) {
-    return (
-      <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, overflow: 'hidden' }}>
-        <div style={{ padding: '14px 18px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 16 }}>{icon}</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{title}</div>
-            <div style={{ fontSize: 11, color: T.text3, marginTop: 2, lineHeight: 1.4 }}>{desc}</div>
-          </div>
-          {connected !== undefined && <StatusChip on={connected} />}
-        </div>
-        <div style={{ padding: '8px 18px' }}>{children}</div>
-        {footer && (
-          <div style={{ padding: '12px 18px', borderTop: `1px solid ${T.border}`, background: T.bg3, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            {footer}
-          </div>
-        )}
-      </div>
-    )
-  }
 
   if (loading) return <div style={{ color: T.text3, padding: 30, textAlign: 'center', fontSize: 13 }}>Loading integrations…</div>
 
@@ -158,6 +179,7 @@ export default function IntegrationsTab() {
   const intakeToken = fields.CRM_INTAKE_TOKEN?.source ? fields.CRM_INTAKE_TOKEN.preview : ''
 
   return (
+    <RowCtx.Provider value={{ fields, edits, setEdit }}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 760 }}>
       {/* SMS — ClickSend */}
       <Card icon="📱" title="SMS — ClickSend" connected={smsConnected}
@@ -266,5 +288,6 @@ export default function IntegrationsTab() {
         </div>
       </Card>
     </div>
+    </RowCtx.Provider>
   )
 }
