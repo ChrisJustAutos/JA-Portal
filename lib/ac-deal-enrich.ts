@@ -141,6 +141,9 @@ export interface EnrichReport {
   valuesFilled: number
   contactsTagged: number
   capped: boolean
+  timeBudgetHit: boolean
+  elapsedMs: number
+  concurrency: number
   samples: Array<{ dealId: string; quote: string; vehicle: string | null; rego: string | null; filledValue: number | null }>
   errors: string[]
 }
@@ -165,6 +168,9 @@ export async function runDealEnrichment(opts: {
     valuesFilled: 0,
     contactsTagged: 0,
     capped: false,
+    timeBudgetHit: false,
+    elapsedMs: 0,
+    concurrency: 0,
     samples: [],
     errors: [],
   }
@@ -212,60 +218,84 @@ export async function runDealEnrichment(opts: {
   }
   report.quotesResolved = quoteById.size
 
+  // ── Writing ────────────────────────────────────────────────────────────
+  // Each deal costs ~4 field writes plus a contact tag, so 250 deals is well
+  // over a thousand sequential round trips — comfortably past the 300s
+  // function limit. Two things keep this inside it:
+  //   1. CONCURRENCY. Deals are written in small parallel groups. AC is fine
+  //      with this; the ceiling is deliberately low to stay well clear of
+  //      rate limiting, which would fail far more confusingly than slowness.
+  //   2. A TIME BUDGET. We stop cleanly before the limit and say how far we
+  //      got, rather than being killed mid-write and returning a 504 with no
+  //      report at all. Every deal is written independently, so stopping
+  //      early is always safe and the next run simply carries on.
+  const CONCURRENCY = Number(process.env.AC_ENRICH_CONCURRENCY || 6)
+  const BUDGET_MS = Number(process.env.AC_ENRICH_BUDGET_MS || 230000)
+  const startedAt = Date.now()
+  report.concurrency = CONCURRENCY
+
+  const queue = todo.slice(0, limit)
+  report.capped = todo.length > limit
+
   let done = 0
-  for (const c of todo) {
-    if (done >= limit) { report.capped = true; break }
-    const q = quoteById.get(c.quote)
-    if (!q) { report.quoteNotInMd++; continue }
-
-    try {
-      const fields = await mechanicsDeskDealFields(c.quote, q.vehicle, q.rego)
-      if (fields.length === 0) {
-        // COUNT THIS. An earlier version just `continue`d, so when the field
-        // lookup was broken every single deal fell through here and the run
-        // reported "enriched: 0, errors: []" — indistinguishable from having
-        // no work to do. A silent zero is the worst possible failure shape.
-        report.skippedNoFieldsResolved++
-        continue
-      }
-
-      // Only fill a value that is genuinely absent — never restate or
-      // change one a rep has set.
-      const fillValue = (!c.deal.value && q.total > 0) ? q.total : null
-
-      if (report.samples.length < 25) {
-        report.samples.push({
-          dealId: c.deal.id, quote: c.quote, vehicle: q.vehicle, rego: q.rego, filledValue: fillValue,
-        })
-      }
-
-      if (opts.live) {
-        // Custom field VALUES cannot ride along on the deal PUT — AC accepts
-        // that and discards it. They go through POST /dealCustomFieldData.
-        const applied = await applyDealCustomFields(c.deal.id, fields)
-        report.fieldValuesWritten += applied.written
-        for (const err of applied.errors) report.errors.push(`deal ${c.deal.id}: ${err}`)
-
-        if (fillValue !== null) {
-          await acJson(`/deals/${c.deal.id}`, {
-            method: 'PUT',
-            body: JSON.stringify({ deal: { value: Math.round(fillValue * 100), currency: 'aud' } }),
-          })
-          report.valuesFilled++
-        }
-
-        if (c.deal.contact) {
-          const t = await tagContactAsMechanicsDesk(Number(c.deal.contact))
-          if (t.tagged) report.contactsTagged++
-        }
-      }
-
-      report.enriched++
-      done++
-    } catch (e: any) {
-      report.errors.push(`deal ${c.deal.id}: ${e?.message || String(e)}`)
+  for (let i = 0; i < queue.length; i += CONCURRENCY) {
+    if (Date.now() - startedAt > BUDGET_MS) {
+      report.timeBudgetHit = true
+      break
     }
+    const group = queue.slice(i, i + CONCURRENCY)
+    await Promise.all(group.map(async c => {
+      const q = quoteById.get(c.quote)
+      if (!q) { report.quoteNotInMd++; return }
+
+      try {
+        const fields = await mechanicsDeskDealFields(c.quote, q.vehicle, q.rego)
+        if (fields.length === 0) {
+          // COUNT THIS. An earlier version just returned here, so when the
+          // field lookup was broken every deal fell through and the run
+          // reported "enriched: 0, errors: []" — indistinguishable from
+          // having no work to do. A silent zero is the worst failure shape.
+          report.skippedNoFieldsResolved++
+          return
+        }
+
+        const fillValue = (!c.deal.value && q.total > 0) ? q.total : null
+
+        if (report.samples.length < 25) {
+          report.samples.push({
+            dealId: c.deal.id, quote: c.quote, vehicle: q.vehicle, rego: q.rego, filledValue: fillValue,
+          })
+        }
+
+        if (opts.live) {
+          // Values cannot ride on the deal PUT — AC accepts that and
+          // discards it. They go through POST /dealCustomFieldData.
+          const applied = await applyDealCustomFields(c.deal.id, fields)
+          report.fieldValuesWritten += applied.written
+          for (const err of applied.errors) report.errors.push(`deal ${c.deal.id}: ${err}`)
+
+          if (fillValue !== null) {
+            await acJson(`/deals/${c.deal.id}`, {
+              method: 'PUT',
+              body: JSON.stringify({ deal: { value: Math.round(fillValue * 100), currency: 'aud' } }),
+            })
+            report.valuesFilled++
+          }
+
+          if (c.deal.contact) {
+            const t = await tagContactAsMechanicsDesk(Number(c.deal.contact))
+            if (t.tagged) report.contactsTagged++
+          }
+        }
+
+        report.enriched++
+        done++
+      } catch (e: any) {
+        report.errors.push(`deal ${c.deal.id}: ${e?.message || String(e)}`)
+      }
+    }))
   }
 
+  report.elapsedMs = Date.now() - startedAt
   return report
 }

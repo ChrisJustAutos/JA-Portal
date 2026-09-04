@@ -13,6 +13,11 @@
 //   /api/admin/backfill-ac-deal-details?limit=50        dry, first 50
 //   /api/admin/backfill-ac-deal-details?live=1&limit=50 WRITE 50
 //
+// Each deal costs ~4 field writes plus a contact tag, so the run is paced by
+// a time budget and stops cleanly before the 300s function limit rather than
+// being killed mid-write with no report. `limit` is an upper bound, not a
+// promise — re-run until `enriched` comes back 0.
+//
 // Start small and read the samples before going wide: this writes to every
 // deal it touches, and there is no bulk undo in ActiveCampaign.
 
@@ -36,6 +41,9 @@ export default withAuth(['view:reports', 'admin:settings'], async (req, res) => 
         : report.skippedNoFieldsResolved > 0
         ? `WARNING: ${report.skippedNoFieldsResolved} deals were skipped because the AC deal custom fields could not be resolved or created. That is a configuration/API fault, not an empty backlog — nothing will be stamped until it is fixed.`
         : 'Deal custom fields resolved normally.',
+      pacing: report.timeBudgetHit
+        ? `Stopped on the time budget after ${Math.round(report.elapsedMs / 1000)}s with ${report.enriched} done — this is a CLEAN stop, not a failure. Re-run to continue.`
+        : `Ran ${Math.round(report.elapsedMs / 1000)}s at concurrency ${report.concurrency}.`,
       note: report.capped
         ? `Stopped at the ${limit}-deal cap. Re-run to continue — already-stamped deals are skipped.`
         : 'No cap hit on this run.',
