@@ -53,6 +53,7 @@
 // get to happen by accident.
 
 import { createClient } from '@supabase/supabase-js'
+import { getIntegration } from './integration-config'
 
 // ── AC pipeline geometry. Group 6 only — groups 4 and 5 are legacy and are
 // deliberately never touched (group 4 has no Won/Lost stage to move to).
@@ -73,11 +74,18 @@ export const MIN_INVOICE_RATIO = Number(process.env.AC_SWEEP_MIN_INVOICE_RATIO |
 // removes the whole class of false win.
 export const MAX_INVOICE_RATIO = Number(process.env.AC_SWEEP_MAX_INVOICE_RATIO || 3)
 
-export function wonPassIsLive(): boolean {
-  return (process.env.AC_SWEEP_WON_LIVE || '').toLowerCase() === 'true'
+// Read DB-first via integration-config so they can be flipped in the portal
+// without a redeploy — and, more importantly, flipped OFF in seconds. The
+// Lost pass has no undo; an arming switch that needs a Vercel edit and a
+// rebuild is not a usable emergency stop.
+export async function wonPassIsLive(): Promise<boolean> {
+  return (await getIntegration('AC_SWEEP_WON_LIVE')).toLowerCase() === 'true'
 }
-export function lostPassIsLive(): boolean {
-  return (process.env.AC_SWEEP_LOST_LIVE || '').toLowerCase() === 'true'
+export async function lostPassIsLive(): Promise<boolean> {
+  return (await getIntegration('AC_SWEEP_LOST_LIVE')).toLowerCase() === 'true'
+}
+export async function sweepIsEnabled(): Promise<boolean> {
+  return (await getIntegration('AC_SWEEP_ENABLED')).toLowerCase() !== 'false'
 }
 
 function acFetch(path: string, opts: RequestInit = {}) {

@@ -49,6 +49,7 @@ import {
   runLostPass,
   wonPassIsLive,
   lostPassIsLive,
+  sweepIsEnabled,
   LOST_AFTER_DAYS,
   INVOICE_WINDOW_DAYS,
   MIN_INVOICE_RATIO,
@@ -75,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     sessionOnly = true
   }
 
-  if ((process.env.AC_SWEEP_ENABLED ?? 'true') === 'false') {
+  if (!(await sweepIsEnabled())) {
     return res.status(200).json({ skipped: 'AC_SWEEP_ENABLED=false' })
   }
 
@@ -83,9 +84,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // deliberately no inverse — you cannot go live from a query string.
   const forceDry = req.query.dry === '1' || sessionOnly
   const verbose = req.query.verbose === '1'
-  const myobWonLive = !forceDry && myobWonIsLive()
-  const wonLive = !forceDry && wonPassIsLive()
-  const lostLive = !forceDry && lostPassIsLive()
+  const myobWonLive = !forceDry && (await myobWonIsLive())
+  const wonLive = !forceDry && (await wonPassIsLive())
+  const lostLive = !forceDry && (await lostPassIsLive())
 
   const startedAt = new Date().toISOString()
 

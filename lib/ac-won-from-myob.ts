@@ -37,6 +37,7 @@
 import { fetchSaleInvoices } from './myob-reporting'
 import { myobFetch } from './myob'
 import { findByEmail } from './activecampaign'
+import { getIntegration } from './integration-config'
 import { AC_GROUP, STAGE_QUOTE_WON } from './ac-deal-sweep'
 
 const DEAL_STATUS_OPEN = 0
@@ -46,8 +47,8 @@ export const MYOB_WON_LOOKBACK_DAYS = Number(process.env.AC_SWEEP_MYOB_LOOKBACK_
 export const MYOB_WON_MIN_RATIO = Number(process.env.AC_SWEEP_MYOB_MIN_RATIO || 0.5)
 export const MYOB_WON_MAX_RATIO = Number(process.env.AC_SWEEP_MYOB_MAX_RATIO || 3)
 
-export function myobWonIsLive(): boolean {
-  return (process.env.AC_SWEEP_MYOB_WON_LIVE || '').toLowerCase() === 'true'
+export async function myobWonIsLive(): Promise<boolean> {
+  return (await getIntegration('AC_SWEEP_MYOB_WON_LIVE')).toLowerCase() === 'true'
 }
 
 function acFetch(path: string, opts: RequestInit = {}) {

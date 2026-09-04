@@ -23,6 +23,12 @@ export const INTEGRATION_KEYS = [
   // Friday post multiplies them by the weekdays covered. Listed here so they
   // are editable in Settings -> Integrations rather than env-only.
   'SALES_TARGET_JA_PER_DAY', 'SALES_TARGET_DIST_PER_DAY', 'SALES_UPDATE_SLACK_CHANNEL',
+  // Nightly AC deal sweep arming flags ('true' arms, anything else is dry).
+  // DB-first deliberately: these decide whether deals are closed in
+  // ActiveCampaign, which has no bulk undo, so they must be switchable from
+  // the portal in seconds rather than needing a Vercel env edit and a
+  // redeploy. AC_SWEEP_ENABLED='false' stops the whole cron.
+  'AC_SWEEP_MYOB_WON_LIVE', 'AC_SWEEP_WON_LIVE', 'AC_SWEEP_LOST_LIVE', 'AC_SWEEP_ENABLED',
 ] as const
 export type IntegrationKey = typeof INTEGRATION_KEYS[number]
 
